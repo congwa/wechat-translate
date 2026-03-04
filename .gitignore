@@ -10,3 +10,5 @@ pip-delete-this-directory.txt
 *.log
 .DS_Store
 Thumbs.db
+.env.local
+@AutomationLog.txt

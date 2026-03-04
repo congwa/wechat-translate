@@ -1,54 +1,56 @@
-# wx_auto/chat.py
-import uiautomation as auto
 import time
+
+from .controls import find_search_box, find_session_list, normalize_session_name
 from .logger import log
 
 
+def _match_session_name(target: str, raw_name: str) -> bool:
+    current = normalize_session_name(raw_name)
+    if not current:
+        return False
+    if current == target:
+        return True
+    # 某些版本会话名会带特殊前后缀，做一次温和模糊匹配
+    return target in current or current in target
+
+
 def open_chat(window, name: str) -> bool:
-    """智能打开聊天：优先点击左侧会话列表，如果没有再搜索"""
+    """优先会话列表点击，失败后回退搜索框。"""
     if not window.Exists():
         log("微信窗口无效")
         return False
 
     window.SwitchToThisWindow()
-    time.sleep(0.5)
+    time.sleep(0.4)
 
-    # Step 1: 先尝试在左侧会话列表中直接查找并点击
-    log(f"尝试在最近会话列表中查找：{name}")
-    session_list = window.ListControl(Name="会话")
-    if session_list.Exists():
-        target_item = session_list.ListItemControl(Name=name)
-        if target_item.Exists():
+    session_list = find_session_list(window)
+    if session_list and session_list.Exists(0.4):
+        target_item = None
+        for item in session_list.GetChildren():
+            if _match_session_name(name, item.Name or ""):
+                target_item = item
+                break
+
+        if target_item:
             target_item.Click(simulateMove=False)
-            log(f"已在最近会话列表中找到并点击：{name}")
-
-            # 等待聊天窗口加载
-            time.sleep(4.0)
-            log(f"成功通过最近会话进入聊天 → {name}")
+            log(f"已在会话列表中定位并点击：{name}")
+            time.sleep(1.2)
             return True
 
-    log(f"最近会话列表中未找到 {name}，准备使用搜索方式")
-
-    # Step 2: 搜索框方式（原来的稳定逻辑）
-    search_box = window.EditControl(Name="搜索")
-    if not search_box.Exists():
+    log(f"会话列表未命中 {name}，回退搜索方式")
+    search_box = find_search_box(window)
+    if not search_box or not search_box.Exists(0.4):
         log("未找到搜索框")
         return False
 
     search_box.Click()
-    time.sleep(0.5)
-
-    log(f"正在搜索：{name}")
+    time.sleep(0.3)
     search_box.SendKeys("{Ctrl}a")
-    time.sleep(0.2)
+    time.sleep(0.1)
     search_box.SendKeys(name)
-    time.sleep(1.0)
+    time.sleep(0.8)
     search_box.SendKeys("{Enter}")
+    time.sleep(1.0)
 
-    log("已按 Enter 进入搜索结果")
-
-    # 等待聊天界面加载完成
-    time.sleep(5.0)
-
-    log(f"成功通过搜索进入聊天 → {name}（光标已就位，可直接发送）")
+    log(f"已通过搜索进入聊天：{name}")
     return True

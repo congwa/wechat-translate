@@ -31,7 +31,49 @@ wx.send_files([
     "C:/screenshot.jpg"
 ], who="文件传输助手")
 ```
-查看完整示例：examples/demo_send_to_file_helper.py
+查看完整示例：examples/legacy/demo_send_to_file_helper.py
+
+## 仅接收消息监听（不自动回复）
+
+```python
+from wechat_auto import WxAuto
+
+def on_message(name, content, wx):
+    print(f"[新消息] {name}: {content}")
+    return None
+
+wx = WxAuto()
+wx.load_wechat()
+wx.listen_messages(callback=on_message, interval=2)
+```
+
+如果你需要自动回复，使用：
+
+```python
+wx.listen(callback=on_message, interval=2, auto_reply=True)
+```
+更多历史示例见：`examples/legacy/`
+
+## 侧边栏监听 + 英文翻译
+
+监听目标与翻译策略由 `config/listener.json` 控制。默认仅展示英文；翻译失败时回退显示中文并附带失败原因。
+
+```bash
+python examples/sidebar_translate_listener.py --config "D:\code\wechat-pc-auto\config\listener.json"
+```
+
+接入 DeepLX：
+
+```bash
+python examples/sidebar_translate_listener.py --config "D:\code\wechat-pc-auto\config\listener.json"
+```
+
+或设置环境变量：
+
+```bash
+set DEEPLX_URL=http://127.0.0.1:1188/translate
+python examples/sidebar_translate_listener.py --config "D:\code\wechat-pc-auto\config\listener.json"
+```
 
 ## 注意事项
 

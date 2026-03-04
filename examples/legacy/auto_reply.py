@@ -46,7 +46,7 @@ if __name__ == "__main__":
         sys.exit(1)
 
     print("微信机器人已启动！发送 '关机' 可停止程序")
-    wx.listen(callback=my_reply, interval=10)
+    wx.listen(callback=my_reply, interval=10, auto_reply=True)
 
     # 支持 Ctrl+C 优雅退出
     def signal_handler(sig, frame):
