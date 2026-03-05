@@ -174,6 +174,33 @@
 处理：
 - 启用按大小轮转：单文件约 `10MB` 自动切分，保留最近 `5` 个历史文件。
 
+### 14) 配置脏值导致运行中崩溃
+现象：
+- `listen.interval_seconds<=0` 或 `translate.timeout_seconds<=0` 时，worker/翻译线程会在运行期报错。
+- `display.width` 过小会导致窗口布局异常。
+
+处理：
+- 侧边栏主进程启动时对关键配置做 fail-fast 校验，不合法直接退出并打印错误：
+  - `listen.interval_seconds > 0`
+  - `translate.timeout_seconds > 0`
+  - `display.width >= 280`
+
+### 15) PID 复用造成运行时锁误判
+现象：
+- 仅依赖 `pid` 判断锁活性时，极端情况下可能把“新进程复用旧 pid”误判为同一实例。
+
+处理：
+- 运行时锁同时记录 `pid` 与进程启动时间 token（Windows `GetProcessTimes`）。
+- 清理陈旧锁前先校验 `pid+token` 一致性，减少误判概率。
+
+### 16) 翻译队列无限增长
+现象：
+- 翻译服务慢于消息流入时，若队列无上限，内存会持续增长。
+
+处理：
+- 翻译队列改为有界（默认上限 `300`）。
+- 队列满时丢弃最旧待翻译任务并输出 `translate queue overflow` 日志，优先保持系统可用。
+
 ## 推荐运行命令
 
 ### 低干扰稳定方案（推荐）
@@ -201,6 +228,9 @@ python examples/sidebar_translate_listener.py ^
 - 当 `listen.targets` 长度大于 1：`listen.mode` 必须是 `session` 且 `listen.focus_refresh=false`。
 - 同一 target 只允许一个活动侧边栏实例（由运行时锁保证）。
 - 去重必须是“时间窗策略”，禁止恢复为全生命周期永久 `set` 去重。
+- 启动阶段必须对 `listen.interval_seconds`、`translate.timeout_seconds`、`display.width` 做 fail-fast 校验。
+- 运行时锁活性判断必须包含 `pid` 与进程启动时间 token，禁止仅靠 `pid` 判断。
+- 翻译任务队列必须有上限并具备溢出日志，禁止无界增长。
 - 左侧消息（非自己消息）UI 头部展示格式为“`[时间] 发送人`”，正文只展示消息内容，不再重复 `发送人:` 前缀。
 - 消息正文字号比时间/昵称行大 `2px`；时间与昵称保持基础字号不变。
 - 侧边栏窗口初始高度为 `550px`；若屏幕高度不足，自动收缩到可显示范围内。

@@ -175,7 +175,15 @@ def main():
         last_emit_cleanup = 0.0
         emit({"type": "status", "value": f"running mode={args.mode} target={target_group}"})
         if args.probe:
-            emit({"type": "log", "value": f"probe chat_sig={last_chat_sig} session_found={bool(last_session_sig)}"})
+            emit(
+                {
+                    "type": "log",
+                    "value": (
+                        f"probe chat_sig={last_chat_sig} "
+                        f"session_found={bool(last_session_preview)}"
+                    ),
+                }
+            )
             return
 
         while True:

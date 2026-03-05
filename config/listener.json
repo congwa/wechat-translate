@@ -12,7 +12,6 @@
   "translate": {
     "enabled": true,
     "provider": "deeplx",
-    "deeplx_url": "",
     "source_lang": "auto",
     "target_lang": "EN",
     "timeout_seconds": 8.0

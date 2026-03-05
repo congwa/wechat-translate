@@ -46,6 +46,9 @@ DEDUPE_CLEANUP_INTERVAL_SECONDS = 30.0
 WINDOW_CASCADE_STEP_PX = 30
 LOG_ROTATE_MAX_BYTES = 10 * 1024 * 1024
 LOG_ROTATE_KEEP_FILES = 5
+TRANSLATE_QUEUE_MAXSIZE = 300
+TRANSLATE_QUEUE_DROP_LOG_INTERVAL_SECONDS = 5.0
+MIN_SIDEBAR_WIDTH = 280
 RUNTIME_LOCK_DIR = os.path.join(ROOT_DIR, "logs", ".runtime")
 _LOG_WRITE_LOCK = threading.Lock()
 _TARGET_LOCK_PATH = ""
@@ -115,6 +118,38 @@ def as_int(value: Any, default: int) -> int:
         return int(value)
     except Exception:
         return default
+
+
+def read_config_float(cfg: dict[str, Any], key: str, default: float) -> float:
+    if key not in cfg:
+        return default
+    value = cfg.get(key)
+    try:
+        return float(value)
+    except Exception as e:
+        raise RuntimeError(f"{key} must be number, got {value!r}") from e
+
+
+def read_config_int(cfg: dict[str, Any], key: str, default: int) -> int:
+    if key not in cfg:
+        return default
+    value = cfg.get(key)
+    try:
+        return int(value)
+    except Exception as e:
+        raise RuntimeError(f"{key} must be integer, got {value!r}") from e
+
+
+def validate_positive_float(name: str, value: float) -> float:
+    if not math.isfinite(value) or value <= 0:
+        raise RuntimeError(f"{name} must be > 0, got {value!r}")
+    return value
+
+
+def validate_int_min(name: str, value: int, minimum: int) -> int:
+    if value < minimum:
+        raise RuntimeError(f"{name} must be >= {minimum}, got {value!r}")
+    return value
 
 
 def normalize_targets(value: Any) -> list[str]:
@@ -367,6 +402,17 @@ def _target_lock_path(target: str) -> str:
     return os.path.join(RUNTIME_LOCK_DIR, f"target_{digest}.lock")
 
 
+def _read_lock_payload(lock_path: str) -> dict[str, Any]:
+    try:
+        with open(lock_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            return data
+    except Exception:
+        pass
+    return {}
+
+
 def _is_pid_alive(pid: int) -> bool:
     if pid <= 0:
         return False
@@ -379,21 +425,77 @@ def _is_pid_alive(pid: int) -> bool:
     return True
 
 
-def _read_lock_pid(lock_path: str) -> int:
+def _get_pid_start_token(pid: int) -> str:
+    if pid <= 0 or os.name != "nt":
+        return ""
     try:
-        with open(lock_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        return int(data.get("pid", 0))
+        import ctypes
+
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+
+        class FILETIME(ctypes.Structure):
+            _fields_ = [("dwLowDateTime", ctypes.c_uint32), ("dwHighDateTime", ctypes.c_uint32)]
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32]
+        kernel32.OpenProcess.restype = ctypes.c_void_p
+        kernel32.GetProcessTimes.argtypes = [
+            ctypes.c_void_p,
+            ctypes.POINTER(FILETIME),
+            ctypes.POINTER(FILETIME),
+            ctypes.POINTER(FILETIME),
+            ctypes.POINTER(FILETIME),
+        ]
+        kernel32.GetProcessTimes.restype = ctypes.c_int
+        kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+        kernel32.CloseHandle.restype = ctypes.c_int
+
+        handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
+        if not handle:
+            return ""
+        creation = FILETIME()
+        exit_time = FILETIME()
+        kernel_time = FILETIME()
+        user_time = FILETIME()
+        ok = kernel32.GetProcessTimes(
+            handle,
+            ctypes.byref(creation),
+            ctypes.byref(exit_time),
+            ctypes.byref(kernel_time),
+            ctypes.byref(user_time),
+        )
+        kernel32.CloseHandle(handle)
+        if not ok:
+            return ""
+
+        ticks = (int(creation.dwHighDateTime) << 32) | int(creation.dwLowDateTime)
+        return str(ticks)
     except Exception:
-        return 0
+        return ""
+
+
+def _is_lock_owner_alive(lock_payload: dict[str, Any]) -> bool:
+    pid = as_int(lock_payload.get("pid"), 0)
+    if not _is_pid_alive(pid):
+        return False
+
+    expected_token = str(lock_payload.get("start_token", "")).strip()
+    if not expected_token:
+        return True
+
+    current_token = _get_pid_start_token(pid)
+    if not current_token:
+        # 无法读取启动时间时退化为 PID 存活判断，避免误删活动锁。
+        return True
+    return current_token == expected_token
 
 
 def is_target_already_running(target: str) -> bool:
     lock_path = _target_lock_path(target)
     if not os.path.exists(lock_path):
         return False
-    pid = _read_lock_pid(lock_path)
-    if _is_pid_alive(pid):
+    lock_payload = _read_lock_payload(lock_path)
+    if _is_lock_owner_alive(lock_payload):
         return True
     try:
         os.remove(lock_path)
@@ -405,25 +507,30 @@ def is_target_already_running(target: str) -> bool:
 def acquire_target_lock(target: str) -> tuple[bool, str]:
     lock_path = _target_lock_path(target)
     if os.path.exists(lock_path):
-        pid = _read_lock_pid(lock_path)
-        if _is_pid_alive(pid):
+        existing = _read_lock_payload(lock_path)
+        if _is_lock_owner_alive(existing):
+            pid = as_int(existing.get("pid"), 0)
             return False, f"target already running pid={pid}"
         try:
             os.remove(lock_path)
         except Exception:
             pass
 
+    start_token = _get_pid_start_token(os.getpid())
     payload = {
         "pid": os.getpid(),
         "target": target,
         "created_at": datetime.now().isoformat(timespec="seconds"),
     }
+    if start_token:
+        payload["start_token"] = start_token
     try:
         with open(lock_path, "x", encoding="utf-8") as f:
             json.dump(payload, f, ensure_ascii=False)
     except FileExistsError:
-        pid = _read_lock_pid(lock_path)
-        if _is_pid_alive(pid):
+        existing = _read_lock_payload(lock_path)
+        if _is_lock_owner_alive(existing):
+            pid = as_int(existing.get("pid"), 0)
             return False, f"target already running pid={pid}"
         try:
             with open(lock_path, "w", encoding="utf-8") as f:
@@ -441,8 +548,14 @@ def release_target_lock():
     if not path:
         return
     try:
-        pid = _read_lock_pid(path)
-        if pid == os.getpid() and os.path.exists(path):
+        lock_payload = _read_lock_payload(path)
+        pid = as_int(lock_payload.get("pid"), 0)
+        expected_token = str(lock_payload.get("start_token", "")).strip()
+        current_token = _get_pid_start_token(os.getpid())
+        same_process = pid == os.getpid()
+        if expected_token and current_token and expected_token != current_token:
+            same_process = False
+        if same_process and os.path.exists(path):
             os.remove(path)
     except Exception:
         pass
@@ -709,7 +822,6 @@ def main():
     listen_mode = str(listen_cfg.get("mode", "session"))
     if listen_mode not in ("chat", "session", "mixed"):
         listen_mode = "session"
-    listen_interval = as_float(listen_cfg.get("interval_seconds"), 1.0)
     focus_refresh = as_bool(listen_cfg.get("focus_refresh"), False)
     worker_debug = as_bool(listen_cfg.get("worker_debug"), False)
     message_dedupe_window_seconds = as_non_negative_float(
@@ -765,16 +877,25 @@ def main():
     deeplx_url = str(translate_cfg.get("deeplx_url") or os.getenv("DEEPLX_URL", ""))
     source_lang = str(translate_cfg.get("source_lang", "auto"))
     target_lang = str(translate_cfg.get("target_lang", "EN"))
-    translate_timeout = as_float(translate_cfg.get("timeout_seconds"), 8.0)
 
     english_only = as_bool(display_cfg.get("english_only"), True)
     translate_fail_behavior = str(display_cfg.get("on_translate_fail", "show_cn_with_reason"))
     if translate_fail_behavior not in ("show_cn_with_reason", "show_cn", "show_reason"):
         translate_fail_behavior = "show_cn_with_reason"
-    width = as_int(display_cfg.get("width"), 420)
     side = str(display_cfg.get("side", "right"))
     if side not in ("left", "right"):
         side = "right"
+
+    try:
+        listen_interval = read_config_float(listen_cfg, "interval_seconds", 1.0)
+        translate_timeout = read_config_float(translate_cfg, "timeout_seconds", 8.0)
+        width = read_config_int(display_cfg, "width", 420)
+        listen_interval = validate_positive_float("listen.interval_seconds", listen_interval)
+        translate_timeout = validate_positive_float("translate.timeout_seconds", translate_timeout)
+        width = validate_int_min("display.width", width, MIN_SIDEBAR_WIDTH)
+    except RuntimeError as e:
+        print(f"[sidebar] invalid config: {e}", file=sys.stderr)
+        raise SystemExit(2)
 
     log_file = resolve_log_file_path(logging_cfg.get("file", ""))
     if len(targets) > 1:
@@ -810,10 +931,12 @@ def main():
         ),
     )
     event_queue: "queue.Queue[dict]" = queue.Queue()
-    translate_queue: "queue.Queue[dict | None]" = queue.Queue()
+    translate_queue: "queue.Queue[dict | None]" = queue.Queue(maxsize=TRANSLATE_QUEUE_MAXSIZE)
     dedupe_cache: Dict[str, float] = {}
     recent_chat_events: dict[str, tuple[str, float, str]] = {}
     last_dedupe_cleanup_at = 0.0
+    translate_queue_drop_count = 0
+    last_translate_queue_drop_log_at = 0.0
 
     proc = start_worker_process(
         target_group, listen_interval, listen_mode, worker_debug, focus_refresh
@@ -824,6 +947,64 @@ def main():
     t_err = threading.Thread(target=stderr_reader, args=(proc, event_queue), daemon=True)
     t_out.start()
     t_err.start()
+
+    def enqueue_translate_task(task: dict):
+        nonlocal translate_queue_drop_count, last_translate_queue_drop_log_at
+        try:
+            translate_queue.put_nowait(task)
+            return
+        except queue.Full:
+            pass
+
+        empty_marker = object()
+        dropped = empty_marker
+        try:
+            dropped = translate_queue.get_nowait()
+        except queue.Empty:
+            pass
+
+        # 队列里如果是停止标记，恢复标记并放弃当前消息，优先保证退出流程可达。
+        if dropped is None:
+            try:
+                translate_queue.put_nowait(None)
+            except queue.Full:
+                pass
+            translate_queue_drop_count += 1
+        else:
+            try:
+                translate_queue.put_nowait(task)
+                return
+            except queue.Full:
+                translate_queue_drop_count += 1
+
+        now_ts = time.time()
+        if (
+            now_ts - last_translate_queue_drop_log_at
+            >= TRANSLATE_QUEUE_DROP_LOG_INTERVAL_SECONDS
+        ):
+            event_queue.put(
+                {
+                    "type": "log",
+                    "value": f"translate queue overflow: dropped={translate_queue_drop_count}",
+                }
+            )
+            last_translate_queue_drop_log_at = now_ts
+
+    def signal_translate_worker_stop():
+        try:
+            translate_queue.put_nowait(None)
+            return
+        except queue.Full:
+            pass
+
+        try:
+            translate_queue.get_nowait()
+        except queue.Empty:
+            pass
+        try:
+            translate_queue.put_nowait(None)
+        except queue.Full:
+            pass
 
     def translate_worker():
         while True:
@@ -954,7 +1135,7 @@ def main():
             cleanup_recent_chat_events(recent_chat_events, now_ts)
             last_dedupe_cleanup_at = now_ts
 
-        translate_queue.put(
+        enqueue_translate_task(
             {
                 "chat_name": chat_name,
                 "sender_name": sender_name,
@@ -988,7 +1169,7 @@ def main():
         except Exception:
             pass
         try:
-            translate_queue.put(None)
+            signal_translate_worker_stop()
         except Exception:
             pass
         release_target_lock()
