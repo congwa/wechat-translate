@@ -1,5 +1,9 @@
 # listener.json 配置说明
 
+## 启动参数约束
+- `examples/sidebar_translate_listener.py` 启动时仅保留 `--config`。
+- 其余运行行为（监听、翻译、展示、日志、调试）统一从 `listener.json` 读取，不再提供命令行覆盖参数。
+
 ## 完整配置示例
 ```json
 {
@@ -9,7 +13,8 @@
       "ssh 前端进阶交流群3群「禁广告」"
     ],
     "interval_seconds": 1.0,
-    "focus_refresh": false
+    "focus_refresh": false,
+    "worker_debug": false
   },
   "translate": {
     "enabled": true,
@@ -23,11 +28,10 @@
     "english_only": true,
     "on_translate_fail": "show_cn_with_reason",
     "width": 460,
-    "side": "right",
-    "topmost": false
+    "side": "right"
   },
   "logging": {
-    "file": "D:\\code\\wechat-pc-auto\\logs\\sidebar_listener.log"
+    "file": "logs/sidebar_listener.log"
   }
 }
 ```
@@ -41,6 +45,7 @@
 - `targets`：监听目标数组。当前版本使用第一个元素作为目标会话名。
 - `interval_seconds`：轮询间隔（秒）。越小越实时，但占用更高。
 - `focus_refresh`：是否每轮强制切回微信刷新 UIA。`true` 更稳但会抢焦点。
+- `worker_debug`：是否输出 worker 调试日志（例如 `debug session_preview=...`）。
 
 ### `translate`
 - `enabled`：是否启用翻译。`true` 调用翻译服务，`false` 原文透传。
@@ -59,10 +64,10 @@
   - `show_reason`：只显示失败原因。
 - `width`：侧边栏宽度。
 - `side`：侧边栏停靠位置，`left` 或 `right`。
-- `topmost`：是否置顶显示。
+- 置顶仅通过侧边栏头部“置顶”按钮手动切换，不再提供启动配置项。
 
 ### `logging`
-- `file`：运行日志输出文件路径。
+- `file`：运行日志输出文件路径。相对路径按项目根目录解析（例如 `logs/sidebar_listener.log`）。
 
 ## 当前消息渲染规则（代码行为）
 - 图片占位文本会被过滤，不显示到侧边栏：`[图片]` / `[image]` / `[images]` / `[photo]`。
