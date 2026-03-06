@@ -17,10 +17,10 @@ def _load_worker_module():
     fake_wechat_auto.WxAuto = object
     fake_wechat_auto.controls = fake_controls
     fake_controls.clear_control_cache = lambda window=None: None
-    fake_controls.find_message_list = lambda window: None
     fake_controls.find_session_list = lambda window: None
-    fake_controls.is_meaningful_message_text = lambda text: bool(text)
-    fake_controls.normalize_session_name = lambda text: text
+    fake_controls.normalize_session_name = (
+        lambda text: text.splitlines()[0].strip() if text else ""
+    )
 
     saved_modules = {
         "wechat_auto": sys.modules.get("wechat_auto"),
@@ -114,41 +114,42 @@ class GroupListenerWorkerHelpersTest(unittest.TestCase):
         self.assertEqual(sleeps, [])
         self.assertEqual(events[0]["state"], "reconnecting")
 
-    def test_connect_target_runtime_session_mode_skips_chat_signature_scan(self):
-        class FakeWx:
-            def __init__(self):
-                self.window = object()
+    def test_parse_targets_supports_multiple_sources(self):
+        args = types.SimpleNamespace(
+            target=["群1", "群2", "群1"],
+            group="群3",
+            targets_json='["群4", "群2"]',
+        )
+        self.assertEqual(worker.parse_targets(args), ["群1", "群2", "群3", "群4"])
 
-            def load_wechat(self):
+    def test_build_target_state_map_reads_all_targets_from_single_snapshot(self):
+        class FakeItem:
+            def __init__(self, name):
+                self.Name = name
+
+        class FakeSessionList:
+            def Exists(self, timeout=0.3):
                 return True
 
-        calls = []
-        original_emit = worker.emit
-        original_wait = worker.wait_initial_chat_signature
-        original_find_target = worker.find_target_session_raw
-        original_clear_cache = worker.clear_control_cache
-        worker.emit = lambda event: None
-        worker.wait_initial_chat_signature = (
-            lambda *args, **kwargs: calls.append("chat_signature") or (1, "hello")
-        )
-        worker.find_target_session_raw = lambda *args, **kwargs: "测试群\n预览正文"
-        worker.clear_control_cache = lambda window=None: calls.append("clear_cache")
-        try:
-            runtime = worker.connect_target_runtime(
-                FakeWx(),
-                args=types.SimpleNamespace(mode="session", probe=False),
-                target_group="测试群",
-                retry_seconds=1.0,
-            )
-        finally:
-            worker.emit = original_emit
-            worker.wait_initial_chat_signature = original_wait
-            worker.find_target_session_raw = original_find_target
-            worker.clear_control_cache = original_clear_cache
+            def GetChildren(self):
+                return [
+                    FakeItem("群1\n[2条] 张三: 你好"),
+                    FakeItem("群2\n李四: ok"),
+                ]
 
-        self.assertEqual(calls, ["clear_cache"])
-        self.assertIsNone(runtime["last_chat_sig"])
-        self.assertEqual(runtime["last_session_preview"], "预览正文")
+        original_find_session_list = worker.find_session_list
+        worker.find_session_list = lambda window: FakeSessionList()
+        try:
+            state_map = worker.build_target_state_map(object(), ["群1", "群2", "群3"])
+        finally:
+            worker.find_session_list = original_find_session_list
+
+        self.assertEqual(state_map["群1"]["preview"], "张三: 你好")
+        self.assertEqual(state_map["群1"]["unread"], 2)
+        self.assertEqual(state_map["群2"]["preview"], "李四: ok")
+        self.assertEqual(state_map["群2"]["unread"], 0)
+        self.assertEqual(state_map["群3"]["preview"], "")
+        self.assertEqual(state_map["群3"]["unread"], 0)
 
 
 if __name__ == "__main__":

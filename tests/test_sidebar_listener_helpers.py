@@ -22,11 +22,6 @@ class SidebarHelpersTest(unittest.TestCase):
         raw = "  hello\u200b   world  "
         self.assertEqual(sidebar.normalize_message_for_dedupe(raw), "hello world")
 
-    def test_cross_source_equivalent_prefix(self):
-        self.assertTrue(sidebar.is_cross_source_equivalent("abc", "abc"))
-        self.assertTrue(sidebar.is_cross_source_equivalent("abc def", "abc"))
-        self.assertFalse(sidebar.is_cross_source_equivalent("abc", "xyz"))
-
     def test_validate_positive_float(self):
         self.assertEqual(sidebar.validate_positive_float("x", 0.5), 0.5)
         with self.assertRaises(RuntimeError):
@@ -92,25 +87,15 @@ class SidebarHelpersTest(unittest.TestCase):
         self.assertEqual(render_calls[-1], ["m1", "m2"])
         self.assertEqual(insert_calls, [])
 
-    def test_build_worker_status_text_single_target(self):
+    def test_build_worker_status_text(self):
         text = sidebar.build_worker_status_text(
-            "session",
-            {"g1": "waiting_wechat"},
-            {"g1": "wechat not ready, retry in 10.0s"},
+            "waiting_wechat",
+            "wechat not ready, retry in 10.0s",
+            3,
         )
-        self.assertIn("[g1] waiting_wechat", text)
+        self.assertIn("session-only targets=3", text)
+        self.assertIn("waiting_wechat", text)
         self.assertIn("retry in 10.0s", text)
-
-    def test_build_worker_status_text_multi_target_summary(self):
-        text = sidebar.build_worker_status_text(
-            "session",
-            {"g1": "running", "g2": "waiting_wechat", "g3": "running"},
-            {"g1": "ok", "g2": "wechat not ready", "g3": "ok"},
-        )
-        self.assertIn("mode=session", text)
-        self.assertIn("running=2", text)
-        self.assertIn("waiting_wechat=1", text)
-        self.assertIn("g2=waiting_wechat: wechat not ready", text)
 
     def test_compute_worker_restart_delay_caps(self):
         self.assertEqual(sidebar.compute_worker_restart_delay(1), 3.0)
@@ -134,15 +119,6 @@ class SidebarHelpersTest(unittest.TestCase):
 
         self.assertEqual(calls, ["toggle"])
         self.assertEqual(result, "break")
-
-    def test_build_worker_status_text_shows_worker_backoff(self):
-        text = sidebar.build_worker_status_text(
-            "session",
-            {"g1": "running", "g2": "worker_backoff"},
-            {"g1": "ok", "g2": "code=1, retry in 3.0s"},
-        )
-        self.assertIn("worker_backoff=1", text)
-        self.assertIn("g2=worker_backoff: code=1, retry in 3.0s", text)
 
 
 if __name__ == "__main__":

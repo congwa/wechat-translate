@@ -2,21 +2,18 @@
 
 ## 启动参数约束
 - `examples/sidebar_translate_listener.py` 启动时仅保留 `--config`。
-- 其余运行行为（监听、翻译、展示、日志、调试）统一从 `listener.json` 读取，不再提供命令行覆盖参数。
+- 当前监听主链路为 `session-only`，其余运行行为（监听、翻译、展示、日志、调试）统一从 `listener.json` 读取。
 
 ## 完整配置示例
 ```json
 {
   "listen": {
-    "mode": "session",
     "targets": [
       "ssh 前端进阶交流群3群「禁广告」"
     ],
     "interval_seconds": 1.0,
     "load_retry_seconds": 10.0,
-    "dedupe_window_seconds": 2.5,
     "session_preview_dedupe_window_seconds": 20.0,
-    "cross_source_merge_window_seconds": 3.0,
     "focus_refresh": false,
     "worker_debug": false
   },
@@ -43,31 +40,21 @@
 ## 字段说明
 
 ### `listen`
-- `mode`：监听模式。  
-  - `session`：只监听会话列表预览，不主动打开会话。  
-  - `chat` / `mixed`：会尝试切到目标会话（会影响当前微信焦点）。
-- `targets`：监听目标数组。  
-  - 长度为 `1`：启动一个侧边栏窗口并监听该目标。  
+- `targets`：监听目标数组。
+  - 长度为 `1`：启动一个侧边栏窗口并监听该目标。
   - 长度 `>1`：仍然只启动一个侧边栏窗口，左侧菜单展示所有 target，点击切换右侧消息视图。
-  - 监听层仍是“每个 target 一个 worker 子进程”并行运行。
-  - 若某个 target 已被其他实例占用，本次启动会跳过该 target，继续启动剩余可用 target。
+  - 监听层为“单 worker 一次扫描全部 target”。
 - `interval_seconds`：轮询间隔（秒）。越小越实时，但占用更高。
   - 必须 `> 0`，否则启动阶段会直接报错退出。
 - `load_retry_seconds`：微信未启动、未登录或重连时的重试间隔（秒），默认 `10.0`。
   - 必须 `> 0`，否则启动阶段会直接报错退出。
   - 该参数同时作用于“先启动程序后启动微信”和“微信运行中关闭后再次打开”的恢复等待。
-- `dedupe_window_seconds`：普通来源（如 `chat`）去重窗口秒数，默认 `2.5`。  
-  - 值过小：重复消息更容易漏拦。  
-  - 值过大：短时间内相同正文的真实消息可能被合并掉。
-- `session_preview_dedupe_window_seconds`：`session_preview` 去重窗口秒数，默认 `20.0`。  
-  - 这是 `session` 模式最关键参数。  
-  - 值过小：会话预览抖动导致重复展示概率上升。  
+- `session_preview_dedupe_window_seconds`：`session_preview` 去重窗口秒数，默认 `20.0`。
+  - 这是当前链路最关键参数。
+  - 值过小：会话预览抖动导致重复展示概率上升。
   - 值过大：群里短时间重复发送相同内容时，第二条可能被抑制。
-- `cross_source_merge_window_seconds`：跨来源归并窗口秒数，默认 `3.0`。  
-  - 主要影响 `mixed` 模式，用于合并 `chat` 与 `session_preview` 的近实时重复事件。  
-  - `session` 模式下该参数基本无影响。
 - `focus_refresh`：是否每轮强制切回微信刷新 UIA。`true` 更稳但会抢焦点。
-- `worker_debug`：是否输出 worker 调试日志（例如 `debug session_preview=...`）。
+- `worker_debug`：是否输出 worker 调试日志（例如 `debug target=... session_preview=... unread=...`）。
 
 ### `translate`
 - `enabled`：是否启用翻译。`true` 调用翻译服务，`false` 原文透传。
@@ -81,9 +68,9 @@
 
 ### `display`
 - `english_only`：`true` 时只显示翻译后的文本（替换原文展示）。
-- `on_translate_fail`：翻译失败回退策略。  
-  - `show_cn_with_reason`：显示中文并附失败原因。  
-  - `show_cn`：只显示中文。  
+- `on_translate_fail`：翻译失败回退策略。
+  - `show_cn_with_reason`：显示中文并附失败原因。
+  - `show_cn`：只显示中文。
   - `show_reason`：只显示失败原因。
 - `width`：侧边栏宽度。
   - 必须 `>= 280`，否则启动阶段会直接报错退出。
@@ -98,7 +85,7 @@
 - 图片占位文本会被过滤，不显示到侧边栏：`[图片]` / `[image]` / `[images]` / `[photo]`。
 - 若消息是 `发送人: 正文` 格式，仅翻译“正文”，发送人姓名保持原样。
 - 若消息不含发送人前缀，视为“自己消息”，在侧边栏右对齐显示。
-- UI 不显示 `source=session_preview`，该字段仅用于内部去重与日志。
+- UI 不显示 `source=session_preview`，该字段仅用于内部日志。
 - 当前侧边栏仅用于监听与展示，不提供消息发送输入框。
 - 多目标模式下只保留一个窗口：左侧 target 菜单 + 右侧消息区；未选中目标的新消息会累计未读计数。
 - 每个 target 的消息缓存上限固定为 `100` 条（超出后丢弃最旧消息）。
@@ -106,5 +93,5 @@
 - 翻译队列是有界队列（默认上限 `300`）；队列满时会丢弃最旧待翻译任务并记录 `translate queue overflow` 日志。
 
 ## 多目标运行约束
-- `listen.targets` 长度大于 1 时，必须使用 `listen.mode=session`。
-- `listen.targets` 长度大于 1 时，必须保持 `listen.focus_refresh=false`（避免多窗口互相抢焦点）。
+- 当前主链路固定为 `session-only`，禁止恢复 `chat` / `mixed` 配置。
+- 多目标监听不会再派生多个 worker；所有 targets 由同一个 worker 在一次 UIA 扫描中完成。
