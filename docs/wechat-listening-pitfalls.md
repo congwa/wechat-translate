@@ -6,26 +6,24 @@
 - `examples/sidebar_translate_listener.py`
 - `wechat_auto/window.py`
 - `wechat_auto/controls.py`
-- `wechat_auto/chat.py`
 
-目标：在不改微信客户端的前提下，稳定监听指定会话消息并在侧边栏展示（可接 DeepLX 翻译）。
+目标：在不改微信客户端的前提下，稳定监听指定会话的预览消息并在侧边栏展示（可接 DeepLX 翻译）。
 
 当前监听目标来源于配置文件：`config/listener.json` 的 `listen.targets`。
 
 ## 架构结论
 - 监听与 UI 必须分离：`group_listener_worker.py` 负责抓消息，`sidebar_translate_listener.py` 负责展示与翻译。
-- 当前持续优化范围只聚焦“监听 + 翻译 + 展示”主链路。
-- `wechat_auto/sender.py`、输入框写入、自动打开聊天等能力仅保留兼容，不作为当前主功能优化目标。
-- 后续优化默认只服务 `session` 模式；`chat` / `mixed` 仅保留兼容，不再作为主路径背负性能与恢复能力优化。
-- 默认推荐 `session` 模式，不推荐 `chat` 模式作为唯一监听来源。
-- 默认关闭焦点抢占与侧边栏置顶，避免打断用户操作。
-- 现支持多目标：单侧边栏窗口 + 左侧目标菜单 + 每个 target 独立 worker 子进程。
-- 侧边栏主进程会监管每个 worker；异常退出后按退避时间自动拉起，不要求整窗重启。
-- 当前阶段计划见：`docs/plan+2026-03-06_09-41-16.md`
+- 当前监听主链路已收敛为 `session-only`。
+- 当前 worker 为单进程多目标：一次扫描微信主窗口左侧会话列表，覆盖全部 `listen.targets`。
+- 当前主路径不再维护 `chat` / `mixed` 监听模式；相关复杂度已从主链路删除。
+- 默认行为必须低干扰：
+  - 不抢焦点（除非 `listen.focus_refresh=true`）
+  - 不置顶（除非用户手动开启“置顶”开关）
+- 发送消息、文件发送、输入框写入等能力仅保留兼容，不作为当前监听链路优化目标。
 
 ## 关键坑位与处理
 
-### 1) 主窗口误匹配（弹层/托盘窗口）
+### 1) 主窗口误匹配（弹层 / 托盘窗口）
 现象：
 - 进程存在，但拿到的是 `mmui::XDialog` / `XPopover` / 托盘相关窗口，后续监听失败。
 
@@ -38,20 +36,20 @@
   - 弹层/托盘类降权：`popover` / `trayicon` / `shadow` / `toolsavebits`
   - 非主窗口直接跳过
 
-### 2) `chat` 模式不稳定
+### 2) `session` 预览不是完整消息流
 现象：
-- 已进入目标会话，但消息列表初始为空或不可读，导致基线签名为 `None`，后续不触发新消息事件。
+- 侧边栏能看到新消息，但拿到的是左侧会话预览，不是聊天区全文。
+- 长消息、连续多条消息、图片/语音/复杂卡片都会被截断或折叠。
 
-处理：
-- 增加 `wait_initial_chat_signature()`，启动阶段等待首次可读签名。
-- 即便如此，`chat` 模式仍受 UI 状态影响，建议仅作补充模式。
+根因：
+- 当前方案读的是会话列表条目的预览文本和未读数，不是右侧聊天区消息列表。
 
 结论：
-- 默认使用 `session` 模式，依赖会话列表预览增量触发。
+- 当前链路适合“低干扰抓英文素材 / 翻译学习”，不适合“完整消息审计 / 零漏抓取”。
 
 ### 3) 会话预览不刷新
 现象：
-- `session` 模式长期读到同一预览文本，不产出消息事件。
+- `session-only` 长时间读到同一预览文本，不产出消息事件。
 
 根因：
 - 某些环境下 UIA 读取会话列表可能保持旧快照。
@@ -68,10 +66,18 @@
 - 默认不做轮询抢焦点。
 - 仅 `listen.focus_refresh=true` 时才允许抢焦点。
 
-### 5) 侧边栏置顶影响操作
+### 5) 单 worker 不等于零成本
+现象：
+- 单 worker 比原先多 worker 干净，但如果 UIA 树异常，所有 target 会一起受影响。
+
+根因：
+- 当前 worker 为单点扫描器；状态与重连也收敛到一个进程。
+
 处理：
-- 侧边栏默认不置顶。
-- 仅在需要时用侧边栏头部“置顶”开关临时切换。
+- 侧边栏主进程对单 worker 做 supervisor：
+  - worker 异常退出后进入 `worker_backoff`
+  - 按退避梯度自动重启：`3s -> 6s -> 12s -> 24s -> 30s(cap)`
+  - 重新进入 `running` 后退避次数清零
 
 ### 6) Worker 日志与事件混流
 现象：
@@ -95,7 +101,7 @@
   - `Accept`
   - `Content-Type: application/json; charset=utf-8`
   - `Origin` / `Referer`
-- 保留错误响应体片段，便于定位风控/配额问题。
+- 保留错误响应体片段，便于定位风控 / 配额问题。
 
 ### 8) 中文乱码（侧边栏显示 `�`）
 现象：
@@ -109,60 +115,38 @@
   - 命令行增加 `-X utf8`
   - 环境变量增加 `PYTHONUTF8=1`、`PYTHONIOENCODING=utf-8`
 
-### 9) 重复消息与“永久去重”误伤
+### 9) 重复消息与预览抖动
 现象：
-- `mixed` 模式下同一条消息可能被 `chat` 和 `session_preview` 双显。
-- 相同文案在后续再次出现时被错误丢弃（例如“收到”）。
-
-根因：
-- 使用进程生命周期的 `set` 去重会把“历史出现过的文本”永久视为重复。
+- 同一预览文本可能因为 UIA 抖动短时间重复触发。
+- 相同文案在后续再次出现时可能需要允许重新展示。
 
 处理：
-- `group_listener_worker.py` 只做短防抖（默认 `0.8s`），用于抑制 UI 抖动和同轮询重复，不做永久去重。
-- `group_listener_worker.py` 的 `session` 触发同时看“预览正文”和“未读数增量”：
-  - 忽略时间、置顶、免打扰这类噪音字段；
-  - 同文案但未读数增长时，允许重新触发，避免把长期重复文案永久吞掉。
-- `sidebar_translate_listener.py` 改为：
-  - 精确去重窗口：`session_preview` 默认 `20s`，其他来源默认 `2.5s`；
-  - 跨来源归并窗口（默认 `3.0s`）：合并 `chat/session_preview` 近实时重叠事件；
-  - TTL + 上限清理：避免去重缓存无限增长。
-- 三个窗口均支持在 `config/listener.json` 的 `listen` 中配置：
-  - `dedupe_window_seconds`（普通来源）
-  - `session_preview_dedupe_window_seconds`（`session_preview` 来源）
-  - `cross_source_merge_window_seconds`（跨来源归并）
-- 结论：短时间内抑制重复，窗口外相同文案可再次展示。
+- worker 只做短防抖（默认 `0.8s`），用于抑制同轮询重复，不做永久去重。
+- 侧边栏按 `session_preview_dedupe_window_seconds` 做时间窗去重。
+- 去重缓存使用 TTL + 上限清理，避免长期运行时内存无界增长。
 
-调参影响（必须按模式看）：
-- `session` 模式：优先关注 `session_preview_dedupe_window_seconds`。  
-  - 过小：重复抖动更难压住。  
-  - 过大：短时间同文案重复发送会被吞。
-- `mixed` 模式：除上面外，还要看 `cross_source_merge_window_seconds`。  
-  - 过小：`chat/session_preview` 双来源重复更容易双显。  
-  - 过大：跨来源但非同条消息也可能被误并。
-- `dedupe_window_seconds` 主要影响 `chat` 来源；纯 `session` 模式下影响很小。
+调参影响：
+- 优先关注 `listen.session_preview_dedupe_window_seconds`
+  - 过小：预览抖动更容易重复显示
+  - 过大：短时间同文案重复发送更容易被吞
 
-### 10) 多目标监听的焦点冲突
-现象：
-- 多个目标同时监听时，如果使用 `chat/mixed` 或开启 `focus_refresh`，窗口会相互抢焦点，干扰明显。
-
-根因：
-- `chat/mixed` 会主动切会话；`focus_refresh=true` 会轮询 `SwitchToThisWindow`。
-
-处理：
-- 多目标模式强制约束：
-  - `listen.mode=session`
-  - `listen.focus_refresh=false`
-- 采用“每个 target 一个 worker 子进程 + 单侧边栏窗口”的隔离模型，避免共享状态互相污染。
-
-### 11) 重复启动导致同 target 多实例
+### 10) 重复启动导致同 target 多实例
 现象：
 - 误重复执行启动命令后，同一个 target 可能被多个进程重复监听，消息重复显示。
 
 处理：
 - 为每个 target 增加运行时锁（`logs/.runtime/target_*.lock`）。
-- launcher 启动子进程前会检查锁并跳过已运行 target；剩余可用 target 继续启动。
 - 启动阶段会先扫描 `logs/.runtime`，仅清理 `pid/start_token` 已失效或格式异常的陈旧锁。
 - 仍存活的锁必须保留，禁止“启动即全删锁”，否则会破坏单实例约束并造成重复监听。
+
+### 11) PID 复用造成运行时锁误判
+现象：
+- 仅依赖 `pid` 判断锁活性时，极端情况下可能把“新进程复用旧 pid”误判为同一实例。
+
+处理：
+- 运行时锁同时记录 `pid` 与进程启动时间 token（Windows `GetProcessTimes`）。
+- 清理陈旧锁前先校验 `pid+token` 一致性，减少误判概率。
+- Windows 上锁活性判断不再依赖 `os.kill(pid, 0)`，避免部分 Python/Win32 组合下对无效 PID 抛出异常导致启动即崩。
 
 ### 12) 翻译网络抖动卡 UI
 现象：
@@ -175,46 +159,7 @@
 - 翻译改为后台单线程队列，UI 线程只负责去重与渲染。
 - 翻译失败通过事件回流记录日志，不阻塞后续消息处理。
 
-### 13) 单窗口多目标视图切换
-现象：
-- 多目标监听时，若每个 target 都弹一个窗口，视觉负担重且切换效率低。
-
-处理：
-- 改为单窗口双栏布局：左侧 target 菜单，右侧消息区。
-- 左侧 target 菜单默认隐藏；通过头部“菜单”按钮展开/收起，按钮位于“置顶”开关前。
-- 焦点位于侧边栏窗口内时，可用 `Ctrl+B` 快捷切换左侧菜单。
-- 左侧 target 名称最多展示前 `6` 个字符；超出部分统一显示 `...`，未读数仍追加在后面。
-- 每个 target 仍由独立 worker 监听；未选中 target 的新消息累计未读计数。
-- 每个 target 的消息缓存上限固定 `100` 条，超限后立即按缓存重绘，禁止当前可见消息区继续无限增长。
-
-### 14) 长时间运行日志膨胀
-现象：
-- 多窗口持续运行时日志文件增长过快，排障时难以定位近期信息。
-
-处理：
-- 启用按大小轮转：单文件约 `10MB` 自动切分，保留最近 `5` 个历史文件。
-
-### 15) 配置脏值导致运行中崩溃
-现象：
-- `listen.interval_seconds<=0` 或 `translate.timeout_seconds<=0` 时，worker/翻译线程会在运行期报错。
-- `display.width` 过小会导致窗口布局异常。
-
-处理：
-- 侧边栏主进程启动时对关键配置做 fail-fast 校验，不合法直接退出并打印错误：
-  - `listen.interval_seconds > 0`
-  - `translate.timeout_seconds > 0`
-  - `display.width >= 280`
-
-### 16) PID 复用造成运行时锁误判
-现象：
-- 仅依赖 `pid` 判断锁活性时，极端情况下可能把“新进程复用旧 pid”误判为同一实例。
-
-处理：
-- 运行时锁同时记录 `pid` 与进程启动时间 token（Windows `GetProcessTimes`）。
-- 清理陈旧锁前先校验 `pid+token` 一致性，减少误判概率。
-- Windows 上锁活性判断不再依赖 `os.kill(pid, 0)`，避免部分 Python/Win32 组合下对无效 PID 抛出异常导致启动即崩。
-
-### 17) 翻译队列无限增长
+### 13) 翻译队列无限增长
 现象：
 - 翻译服务慢于消息流入时，若队列无上限，内存会持续增长。
 
@@ -222,45 +167,41 @@
 - 翻译队列改为有界（默认上限 `300`）。
 - 队列满时丢弃最旧待翻译任务并输出 `translate queue overflow` 日志，优先保持系统可用。
 
-### 18) 程序先启动，但微信还没启动
+### 14) 程序先启动，但微信还没启动
 现象：
 - 先运行侧边栏程序时，若微信尚未启动或未登录，旧逻辑会直接退出，必须手动重启程序。
 
 处理：
-- `group_listener_worker.py` 启动阶段改为等待微信就绪，不直接退出。
+- worker 启动阶段改为等待微信就绪，不直接退出。
 - 使用 `listen.load_retry_seconds` 控制重试间隔。
 - 侧边栏状态栏显示 `waiting_wechat` / `connecting`，不再只有一次性失败文本。
 
-### 19) 监听中途微信被关闭，恢复不了
+### 15) 监听中途微信被关闭，恢复不了
 现象：
-- 监听过程中关闭微信后，旧逻辑只会报 `window lost`，但不会真正重连。
+- 监听过程中关闭微信后，若不做重连，只会报 `window_lost`。
 
 处理：
 - worker 发现窗口丢失后进入 `window_lost -> reconnecting -> running` 状态流。
-- 微信重新打开后，重新定位主窗口并恢复 `session` 基线，不要求手动重启侧边栏。
-- 多 target 下每个 worker 独立恢复，互不拖垮。
+- 微信重新打开后，重新定位主窗口并恢复所有 target 的 `session` 基线，不要求手动重启侧边栏。
 
-### 20) worker 异常退出后，侧边栏只记录日志不自愈
+### 16) 长时间运行日志膨胀
 现象：
-- 某个 target 的 worker 因异常退出后，侧边栏进程仍存活，但该 target 永久停听，除非整窗手动重启。
+- 持续运行时日志文件增长过快，排障时难以定位近期信息。
 
 处理：
-- `sidebar_translate_listener.py` 现在对每个 target 做 supervisor：
-  - 发现 worker 退出后，进入 `worker_backoff` 状态；
-  - 按固定退避梯度自动重启：`3s -> 6s -> 12s -> 24s -> 30s(cap)`；
-  - 某个 target 重启失败时，只影响该 target，不拖垮其他 target。
-- worker 重新进入 `running` 后，退避次数清零，下一次异常退出重新从 `3s` 开始。
+- 启用按大小轮转：单文件约 `10MB` 自动切分，保留最近 `5` 个历史文件。
 
-### 21) `session` 模式轮询反复全树扫描，越跑越浪费
+### 17) 配置脏值导致运行中崩溃
 现象：
-- `session` 模式长时间轮询时，会反复 DFS UIA 控件树查找会话列表/消息列表/搜索框，性能白白损耗。
+- `listen.interval_seconds<=0` 或 `translate.timeout_seconds<=0` 时，worker/翻译线程会在运行期报错。
+- `display.width` 过小会导致窗口布局异常。
 
 处理：
-- `wechat_auto/controls.py` 对稳定控件按窗口句柄做缓存：
-  - 命中缓存且控件仍 `Exists()` 时直接复用；
-  - 控件失效或窗口重建后自动丢弃并重新查找；
-  - 仅保留有限数量的窗口缓存，避免长期运行时缓存无界增长。
-- `group_listener_worker.py` 在 `session` 模式下连接/重连时不再读取聊天区初始签名，避免无意义地扫描消息列表。
+- 侧边栏主进程启动时对关键配置做 fail-fast 校验，不合法直接退出并打印错误：
+  - `listen.interval_seconds > 0`
+  - `listen.load_retry_seconds > 0`
+  - `translate.timeout_seconds > 0`
+  - `display.width >= 280`
 
 ## 推荐运行命令
 
@@ -277,20 +218,20 @@ python examples/sidebar_translate_listener.py ^
 在 `config/listener.json` 设置 `listen.focus_refresh=true`。
 
 ## 排障最小步骤
-1. 先看侧边栏状态是否为 `running mode=...`。
-2. 再看 `logging.file` 指向的日志文件是否有 `status: running`（相对路径按项目根目录解析）。
-3. 若无消息事件，临时设 `listen.worker_debug=true`，观察 `debug session_preview=...` 是否变化。
+1. 先看侧边栏状态是否为 `session-only ... running`。
+2. 再看 `logging.file` 指向的日志文件是否有 `status: running session-only targets=...`（相对路径按项目根目录解析）。
+3. 若无消息事件，临时设 `listen.worker_debug=true`，观察 `debug target=... session_preview=... unread=...` 是否变化。
 4. `session_preview` 不变化时，再设 `listen.focus_refresh=true` 验证是否恢复。
 
 ## 契约约束（后续改动必须保持）
 - `group_listener_worker.py` 输出事件必须保持 JSON 行格式（至少包含 `type` 字段）。
 - `sidebar_translate_listener.py` 必须兼容非 JSON stdout 行，不得因解析失败退出。
-- 多目标时必须是“单窗口多视图 + 一目标一子进程”，禁止把多个目标混入同一无区分消息流。
-- 当 `listen.targets` 长度大于 1：`listen.mode` 必须是 `session` 且 `listen.focus_refresh=false`。
+- 当前监听主链路必须是 `session-only`，禁止恢复 `chat` / `mixed` 分支进入主路径。
+- worker 必须以“单进程多 target”方式扫描同一个微信主窗口会话列表，禁止恢复为“一目标一子进程”主架构。
 - 同一 target 只允许一个活动侧边栏实例（由运行时锁保证）。
 - 去重必须是“时间窗策略”，禁止恢复为全生命周期永久 `set` 去重。
 - 每个 target 的消息缓存上限固定 `100` 条，禁止无限增长。
-- 启动阶段必须对 `listen.interval_seconds`、`translate.timeout_seconds`、`display.width` 做 fail-fast 校验。
+- 启动阶段必须对 `listen.interval_seconds`、`listen.load_retry_seconds`、`translate.timeout_seconds`、`display.width` 做 fail-fast 校验。
 - 运行时锁活性判断必须包含 `pid` 与进程启动时间 token，禁止仅靠 `pid` 判断。
 - 翻译任务队列必须有上限并具备溢出日志，禁止无界增长。
 - 左侧消息（非自己消息）UI 头部展示格式为“`[时间] 发送人`”，正文只展示消息内容，不再重复 `发送人:` 前缀。

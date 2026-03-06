@@ -13,13 +13,7 @@ if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
 from wechat_auto import WxAuto
-from wechat_auto.controls import (
-    clear_control_cache,
-    find_message_list,
-    find_session_list,
-    is_meaningful_message_text,
-    normalize_session_name,
-)
+from wechat_auto.controls import clear_control_cache, find_session_list, normalize_session_name
 
 
 TIME_LINE_RE = re.compile(r"^(?:昨天|今天|星期[一二三四五六日天])?\s*\d{1,2}:\d{2}$")
@@ -38,6 +32,15 @@ def emit(event: dict):
 
 def emit_status(state: str, value: str):
     emit({"type": "status", "state": state, "value": value})
+
+
+def normalize_targets(raw_targets: list[str]) -> list[str]:
+    targets: list[str] = []
+    for item in raw_targets:
+        name = str(item or "").strip()
+        if name and name not in targets:
+            targets.append(name)
+    return targets
 
 
 def _iter_session_detail_lines(raw_name: str) -> list[str]:
@@ -90,62 +93,7 @@ def should_emit_session_preview(
     return current_unread > last_unread
 
 
-def find_target_session_raw(window, target_name: str) -> str:
-    session_list = find_session_list(window)
-    if not session_list or not session_list.Exists(0.3):
-        return ""
-    for item in session_list.GetChildren():
-        current_name = normalize_session_name(item.Name or "")
-        if current_name == target_name:
-            return item.Name or ""
-    return ""
-
-
-def get_last_message_signature(window):
-    # 读取当前聊天区最后一个“有意义”的文本，用于增量检测。
-    msg_list = find_message_list(window)
-    if not msg_list or not msg_list.Exists(0.3):
-        return None
-    items = msg_list.GetChildren()
-    if not items:
-        return (0, "")
-
-    final_text = ""
-    for item in reversed(items):
-        cands = []
-        name = (item.Name or "").strip()
-        if name:
-            cands.append(name)
-        try:
-            for child in item.GetChildren():
-                t = (child.Name or "").strip()
-                if t:
-                    cands.append(t)
-        except Exception:
-            pass
-
-        for t in cands:
-            if is_meaningful_message_text(t):
-                final_text = t
-                break
-        if final_text:
-            break
-
-    return (len(items), final_text)
-
-
-def wait_initial_chat_signature(window, timeout_seconds: float = 4.0):
-    end = time.time() + timeout_seconds
-    while time.time() < end:
-        sig = get_last_message_signature(window)
-        if sig:
-            return sig
-        time.sleep(0.4)
-    return None
-
-
 def should_emit(recent_emit_at: dict[str, float], key: str, now_ts: float) -> bool:
-    # 仅抑制短时间抖动重复；不做全生命周期永久去重。
     prev_ts = recent_emit_at.get(key)
     if prev_ts is not None and now_ts - prev_ts <= EMIT_DEBOUNCE_SECONDS:
         return False
@@ -185,51 +133,83 @@ def wait_for_wechat_ready(
     return True
 
 
-def connect_target_runtime(wx, args, target_group: str, retry_seconds: float, reconnect: bool = False):
+def collect_target_session_map(window, targets: list[str]) -> dict[str, str]:
+    session_list = find_session_list(window)
+    if not session_list or not session_list.Exists(0.3):
+        return {}
+
+    pending = set(targets)
+    session_map: dict[str, str] = {}
+    for item in session_list.GetChildren():
+        current_name = normalize_session_name(item.Name or "")
+        if current_name in pending:
+            session_map[current_name] = item.Name or ""
+            pending.remove(current_name)
+            if not pending:
+                break
+    return session_map
+
+
+def build_target_state_map(window, targets: list[str]) -> dict[str, dict[str, int | str]]:
+    session_map = collect_target_session_map(window, targets)
+    state_map: dict[str, dict[str, int | str]] = {}
+    for target in targets:
+        raw_name = session_map.get(target, "")
+        state_map[target] = {
+            "preview": extract_session_preview(raw_name),
+            "unread": extract_session_unread_count(raw_name),
+        }
+    return state_map
+
+
+def connect_runtime(wx, targets: list[str], retry_seconds: float, probe: bool = False, reconnect: bool = False):
     current_reconnect = reconnect
     while True:
         if not wait_for_wechat_ready(
             wx,
             retry_seconds=retry_seconds,
-            probe=args.probe,
+            probe=probe,
             reconnect=current_reconnect,
         ):
             return None
 
-        emit_status("connecting", f"wechat ready, preparing mode={args.mode}")
-        if args.mode in ("chat", "mixed") and not wx.chat_with(target_group):
-            emit_status("open_target_failed", f"open target failed: {target_group}")
-            if args.probe:
-                return None
-            time.sleep(retry_seconds)
-            current_reconnect = True
-            continue
-
+        emit_status("connecting", f"wechat ready, preparing session-only targets={len(targets)}")
         window = wx.window
         clear_control_cache(window)
-        last_chat_sig = None
-        if args.mode in ("chat", "mixed"):
-            last_chat_sig = wait_initial_chat_signature(window, timeout_seconds=4.0)
-        initial_session_raw = find_target_session_raw(window, target_group)
         return {
             "window": window,
-            "last_chat_sig": last_chat_sig,
-            "last_session_preview": extract_session_preview(initial_session_raw),
-            "last_session_unread": extract_session_unread_count(initial_session_raw),
+            "target_states": build_target_state_map(window, targets),
         }
 
 
+def parse_targets(args) -> list[str]:
+    targets = list(args.target or [])
+    if args.group:
+        targets.append(args.group)
+    if args.targets_json:
+        try:
+            parsed = json.loads(args.targets_json)
+        except json.JSONDecodeError as e:
+            emit({"type": "log", "value": f"fatal: invalid --targets-json: {e}"})
+            return []
+        if not isinstance(parsed, list):
+            emit({"type": "log", "value": "fatal: --targets-json must be JSON array"})
+            return []
+        targets.extend(parsed)
+    return normalize_targets(targets)
+
+
 def main():
-    parser = argparse.ArgumentParser(description="wechat listener worker")
-    parser.add_argument("--target", default="", help="target chat/group name")
-    parser.add_argument("--group", default="", help=argparse.SUPPRESS)
-    parser.add_argument("--interval", type=float, default=1.0)
+    parser = argparse.ArgumentParser(description="wechat listener worker (session-only)")
     parser.add_argument(
-        "--mode",
-        choices=["chat", "session", "mixed"],
-        default="session",
-        help="chat=listen opened target chat; session=listen session preview; mixed=both",
+        "--target",
+        action="append",
+        default=[],
+        help="target chat/group name; can be repeated",
     )
+    parser.add_argument("--group", default="", help=argparse.SUPPRESS)
+    parser.add_argument("--targets-json", default="", help="JSON array of target names")
+    parser.add_argument("--interval", type=float, default=1.0)
     parser.add_argument("--probe", action="store_true", help="init and exit for quick diagnostics")
     parser.add_argument("--debug", action="store_true", help="emit debug logs each poll")
     parser.add_argument(
@@ -244,40 +224,36 @@ def main():
         help="force switch focus to WeChat each poll (more stable, but steals focus)",
     )
     args = parser.parse_args()
-    # 兼容老参数 --group，但以 --target 为主。
-    target_group = (args.target or args.group).strip()
-    if not target_group:
-        emit({"type": "status", "value": "missing target, use --target <name>"})
+
+    targets = parse_targets(args)
+    if not targets:
+        emit({"type": "status", "value": "missing targets, use --target/--targets-json"})
         return
 
     emit({"type": "log", "value": "boot"})
     try:
         wx = WxAuto()
         retry_seconds = max(MIN_LOAD_RETRY_SECONDS, float(args.load_retry_seconds))
-        runtime = connect_target_runtime(
+        runtime = connect_runtime(
             wx,
-            args=args,
-            target_group=target_group,
+            targets=targets,
             retry_seconds=retry_seconds,
+            probe=args.probe,
         )
         if runtime is None:
             return
 
         window = runtime["window"]
-        last_chat_sig = runtime["last_chat_sig"]
-        last_session_preview = runtime["last_session_preview"]
-        last_session_unread = runtime["last_session_unread"]
-        recent_emit_at = {}
+        target_states = runtime["target_states"]
+        recent_emit_at: dict[str, float] = {}
         last_emit_cleanup = 0.0
-        emit_status("running", f"running mode={args.mode} target={target_group}")
+        emit_status("running", f"running session-only targets={len(targets)}")
         if args.probe:
+            found_count = sum(1 for target in targets if target_states.get(target, {}).get("preview"))
             emit(
                 {
                     "type": "log",
-                    "value": (
-                        f"probe chat_sig={last_chat_sig} "
-                        f"session_found={bool(last_session_preview)}"
-                    ),
+                    "value": f"probe targets={len(targets)} found_with_preview={found_count}",
                 }
             )
             return
@@ -286,25 +262,21 @@ def main():
             try:
                 if not window or not window.Exists(0.2):
                     emit_status("window_lost", "wechat window lost, reconnecting")
-                    runtime = connect_target_runtime(
+                    runtime = connect_runtime(
                         wx,
-                        args=args,
-                        target_group=target_group,
+                        targets=targets,
                         retry_seconds=retry_seconds,
                         reconnect=True,
                     )
                     if runtime is None:
                         return
                     window = runtime["window"]
-                    last_chat_sig = runtime["last_chat_sig"]
-                    last_session_preview = runtime["last_session_preview"]
-                    last_session_unread = runtime["last_session_unread"]
+                    target_states = runtime["target_states"]
                     recent_emit_at.clear()
                     last_emit_cleanup = 0.0
-                    emit_status("running", f"running mode={args.mode} target={target_group}")
+                    emit_status("running", f"running session-only targets={len(targets)}")
                     continue
 
-                # 可选：强制刷新窗口可访问树（会抢焦点）
                 if args.focus_refresh:
                     try:
                         window.SwitchToThisWindow()
@@ -321,69 +293,53 @@ def main():
                     cleanup_recent_emit_cache(recent_emit_at, now_ts)
                     last_emit_cleanup = now_ts
 
-                if args.mode in ("chat", "mixed"):
-                    sig = get_last_message_signature(window)
-                    if sig and last_chat_sig is None:
-                        last_chat_sig = sig
-                        time.sleep(args.interval)
-                        continue
+                session_map = collect_target_session_map(window, targets)
+                for target in targets:
+                    raw_name = session_map.get(target, "")
+                    current_preview = extract_session_preview(raw_name)
+                    current_unread = extract_session_unread_count(raw_name)
+                    previous_state = target_states.setdefault(
+                        target,
+                        {"preview": "", "unread": 0},
+                    )
+                    last_preview = str(previous_state.get("preview", ""))
+                    last_unread = int(previous_state.get("unread", 0))
 
-                    if sig and last_chat_sig and sig != last_chat_sig:
-                        _, text = sig
-                        if text and should_emit(recent_emit_at, f"{target_group}::{text}", now_ts):
-                            emit(
-                                {
-                                    "type": "message",
-                                    "source": "chat",
-                                    # chat_name 是给 UI 层标记会话来源用的稳定字段。
-                                    "chat_name": target_group,
-                                    "text": text,
-                                    "created_at": now,
-                                }
-                            )
-                    if sig:
-                        last_chat_sig = sig
-
-                if args.mode in ("session", "mixed"):
-                    # session 模式基于会话列表预览变化触发。
-                    session_raw = find_target_session_raw(window, target_group)
-                    current_preview = extract_session_preview(session_raw)
-                    current_unread = extract_session_unread_count(session_raw)
                     if args.debug:
                         emit(
                             {
                                 "type": "log",
                                 "value": (
-                                    f"debug session_preview={current_preview} "
-                                    f"unread={current_unread}"
+                                    f"debug target={target} "
+                                    f"session_preview={current_preview} unread={current_unread}"
                                 ),
                             }
                         )
-                    # session 只关心预览正文和未读增量，忽略时间/置顶/免打扰噪音。
+
                     if should_emit_session_preview(
                         current_preview,
                         current_unread,
-                        last_session_preview,
-                        last_session_unread,
+                        last_preview,
+                        last_unread,
                     ):
-                        if last_session_preview and should_emit(
+                        if last_preview and should_emit(
                             recent_emit_at,
-                            f"{target_group}::{current_preview}",
+                            f"{target}::{current_preview}",
                             now_ts,
                         ):
                             emit(
                                 {
                                     "type": "message",
                                     "source": "session_preview",
-                                    # chat_name 由 UI 用于多目标展示/去重。
-                                    "chat_name": target_group,
+                                    "chat_name": target,
                                     "text": current_preview,
                                     "created_at": now,
                                 }
                             )
+
                     if current_preview:
-                        last_session_preview = current_preview
-                        last_session_unread = current_unread
+                        previous_state["preview"] = current_preview
+                        previous_state["unread"] = current_unread
             except KeyboardInterrupt:
                 emit_status("stopped", "stopped")
                 break

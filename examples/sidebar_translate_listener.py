@@ -37,9 +37,7 @@ DEFAULT_META_FONT_SIZE = 10
 MESSAGE_FONT_EXTRA_PX = 2
 ZERO_WIDTH_RE = re.compile(r"[\u200b\u200c\u200d\ufeff]")
 MULTI_SPACE_RE = re.compile(r"\s+")
-MESSAGE_DEDUPE_WINDOW_SECONDS = 2.5
 SESSION_PREVIEW_DEDUPE_WINDOW_SECONDS = 20.0
-CROSS_SOURCE_MERGE_WINDOW_SECONDS = 3.0
 DEDUPE_CACHE_TTL_SECONDS = 600.0
 DEDUPE_CACHE_MAX_KEYS = 5000
 DEDUPE_CLEANUP_INTERVAL_SECONDS = 30.0
@@ -56,18 +54,6 @@ WORKER_RESTART_MAX_BACKOFF_SECONDS = 30.0
 RUNTIME_LOCK_DIR = os.path.join(ROOT_DIR, "logs", ".runtime")
 _LOG_WRITE_LOCK = threading.Lock()
 _TARGET_LOCK_PATHS: list[str] = []
-WORKER_STATUS_ORDER = (
-    "running",
-    "connecting",
-    "reconnecting",
-    "worker_backoff",
-    "waiting_wechat",
-    "window_lost",
-    "open_target_failed",
-    "starting",
-    "exited",
-    "stopped",
-)
 
 
 def load_local_env():
@@ -213,14 +199,6 @@ def normalize_message_for_dedupe(text: str) -> str:
     return cleaned
 
 
-def is_cross_source_equivalent(current_text: str, previous_text: str) -> bool:
-    if not current_text or not previous_text:
-        return False
-    if current_text == previous_text:
-        return True
-    return current_text.startswith(previous_text) or previous_text.startswith(current_text)
-
-
 def cleanup_dedupe_cache(cache: Dict[str, float], now_ts: float):
     expired = [key for key, ts in cache.items() if now_ts - ts > DEDUPE_CACHE_TTL_SECONDS]
     for key in expired:
@@ -233,58 +211,13 @@ def cleanup_dedupe_cache(cache: Dict[str, float], now_ts: float):
             cache.pop(key, None)
 
 
-def cleanup_recent_chat_events(cache: dict[str, tuple[str, float, str]], now_ts: float):
-    expired = [
-        key
-        for key, (_, ts, _) in cache.items()
-        if now_ts - ts > DEDUPE_CACHE_TTL_SECONDS
-    ]
-    for key in expired:
-        cache.pop(key, None)
-
-
-def build_worker_status_text(
-    mode: str,
-    worker_states: dict[str, str],
-    worker_details: dict[str, str],
-) -> str:
-    if not worker_states:
-        return f"mode={mode} idle"
-
-    if len(worker_states) == 1:
-        target, state = next(iter(worker_states.items()))
-        detail = str(worker_details.get(target, "")).strip()
-        if detail:
-            return f"[{target}] {state}: {detail}"
-        return f"[{target}] {state}"
-
-    counts: dict[str, int] = {}
-    for state in worker_states.values():
-        counts[state] = counts.get(state, 0) + 1
-
-    parts = []
-    for state in WORKER_STATUS_ORDER:
-        count = counts.get(state, 0)
-        if count > 0:
-            parts.append(f"{state}={count}")
-    for state, count in counts.items():
-        if state not in WORKER_STATUS_ORDER and count > 0:
-            parts.append(f"{state}={count}")
-
-    problem_targets = []
-    for target, state in worker_states.items():
-        if state == "running":
-            continue
-        detail = str(worker_details.get(target, "")).strip()
-        suffix = f": {detail}" if detail else ""
-        problem_targets.append(f"{target}={state}{suffix}")
-        if len(problem_targets) >= 2:
-            break
-
-    summary = " ".join(parts)
-    if problem_targets:
-        summary += " | " + " ; ".join(problem_targets)
-    return f"mode={mode} targets={len(worker_states)} {summary}".strip()
+def build_worker_status_text(state: str, detail: str, target_count: int) -> str:
+    prefix = f"session-only targets={target_count}"
+    clean_state = str(state or "idle").strip() or "idle"
+    clean_detail = str(detail or "").strip()
+    if clean_detail:
+        return f"{prefix} {clean_state}: {clean_detail}"
+    return f"{prefix} {clean_state}"
 
 
 def compute_worker_restart_delay(attempt: int) -> float:
@@ -962,9 +895,8 @@ class SidebarUI:
 
 
 def start_worker_process(
-    target: str,
+    targets: list[str],
     interval: float,
-    mode: str,
     debug: bool,
     focus_refresh: bool,
     load_retry_seconds: float,
@@ -977,14 +909,12 @@ def start_worker_process(
         "utf8",
         "-u",
         worker,
-        "--target",
-        target,
+        "--targets-json",
+        json.dumps(targets, ensure_ascii=False),
         "--interval",
         str(interval),
         "--load-retry-seconds",
         str(load_retry_seconds),
-        "--mode",
-        mode,
     ]
     if debug:
         cmd.append("--debug")
@@ -1006,7 +936,7 @@ def start_worker_process(
     )
 
 
-def stdout_reader(proc: subprocess.Popen, q: "queue.Queue[dict]", worker_target: str = ""):
+def stdout_reader(proc: subprocess.Popen, q: "queue.Queue[dict]"):
     assert proc.stdout is not None
     for raw in proc.stdout:
         line = raw.strip()
@@ -1015,39 +945,25 @@ def stdout_reader(proc: subprocess.Popen, q: "queue.Queue[dict]", worker_target:
         try:
             event = json.loads(line)
             if isinstance(event, dict):
-                if worker_target:
-                    event.setdefault("worker_target", worker_target)
                 q.put(event)
             else:
-                q.put(
-                    {
-                        "type": "log",
-                        "value": f"worker non-dict event: {line}",
-                        "worker_target": worker_target,
-                    }
-                )
+                q.put({"type": "log", "value": f"worker non-dict event: {line}"})
         except json.JSONDecodeError:
-            q.put({"type": "log", "value": f"worker raw: {line}", "worker_target": worker_target})
+            q.put({"type": "log", "value": f"worker raw: {line}"})
 
 
-def stderr_reader(proc: subprocess.Popen, q: "queue.Queue[dict]", worker_target: str = ""):
+def stderr_reader(proc: subprocess.Popen, q: "queue.Queue[dict]"):
     assert proc.stderr is not None
     for raw in proc.stderr:
         line = raw.rstrip()
         if line:
-            q.put(
-                {
-                    "type": "log",
-                    "value": f"worker stderr: {line}",
-                    "worker_target": worker_target,
-                }
-            )
+            q.put({"type": "log", "value": f"worker stderr: {line}"})
 
 
 def main():
     global _TARGET_LOCK_PATHS
     parser = argparse.ArgumentParser(
-        description="Sidebar listener: monitor target chat and show translated output."
+        description="Sidebar listener: monitor target chats in session-only mode and show translated output."
     )
     parser.add_argument("--config", default=DEFAULT_CONFIG_PATH, help="JSON config path")
     parser.add_argument("--target", default="", help=argparse.SUPPRESS)
@@ -1083,37 +999,20 @@ def main():
             )
         targets = [forced_target]
 
-    listen_mode = str(listen_cfg.get("mode", "session"))
-    if listen_mode not in ("chat", "session", "mixed"):
-        listen_mode = "session"
+    listen_mode = str(listen_cfg.get("mode", "session")).strip().lower()
+    if listen_mode and listen_mode != "session":
+        print(
+            "[sidebar] session-only branch only supports listen.mode=session",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
     focus_refresh = as_bool(listen_cfg.get("focus_refresh"), False)
     worker_debug = as_bool(listen_cfg.get("worker_debug"), False)
     load_retry_seconds = as_non_negative_float(listen_cfg.get("load_retry_seconds"), 10.0)
-    message_dedupe_window_seconds = as_non_negative_float(
-        listen_cfg.get("dedupe_window_seconds"),
-        MESSAGE_DEDUPE_WINDOW_SECONDS,
-    )
     session_preview_dedupe_window_seconds = as_non_negative_float(
         listen_cfg.get("session_preview_dedupe_window_seconds"),
         SESSION_PREVIEW_DEDUPE_WINDOW_SECONDS,
     )
-    cross_source_merge_window_seconds = as_non_negative_float(
-        listen_cfg.get("cross_source_merge_window_seconds"),
-        CROSS_SOURCE_MERGE_WINDOW_SECONDS,
-    )
-    if len(targets) > 1:
-        if listen_mode != "session":
-            print(
-                "[sidebar] multi-target requires listen.mode=session",
-                file=sys.stderr,
-            )
-            raise SystemExit(2)
-        if focus_refresh:
-            print(
-                "[sidebar] multi-target requires listen.focus_refresh=false",
-                file=sys.stderr,
-            )
-            raise SystemExit(2)
 
     translate_enabled = as_bool(translate_cfg.get("enabled"), True)
     translate_provider = str(translate_cfg.get("provider", "deeplx")).lower()
@@ -1170,7 +1069,7 @@ def main():
     atexit.register(release_target_lock)
 
     ui = SidebarUI(
-        title=f"WeChat Sidebar mode={listen_mode}",
+        title="WeChat Sidebar session-only",
         width=width,
         side=side,
         targets=running_targets,
@@ -1184,9 +1083,6 @@ def main():
         target_lang=target_lang,
         timeout_seconds=translate_timeout,
     )
-    ui.set_status(f"running mode={listen_mode} targets={len(running_targets)}")
-    if listen_mode in ("chat", "mixed"):
-        ui.append_log("warning: chat/mixed 会主动打开会话；仅监听请用 mode=session")
     for target, reason in skipped_targets:
         append_log_file(log_file, f"skip target={target}: {reason}")
 
@@ -1195,74 +1091,60 @@ def main():
     append_log_file(log_file, f"running targets={running_targets}")
     append_log_file(log_file, f"load retry seconds={load_retry_seconds}")
     append_log_file(log_file, f"chat cache limit={CHAT_CACHE_LIMIT}")
-    append_log_file(
-        log_file,
-        (
-            "dedupe windows: "
-            f"message={message_dedupe_window_seconds}s "
-            f"session_preview={session_preview_dedupe_window_seconds}s "
-            f"cross_source={cross_source_merge_window_seconds}s"
-        ),
-    )
+    append_log_file(log_file, f"session preview dedupe window={session_preview_dedupe_window_seconds}s")
     event_queue: "queue.Queue[dict]" = queue.Queue()
     translate_queue: "queue.Queue[dict | None]" = queue.Queue(maxsize=TRANSLATE_QUEUE_MAXSIZE)
     dedupe_cache: Dict[str, float] = {}
-    recent_chat_events: dict[str, tuple[str, float, str]] = {}
     last_dedupe_cleanup_at = 0.0
     translate_queue_drop_count = 0
     last_translate_queue_drop_log_at = 0.0
-    workers: dict[str, subprocess.Popen] = {}
-    worker_last_handled_exit_pid: dict[str, int] = {}
-    worker_restart_attempts: dict[str, int] = {target: 0 for target in running_targets}
-    worker_restart_deadlines: dict[str, float] = {}
-    worker_states: dict[str, str] = {target: "starting" for target in running_targets}
-    worker_details: dict[str, str] = {target: "starting worker" for target in running_targets}
+    worker: subprocess.Popen | None = None
+    worker_last_handled_exit_pid = 0
+    worker_restart_attempt = 0
+    worker_restart_deadline = 0.0
+    worker_state = "starting"
+    worker_detail = "starting worker"
     closing = False
-    ui.set_status(build_worker_status_text(listen_mode, worker_states, worker_details))
+    ui.set_status(build_worker_status_text(worker_state, worker_detail, len(running_targets)))
 
-    def schedule_worker_restart(target: str, reason: str, attempt: int):
+    def schedule_worker_restart(reason: str, attempt: int):
+        nonlocal worker_restart_attempt, worker_restart_deadline, worker_state, worker_detail
         delay = compute_worker_restart_delay(attempt)
-        worker_restart_attempts[target] = attempt
-        worker_restart_deadlines[target] = time.time() + delay
-        worker_states[target] = "worker_backoff"
-        worker_details[target] = f"{reason}, retry in {delay:.1f}s"
-        backoff_line = f"worker backoff target={target} attempt={attempt} delay={delay:.1f}s reason={reason}"
+        worker_restart_attempt = attempt
+        worker_restart_deadline = time.time() + delay
+        worker_state = "worker_backoff"
+        worker_detail = f"{reason}, retry in {delay:.1f}s"
+        backoff_line = f"worker backoff attempt={attempt} delay={delay:.1f}s reason={reason}"
         ui.append_log(backoff_line)
         append_log_file(log_file, backoff_line)
 
-    def launch_worker(target: str, reason: str) -> bool:
+    def launch_worker(reason: str) -> bool:
+        nonlocal worker, worker_last_handled_exit_pid, worker_restart_deadline, worker_state, worker_detail
         try:
             worker = start_worker_process(
-                target,
+                running_targets,
                 listen_interval,
-                listen_mode,
                 worker_debug,
                 focus_refresh,
                 load_retry_seconds,
             )
         except Exception as e:
-            attempt = worker_restart_attempts.get(target, 0) + 1
-            schedule_worker_restart(target, f"{reason} failed: {e}", attempt)
+            attempt = worker_restart_attempt + 1
+            schedule_worker_restart(f"{reason} failed: {e}", attempt)
             return False
 
-        workers[target] = worker
-        worker_last_handled_exit_pid.pop(target, None)
-        worker_restart_deadlines.pop(target, None)
-        worker_states[target] = "starting"
-        worker_details[target] = reason
-        append_log_file(log_file, f"worker start target={target} pid={worker.pid} reason={reason}")
-        t_out = threading.Thread(
-            target=stdout_reader, args=(worker, event_queue, target), daemon=True
-        )
-        t_err = threading.Thread(
-            target=stderr_reader, args=(worker, event_queue, target), daemon=True
-        )
+        worker_last_handled_exit_pid = 0
+        worker_restart_deadline = 0.0
+        worker_state = "starting"
+        worker_detail = reason
+        append_log_file(log_file, f"worker start pid={worker.pid} reason={reason}")
+        t_out = threading.Thread(target=stdout_reader, args=(worker, event_queue), daemon=True)
+        t_err = threading.Thread(target=stderr_reader, args=(worker, event_queue), daemon=True)
         t_out.start()
         t_err.start()
         return True
 
-    for target in running_targets:
-        launch_worker(target, "starting worker")
+    launch_worker("starting worker")
 
     def enqueue_translate_task(task: dict):
         nonlocal translate_queue_drop_count, last_translate_queue_drop_log_at
@@ -1359,28 +1241,24 @@ def main():
     t_translate.start()
 
     def handle_event(event: dict):
-        nonlocal last_dedupe_cleanup_at
+        nonlocal last_dedupe_cleanup_at, worker_restart_attempt, worker_restart_deadline
+        nonlocal worker_state, worker_detail
         kind = event.get("type")
-        worker_target = str(event.get("worker_target", "")).strip()
-        log_prefix = f"[{worker_target}] " if worker_target else ""
-        default_chat_name = worker_target or (running_targets[0] if running_targets else "")
+        default_chat_name = running_targets[0] if running_targets else ""
         if kind == "status":
-            state = str(event.get("state", "status")).strip() or "status"
-            value = str(event.get("value", ""))
-            if worker_target:
-                worker_states[worker_target] = state
-                worker_details[worker_target] = value
-                if state == "running":
-                    worker_restart_attempts[worker_target] = 0
-                    worker_restart_deadlines.pop(worker_target, None)
-            ui.append_log(f"{log_prefix}status: {value}")
-            append_log_file(log_file, f"{log_prefix}status: {value}")
+            worker_state = str(event.get("state", "status")).strip() or "status"
+            worker_detail = str(event.get("value", ""))
+            if worker_state == "running":
+                worker_restart_attempt = 0
+                worker_restart_deadline = 0.0
+            ui.append_log(f"status: {worker_detail}")
+            append_log_file(log_file, f"status: {worker_detail}")
             return
 
         if kind == "log":
             value = str(event.get("value", ""))
-            ui.append_log(f"{log_prefix}{value}")
-            append_log_file(log_file, f"{log_prefix}{value}")
+            ui.append_log(value)
+            append_log_file(log_file, value)
             return
 
         if kind == "render_message":
@@ -1408,12 +1286,10 @@ def main():
             return
 
         if kind != "message":
-            ui.append_log(f"{log_prefix}unknown event: {event}")
-            append_log_file(log_file, f"{log_prefix}unknown event: {event}")
+            ui.append_log(f"unknown event: {event}")
+            append_log_file(log_file, f"unknown event: {event}")
             return
 
-        # source 仅用于去重归并与日志，不进入 UI 展示。
-        source = str(event.get("source", ""))
         chat_name = str(event.get("chat_name") or default_chat_name)
         if not chat_name:
             return
@@ -1436,31 +1312,15 @@ def main():
 
         now_ts = time.time()
 
-        # 先做来源感知去重窗口：session_preview 使用更长窗口抑制重复预览抖动。
         dedupe_key = f"{chat_name}::{sender_name}::{normalized_body}"
         prev_ts = dedupe_cache.get(dedupe_key)
-        dedupe_window = (
-            session_preview_dedupe_window_seconds
-            if source == "session_preview"
-            else message_dedupe_window_seconds
-        )
-        if prev_ts is not None and now_ts - prev_ts <= dedupe_window:
+        if prev_ts is not None and now_ts - prev_ts <= session_preview_dedupe_window_seconds:
             return
 
-        # mixed 模式下 chat/session_preview 双来源近实时重叠时，合并为一条。
-        prev_chat = recent_chat_events.get(chat_name)
-        if prev_chat:
-            prev_body, prev_body_ts, prev_source = prev_chat
-            if source != prev_source and now_ts - prev_body_ts <= cross_source_merge_window_seconds:
-                if is_cross_source_equivalent(normalized_body, prev_body):
-                    return
-
         dedupe_cache[dedupe_key] = now_ts
-        recent_chat_events[chat_name] = (normalized_body, now_ts, source)
 
         if now_ts - last_dedupe_cleanup_at >= DEDUPE_CLEANUP_INTERVAL_SECONDS:
             cleanup_dedupe_cache(dedupe_cache, now_ts)
-            cleanup_recent_chat_events(recent_chat_events, now_ts)
             last_dedupe_cleanup_at = now_ts
 
         enqueue_translate_task(
@@ -1469,12 +1329,13 @@ def main():
                 "sender_name": sender_name,
                 "body_cn": body_cn,
                 "is_self": is_self,
-                "source": source,
+                "source": "session_preview",
                 "created_at": str(event.get("created_at") or datetime.now().strftime("%H:%M:%S")),
             }
         )
 
     def drain_queue():
+        nonlocal worker_last_handled_exit_pid, worker_state, worker_detail
         try:
             while True:
                 event = event_queue.get_nowait()
@@ -1483,44 +1344,36 @@ def main():
             pass
 
         now_ts = time.time()
-        for target, worker in list(workers.items()):
+        if worker is not None:
             return_code = worker.poll()
-            if return_code is None:
-                continue
-            if worker_last_handled_exit_pid.get(target) == worker.pid:
-                continue
-            worker_last_handled_exit_pid[target] = worker.pid
-            exit_line = f"worker exited target={target} code={return_code}"
-            ui.append_log(exit_line)
-            append_log_file(log_file, exit_line)
-            if closing:
-                worker_states[target] = "stopped"
-                worker_details[target] = f"code={return_code}"
-                continue
-            attempt = worker_restart_attempts.get(target, 0) + 1
-            schedule_worker_restart(target, f"code={return_code}", attempt)
+            if return_code is not None and worker_last_handled_exit_pid != worker.pid:
+                worker_last_handled_exit_pid = worker.pid
+                exit_line = f"worker exited code={return_code}"
+                ui.append_log(exit_line)
+                append_log_file(log_file, exit_line)
+                if closing:
+                    worker_state = "stopped"
+                    worker_detail = f"code={return_code}"
+                else:
+                    attempt = worker_restart_attempt + 1
+                    schedule_worker_restart(f"code={return_code}", attempt)
 
-        if not closing:
-            for target, restart_at in list(worker_restart_deadlines.items()):
-                if now_ts < restart_at:
-                    continue
-                attempt = worker_restart_attempts.get(target, 1)
-                launch_worker(target, f"restarting worker attempt={attempt}")
+        if not closing and worker_restart_deadline and now_ts >= worker_restart_deadline:
+            launch_worker(f"restarting worker attempt={worker_restart_attempt}")
 
-        ui.set_status(build_worker_status_text(listen_mode, worker_states, worker_details))
+        ui.set_status(build_worker_status_text(worker_state, worker_detail, len(running_targets)))
 
         ui.root.after(200, drain_queue)
 
     def on_close():
-        nonlocal closing
+        nonlocal closing, worker_restart_deadline
         closing = True
-        worker_restart_deadlines.clear()
-        for worker in workers.values():
-            try:
-                if worker.poll() is None:
-                    worker.terminate()
-            except Exception:
-                pass
+        worker_restart_deadline = 0.0
+        try:
+            if worker is not None and worker.poll() is None:
+                worker.terminate()
+        except Exception:
+            pass
         try:
             signal_translate_worker_stop()
         except Exception:
