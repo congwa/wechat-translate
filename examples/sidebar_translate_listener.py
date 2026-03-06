@@ -49,6 +49,8 @@ TRANSLATE_QUEUE_MAXSIZE = 300
 TRANSLATE_QUEUE_DROP_LOG_INTERVAL_SECONDS = 5.0
 MIN_SIDEBAR_WIDTH = 280
 CHAT_CACHE_LIMIT = 100
+TARGET_LABEL_MAX_CHARS = 6
+META_TEXT_COLOR = "#555555"
 WORKER_RESTART_INITIAL_BACKOFF_SECONDS = 3.0
 WORKER_RESTART_MAX_BACKOFF_SECONDS = 30.0
 RUNTIME_LOCK_DIR = os.path.join(ROOT_DIR, "logs", ".runtime")
@@ -289,6 +291,15 @@ def compute_worker_restart_delay(attempt: int) -> float:
     safe_attempt = max(1, int(attempt))
     delay = WORKER_RESTART_INITIAL_BACKOFF_SECONDS * (2 ** (safe_attempt - 1))
     return min(delay, WORKER_RESTART_MAX_BACKOFF_SECONDS)
+
+
+def truncate_target_label(name: str, max_chars: int = TARGET_LABEL_MAX_CHARS) -> str:
+    text = str(name or "").strip()
+    if max_chars <= 0:
+        return ""
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars] + "..."
 
 
 def pick_ui_font_family(root: tk.Tk) -> str:
@@ -687,6 +698,8 @@ class SidebarUI:
         self.topmost_var = tk.BooleanVar(value=False)
         self.root.attributes("-topmost", self.topmost_var.get())
         self.status_var = tk.StringVar(value="starting...")
+        self.target_panel_visible = False
+        self.target_panel_toggle_text = tk.StringVar(value="菜单")
         self.message_limit = max(1, int(message_limit))
         self.chat_order: list[str] = []
         self.chat_messages: dict[str, list[SidebarMessage]] = {}
@@ -710,6 +723,12 @@ class SidebarUI:
 
         controls = ttk.Frame(self.root, padding=(8, 6, 8, 4))
         controls.pack(fill=tk.X)
+        ttk.Button(
+            controls,
+            textvariable=self.target_panel_toggle_text,
+            command=self.toggle_target_panel,
+            width=6,
+        ).pack(side=tk.LEFT, padx=(0, 6))
         ttk.Checkbutton(
             controls,
             text="置顶",
@@ -723,11 +742,10 @@ class SidebarUI:
         content = ttk.Frame(self.root)
         content.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 8))
 
-        left_panel = ttk.Frame(content, width=180)
-        left_panel.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 8))
-        left_panel.pack_propagate(False)
+        self.left_panel = ttk.Frame(content, width=180)
+        self.left_panel.pack_propagate(False)
         self.target_list = tk.Listbox(
-            left_panel,
+            self.left_panel,
             exportselection=False,
             activestyle="none",
             font=(self.ui_font_family, DEFAULT_META_FONT_SIZE),
@@ -760,19 +778,39 @@ class SidebarUI:
             rmargin=8,
             font=(self.ui_font_family, message_font_size),
         )
-        self.text.tag_configure("meta_left", justify=tk.LEFT, foreground="#666666")
-        self.text.tag_configure("meta_right", justify=tk.RIGHT, foreground="#666666")
+        self.text.tag_configure("meta_left", justify=tk.LEFT, foreground=META_TEXT_COLOR)
+        self.text.tag_configure("meta_right", justify=tk.RIGHT, foreground=META_TEXT_COLOR)
 
         for target in targets:
             self._ensure_chat(target)
         if self.chat_order:
             self.switch_chat(self.chat_order[0])
+        self._set_target_panel_visible(False)
+        self.root.bind("<Control-b>", self.on_toggle_target_panel_shortcut)
+        self.root.bind("<Control-B>", self.on_toggle_target_panel_shortcut)
 
     def set_status(self, text: str):
         self.status_var.set(text)
 
     def toggle_topmost(self):
         self.root.attributes("-topmost", self.topmost_var.get())
+
+    def toggle_target_panel(self):
+        self._set_target_panel_visible(not self.target_panel_visible)
+
+    def on_toggle_target_panel_shortcut(self, _event=None):
+        self.toggle_target_panel()
+        return "break"
+
+    def _set_target_panel_visible(self, visible: bool):
+        if visible:
+            self.left_panel.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 8), before=self.text)
+            self.target_panel_toggle_text.set("收起")
+            self.target_panel_visible = True
+            return
+        self.left_panel.pack_forget()
+        self.target_panel_toggle_text.set("菜单")
+        self.target_panel_visible = False
 
     def _ensure_chat(self, chat_name: str):
         name = str(chat_name or "").strip()
@@ -785,10 +823,11 @@ class SidebarUI:
             self._refresh_target_list()
 
     def _format_chat_label(self, chat_name: str) -> str:
+        display_name = truncate_target_label(chat_name)
         unread = self.unread_counts.get(chat_name, 0)
         if unread > 0:
-            return f"{chat_name} ({unread})"
-        return chat_name
+            return f"{display_name} ({unread})"
+        return display_name
 
     def _refresh_target_list(self):
         self.target_list.delete(0, tk.END)

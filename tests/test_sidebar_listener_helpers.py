@@ -120,6 +120,21 @@ class SidebarHelpersTest(unittest.TestCase):
         self.assertEqual(sidebar.compute_worker_restart_delay(5), 30.0)
         self.assertEqual(sidebar.compute_worker_restart_delay(9), 30.0)
 
+    def test_truncate_target_label(self):
+        self.assertEqual(sidebar.truncate_target_label("测试群123"), "测试群123")
+        self.assertEqual(sidebar.truncate_target_label("测试群1234"), "测试群123...")
+        self.assertEqual(sidebar.truncate_target_label("ABCDEFG"), "ABCDEF...")
+
+    def test_toggle_target_panel_shortcut_returns_break(self):
+        ui = object.__new__(sidebar.SidebarUI)
+        calls = []
+        ui.toggle_target_panel = lambda: calls.append("toggle")
+
+        result = sidebar.SidebarUI.on_toggle_target_panel_shortcut(ui)
+
+        self.assertEqual(calls, ["toggle"])
+        self.assertEqual(result, "break")
+
     def test_build_worker_status_text_shows_worker_backoff(self):
         text = sidebar.build_worker_status_text(
             "session",
