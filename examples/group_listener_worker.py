@@ -24,6 +24,11 @@ EMIT_CACHE_TTL_SECONDS = 120.0
 EMIT_CACHE_MAX_KEYS = 600
 EMIT_CLEANUP_INTERVAL_SECONDS = 30.0
 MIN_LOAD_RETRY_SECONDS = 0.5
+DEFAULT_LISTEN_INTERVAL_SECONDS = 0.6
+MIN_LISTEN_INTERVAL_SECONDS = 0.2
+FOCUS_REFRESH_REPEAT_THRESHOLD = 15
+FOCUS_REFRESH_MISSING_TARGET_THRESHOLD = 3
+FOCUS_REFRESH_COOLDOWN_SECONDS = 15.0
 
 
 def emit(event: dict):
@@ -101,6 +106,19 @@ def should_emit(recent_emit_at: dict[str, float], key: str, now_ts: float) -> bo
     return True
 
 
+def compute_poll_sleep_seconds(
+    interval_seconds: float,
+    cycle_started_at: float,
+    cycle_finished_at: float,
+) -> float:
+    interval = max(MIN_LISTEN_INTERVAL_SECONDS, float(interval_seconds))
+    elapsed = max(0.0, float(cycle_finished_at) - float(cycle_started_at))
+    remaining = interval - elapsed
+    if remaining <= 0:
+        return 0.0
+    return remaining
+
+
 def cleanup_recent_emit_cache(recent_emit_at: dict[str, float], now_ts: float):
     expired = [
         key
@@ -115,6 +133,42 @@ def cleanup_recent_emit_cache(recent_emit_at: dict[str, float], now_ts: float):
         oldest = sorted(recent_emit_at.items(), key=lambda item: item[1])[:overflow]
         for key, _ in oldest:
             recent_emit_at.pop(key, None)
+
+
+def build_session_snapshot_signature(session_map: dict[str, str], targets: list[str]) -> str:
+    parts = []
+    for target in targets:
+        parts.append(f"{target}\x1f{session_map.get(target, '')}")
+    return "\x1e".join(parts)
+
+
+def should_force_focus_refresh(
+    enabled: bool,
+    missing_target_polls: int,
+    snapshot_repeat_polls: int,
+    unread_total: int,
+    now_ts: float,
+    last_focus_refresh_at: float,
+) -> bool:
+    if not enabled:
+        return False
+    if now_ts - last_focus_refresh_at < FOCUS_REFRESH_COOLDOWN_SECONDS:
+        return False
+    if missing_target_polls >= FOCUS_REFRESH_MISSING_TARGET_THRESHOLD:
+        return True
+    return unread_total > 0 and snapshot_repeat_polls >= FOCUS_REFRESH_REPEAT_THRESHOLD
+
+
+def try_focus_refresh(window) -> bool:
+    try:
+        window.SwitchToThisWindow()
+        if window.IsMinimize():
+            window.Restore()
+            time.sleep(0.2)
+            window.SwitchToThisWindow()
+        return True
+    except Exception:
+        return False
 
 
 def wait_for_wechat_ready(
@@ -209,7 +263,7 @@ def main():
     )
     parser.add_argument("--group", default="", help=argparse.SUPPRESS)
     parser.add_argument("--targets-json", default="", help="JSON array of target names")
-    parser.add_argument("--interval", type=float, default=1.0)
+    parser.add_argument("--interval", type=float, default=DEFAULT_LISTEN_INTERVAL_SECONDS)
     parser.add_argument("--probe", action="store_true", help="init and exit for quick diagnostics")
     parser.add_argument("--debug", action="store_true", help="emit debug logs each poll")
     parser.add_argument(
@@ -234,6 +288,7 @@ def main():
     try:
         wx = WxAuto()
         retry_seconds = max(MIN_LOAD_RETRY_SECONDS, float(args.load_retry_seconds))
+        poll_interval = max(MIN_LISTEN_INTERVAL_SECONDS, float(args.interval))
         runtime = connect_runtime(
             wx,
             targets=targets,
@@ -247,6 +302,10 @@ def main():
         target_states = runtime["target_states"]
         recent_emit_at: dict[str, float] = {}
         last_emit_cleanup = 0.0
+        last_snapshot_signature = ""
+        snapshot_repeat_polls = 0
+        missing_target_polls = 0
+        last_focus_refresh_at = 0.0
         emit_status("running", f"running session-only targets={len(targets)}")
         if args.probe:
             found_count = sum(1 for target in targets if target_states.get(target, {}).get("preview"))
@@ -259,6 +318,8 @@ def main():
             return
 
         while True:
+            cycle_started_at = time.monotonic()
+            should_stop = False
             try:
                 if not window or not window.Exists(0.2):
                     emit_status("window_lost", "wechat window lost, reconnecting")
@@ -274,18 +335,12 @@ def main():
                     target_states = runtime["target_states"]
                     recent_emit_at.clear()
                     last_emit_cleanup = 0.0
+                    last_snapshot_signature = ""
+                    snapshot_repeat_polls = 0
+                    missing_target_polls = 0
+                    last_focus_refresh_at = 0.0
                     emit_status("running", f"running session-only targets={len(targets)}")
                     continue
-
-                if args.focus_refresh:
-                    try:
-                        window.SwitchToThisWindow()
-                        if window.IsMinimize():
-                            window.Restore()
-                            time.sleep(0.2)
-                            window.SwitchToThisWindow()
-                    except Exception:
-                        pass
 
                 now = datetime.now().strftime("%H:%M:%S")
                 now_ts = time.time()
@@ -294,6 +349,50 @@ def main():
                     last_emit_cleanup = now_ts
 
                 session_map = collect_target_session_map(window, targets)
+                current_signature = build_session_snapshot_signature(session_map, targets)
+                if current_signature == last_snapshot_signature:
+                    snapshot_repeat_polls += 1
+                else:
+                    snapshot_repeat_polls = 0
+                    last_snapshot_signature = current_signature
+
+                if len(session_map) < len(targets):
+                    missing_target_polls += 1
+                else:
+                    missing_target_polls = 0
+
+                unread_total = 0
+                for target in targets:
+                    unread_total += extract_session_unread_count(session_map.get(target, ""))
+
+                if should_force_focus_refresh(
+                    args.focus_refresh,
+                    missing_target_polls=missing_target_polls,
+                    snapshot_repeat_polls=snapshot_repeat_polls,
+                    unread_total=unread_total,
+                    now_ts=now_ts,
+                    last_focus_refresh_at=last_focus_refresh_at,
+                ):
+                    if try_focus_refresh(window):
+                        last_focus_refresh_at = now_ts
+                        emit(
+                            {
+                                "type": "log",
+                                "value": (
+                                    "focus refresh triggered "
+                                    f"missing_target_polls={missing_target_polls} "
+                                    f"repeat_polls={snapshot_repeat_polls} unread_total={unread_total}"
+                                ),
+                            }
+                        )
+                        session_map = collect_target_session_map(window, targets)
+                        last_snapshot_signature = build_session_snapshot_signature(
+                            session_map,
+                            targets,
+                        )
+                        snapshot_repeat_polls = 0
+                        missing_target_polls = 0 if len(session_map) == len(targets) else 1
+
                 for target in targets:
                     raw_name = session_map.get(target, "")
                     current_preview = extract_session_preview(raw_name)
@@ -342,11 +441,20 @@ def main():
                         previous_state["unread"] = current_unread
             except KeyboardInterrupt:
                 emit_status("stopped", "stopped")
-                break
+                should_stop = True
             except Exception as e:
                 emit({"type": "log", "value": f"worker error: {e}"})
 
-            time.sleep(args.interval)
+            if should_stop:
+                break
+
+            sleep_seconds = compute_poll_sleep_seconds(
+                poll_interval,
+                cycle_started_at,
+                time.monotonic(),
+            )
+            if sleep_seconds > 0:
+                time.sleep(sleep_seconds)
     except Exception as e:
         emit({"type": "log", "value": f"fatal: {e}"})
 

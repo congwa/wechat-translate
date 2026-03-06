@@ -55,8 +55,8 @@
 - 某些环境下 UIA 读取会话列表可能保持旧快照。
 
 处理：
-- 配置项 `listen.focus_refresh=true` 时，worker 轮询会执行 `SwitchToThisWindow`。
-- 默认关闭该配置，避免频繁抢焦点；仅在出现“预览不刷新”时开启。
+- 配置项 `listen.focus_refresh=true` 时，worker 只会在“连续缺目标”或“未读快照长期不变”时触发一次 `SwitchToThisWindow`。
+- 默认关闭该配置，避免抢焦点；仅在出现“预览不刷新”时开启。
 
 ### 4) 抢焦点副作用
 现象：
@@ -64,7 +64,7 @@
 
 处理：
 - 默认不做轮询抢焦点。
-- 仅 `listen.focus_refresh=true` 时才允许抢焦点。
+- 仅 `listen.focus_refresh=true` 时才允许抢焦点，而且会受内部冷却与阈值约束，不再每轮执行。
 
 ### 5) 单 worker 不等于零成本
 现象：
@@ -101,6 +101,7 @@
   - `Accept`
   - `Content-Type: application/json; charset=utf-8`
   - `Origin` / `Referer`
+- 对网络层 `URLError` 做有限重试，避免短时握手抖动直接把一次翻译打成失败。
 - 保留错误响应体片段，便于定位风控 / 配额问题。
 
 ### 8) 中文乱码（侧边栏显示 `�`）
@@ -193,15 +194,34 @@
 
 ### 17) 配置脏值导致运行中崩溃
 现象：
-- `listen.interval_seconds<=0` 或 `translate.timeout_seconds<=0` 时，worker/翻译线程会在运行期报错。
+- `listen.interval_seconds<0.2` 或 `translate.timeout_seconds<=0` 时，worker/翻译线程会在运行期报错。
 - `display.width` 过小会导致窗口布局异常。
+- `translate.enabled=true` 但未配置 `translate.deeplx_url` / `DEEPLX_URL` 时，旧逻辑会静默降级成原文透传，用户误以为翻译正常。
 
 处理：
 - 侧边栏主进程启动时对关键配置做 fail-fast 校验，不合法直接退出并打印错误：
-  - `listen.interval_seconds > 0`
+  - `listen.interval_seconds >= 0.2`
   - `listen.load_retry_seconds > 0`
   - `translate.timeout_seconds > 0`
   - `display.width >= 280`
+  - `translate.enabled=true and provider=deeplx` 时必须存在 `translate.deeplx_url` 或 `DEEPLX_URL`
+
+### 18) 监听体感慢，不一定是 UIA 本身
+现象：
+- 微信里已经出现新消息，但侧边栏要过一会儿才更新。
+
+根因：
+- `listen.interval_seconds` 配太大。
+- 若轮询实现是“做完一轮再额外 sleep 一轮”，实际周期会变成“扫描耗时 + 配置间隔”，比配置值更钝。
+- UI 线程若过慢地消费 worker 队列，也会再叠加几十到几百毫秒。
+- 即使采样很快，DeepLX 网络往返仍然会影响“最终翻译文本出现”的时机。
+
+处理：
+- 当前 worker 以“每轮开始时刻”为周期基准，`listen.interval_seconds` 表示目标采样周期，不再额外叠加整轮 `sleep`。
+- 默认 `listen.interval_seconds` 调整为 `0.6s`，侧边栏主线程队列消费间隔收紧到 `80ms`。
+- 启用 DeepLX 时，侧边栏先展示 `Loading...` 占位，翻译完成后再原位替换，降低“网络没回来就整条空白”的体感延迟。
+- 想更灵敏时，优先把 `listen.interval_seconds` 调到 `0.5 ~ 0.8` 区间；最低不要低于 `0.2`，继续下压会线性增加 UIA 扫描频率和 CPU 占用。
+- 如果体感仍慢，先区分是“采样慢”还是“翻译慢”；当前实现仍是翻译完成后再渲染最终文本，提频不能消掉 DeepLX 往返延迟。
 
 ## 推荐运行命令
 

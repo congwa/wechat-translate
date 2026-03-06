@@ -151,6 +151,69 @@ class GroupListenerWorkerHelpersTest(unittest.TestCase):
         self.assertEqual(state_map["群3"]["preview"], "")
         self.assertEqual(state_map["群3"]["unread"], 0)
 
+    def test_should_force_focus_refresh_only_when_stalled_or_missing(self):
+        self.assertFalse(
+            worker.should_force_focus_refresh(
+                False,
+                missing_target_polls=10,
+                snapshot_repeat_polls=10,
+                unread_total=3,
+                now_ts=30.0,
+                last_focus_refresh_at=0.0,
+            )
+        )
+        self.assertFalse(
+            worker.should_force_focus_refresh(
+                True,
+                missing_target_polls=1,
+                snapshot_repeat_polls=worker.FOCUS_REFRESH_REPEAT_THRESHOLD,
+                unread_total=0,
+                now_ts=30.0,
+                last_focus_refresh_at=0.0,
+            )
+        )
+        self.assertTrue(
+            worker.should_force_focus_refresh(
+                True,
+                missing_target_polls=worker.FOCUS_REFRESH_MISSING_TARGET_THRESHOLD,
+                snapshot_repeat_polls=0,
+                unread_total=0,
+                now_ts=30.0,
+                last_focus_refresh_at=0.0,
+            )
+        )
+        self.assertTrue(
+            worker.should_force_focus_refresh(
+                True,
+                missing_target_polls=0,
+                snapshot_repeat_polls=worker.FOCUS_REFRESH_REPEAT_THRESHOLD,
+                unread_total=2,
+                now_ts=30.0,
+                last_focus_refresh_at=0.0,
+            )
+        )
+        self.assertFalse(
+            worker.should_force_focus_refresh(
+                True,
+                missing_target_polls=worker.FOCUS_REFRESH_MISSING_TARGET_THRESHOLD,
+                snapshot_repeat_polls=worker.FOCUS_REFRESH_REPEAT_THRESHOLD,
+                unread_total=2,
+                now_ts=5.0,
+                last_focus_refresh_at=1.0,
+            )
+        )
+
+    def test_compute_poll_sleep_seconds_uses_full_cycle_budget(self):
+        self.assertAlmostEqual(
+            worker.compute_poll_sleep_seconds(0.6, 10.0, 10.2),
+            0.4,
+        )
+        self.assertEqual(worker.compute_poll_sleep_seconds(0.6, 10.0, 10.7), 0.0)
+        self.assertEqual(
+            worker.compute_poll_sleep_seconds(0.05, 10.0, 10.0),
+            worker.MIN_LISTEN_INTERVAL_SECONDS,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

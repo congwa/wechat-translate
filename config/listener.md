@@ -11,7 +11,7 @@
     "targets": [
       "ssh 前端进阶交流群3群「禁广告」"
     ],
-    "interval_seconds": 1.0,
+    "interval_seconds": 0.6,
     "load_retry_seconds": 10.0,
     "session_preview_dedupe_window_seconds": 20.0,
     "focus_refresh": false,
@@ -44,8 +44,10 @@
   - 长度为 `1`：启动一个侧边栏窗口并监听该目标。
   - 长度 `>1`：仍然只启动一个侧边栏窗口，左侧菜单展示所有 target，点击切换右侧消息视图。
   - 监听层为“单 worker 一次扫描全部 target”。
-- `interval_seconds`：轮询间隔（秒）。越小越实时，但占用更高。
-  - 必须 `> 0`，否则启动阶段会直接报错退出。
+- `interval_seconds`：轮询间隔（秒），默认 `0.6`。越小越实时，但占用更高。
+  - 必须 `>= 0.2`，否则启动阶段会直接报错退出。
+  - 当前实现按“整轮采样周期”控速：UIA 扫描耗时会计入这一轮，不会再出现“扫完一轮再额外 sleep 一整段”的假慢。
+  - 推荐先在 `0.5 ~ 0.8` 之间调；继续往下压会更灵敏，但会更频繁扫 UIA 树并增加 CPU 占用。
 - `load_retry_seconds`：微信未启动、未登录或重连时的重试间隔（秒），默认 `10.0`。
   - 必须 `> 0`，否则启动阶段会直接报错退出。
   - 该参数同时作用于“先启动程序后启动微信”和“微信运行中关闭后再次打开”的恢复等待。
@@ -53,18 +55,22 @@
   - 这是当前链路最关键参数。
   - 值过小：会话预览抖动导致重复展示概率上升。
   - 值过大：群里短时间重复发送相同内容时，第二条可能被抑制。
-- `focus_refresh`：是否每轮强制切回微信刷新 UIA。`true` 更稳但会抢焦点。
+- `focus_refresh`：是否允许 worker 在“连续缺目标”或“未读快照长期不变”时自适应切回微信刷新 UIA。
+  - `true` 不再表示“每轮都抢焦点”，而是按内部阈值按需触发。
+  - 仍然会打扰当前工作窗口，只是比旧的“每轮切一次”克制得多。
 - `worker_debug`：是否输出 worker 调试日志（例如 `debug target=... session_preview=... unread=...`）。
 
 ### `translate`
 - `enabled`：是否启用翻译。`true` 调用翻译服务，`false` 原文透传。
 - `provider`：翻译提供方。当前支持 `deeplx` / `passthrough`。
 - `deeplx_url`：DeepLX 接口地址。
+  - 当 `translate.enabled=true` 且 `provider=deeplx` 时，若配置值和 `DEEPLX_URL` 环境变量都为空，启动阶段会直接报错退出。
 - `source_lang`：源语言，`auto` 表示自动检测。
 - `target_lang`：目标语言，例如 `EN`。
 - `timeout_seconds`：翻译请求超时时间（秒）。
   - 必须 `> 0`，否则启动阶段会直接报错退出。
 - `deeplx_url` 建议放占位值，真实密钥通过 `.env.local`（已忽略）覆盖。
+- DeepLX 请求遇到网络抖动时会做有限重试；HTTP 4xx/5xx 不重试。
 
 ### `display`
 - `english_only`：`true` 时只显示翻译后的文本（替换原文展示）。
@@ -85,6 +91,7 @@
 - 图片占位文本会被过滤，不显示到侧边栏：`[图片]` / `[image]` / `[images]` / `[photo]`。
 - 若消息是 `发送人: 正文` 格式，仅翻译“正文”，发送人姓名保持原样。
 - 若消息不含发送人前缀，视为“自己消息”，在侧边栏右对齐显示。
+- 启用 `deeplx` 时，右侧会先插入一条 `Loading...` 占位；翻译返回后原位替换成英文结果，不再先展示中文。
 - UI 不显示 `source=session_preview`，该字段仅用于内部日志。
 - 当前侧边栏仅用于监听与展示，不提供消息发送输入框。
 - 多目标模式下只保留一个窗口：左侧 target 菜单 + 右侧消息区；未选中目标的新消息会累计未读计数。
