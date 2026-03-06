@@ -49,9 +49,23 @@ TRANSLATE_QUEUE_MAXSIZE = 300
 TRANSLATE_QUEUE_DROP_LOG_INTERVAL_SECONDS = 5.0
 MIN_SIDEBAR_WIDTH = 280
 CHAT_CACHE_LIMIT = 100
+WORKER_RESTART_INITIAL_BACKOFF_SECONDS = 3.0
+WORKER_RESTART_MAX_BACKOFF_SECONDS = 30.0
 RUNTIME_LOCK_DIR = os.path.join(ROOT_DIR, "logs", ".runtime")
 _LOG_WRITE_LOCK = threading.Lock()
 _TARGET_LOCK_PATHS: list[str] = []
+WORKER_STATUS_ORDER = (
+    "running",
+    "connecting",
+    "reconnecting",
+    "worker_backoff",
+    "waiting_wechat",
+    "window_lost",
+    "open_target_failed",
+    "starting",
+    "exited",
+    "stopped",
+)
 
 
 def load_local_env():
@@ -225,6 +239,56 @@ def cleanup_recent_chat_events(cache: dict[str, tuple[str, float, str]], now_ts:
     ]
     for key in expired:
         cache.pop(key, None)
+
+
+def build_worker_status_text(
+    mode: str,
+    worker_states: dict[str, str],
+    worker_details: dict[str, str],
+) -> str:
+    if not worker_states:
+        return f"mode={mode} idle"
+
+    if len(worker_states) == 1:
+        target, state = next(iter(worker_states.items()))
+        detail = str(worker_details.get(target, "")).strip()
+        if detail:
+            return f"[{target}] {state}: {detail}"
+        return f"[{target}] {state}"
+
+    counts: dict[str, int] = {}
+    for state in worker_states.values():
+        counts[state] = counts.get(state, 0) + 1
+
+    parts = []
+    for state in WORKER_STATUS_ORDER:
+        count = counts.get(state, 0)
+        if count > 0:
+            parts.append(f"{state}={count}")
+    for state, count in counts.items():
+        if state not in WORKER_STATUS_ORDER and count > 0:
+            parts.append(f"{state}={count}")
+
+    problem_targets = []
+    for target, state in worker_states.items():
+        if state == "running":
+            continue
+        detail = str(worker_details.get(target, "")).strip()
+        suffix = f": {detail}" if detail else ""
+        problem_targets.append(f"{target}={state}{suffix}")
+        if len(problem_targets) >= 2:
+            break
+
+    summary = " ".join(parts)
+    if problem_targets:
+        summary += " | " + " ; ".join(problem_targets)
+    return f"mode={mode} targets={len(worker_states)} {summary}".strip()
+
+
+def compute_worker_restart_delay(attempt: int) -> float:
+    safe_attempt = max(1, int(attempt))
+    delay = WORKER_RESTART_INITIAL_BACKOFF_SECONDS * (2 ** (safe_attempt - 1))
+    return min(delay, WORKER_RESTART_MAX_BACKOFF_SECONDS)
 
 
 def pick_ui_font_family(root: tk.Tk) -> str:
@@ -794,7 +858,12 @@ class SidebarUI:
 
 
 def start_worker_process(
-    target: str, interval: float, mode: str, debug: bool, focus_refresh: bool
+    target: str,
+    interval: float,
+    mode: str,
+    debug: bool,
+    focus_refresh: bool,
+    load_retry_seconds: float,
 ) -> subprocess.Popen:
     # 使用 UTF-8 管道，避免中文在父子进程间错码。
     worker = os.path.join(ROOT_DIR, "examples", "group_listener_worker.py")
@@ -808,6 +877,8 @@ def start_worker_process(
         target,
         "--interval",
         str(interval),
+        "--load-retry-seconds",
+        str(load_retry_seconds),
         "--mode",
         mode,
     ]
@@ -913,6 +984,7 @@ def main():
         listen_mode = "session"
     focus_refresh = as_bool(listen_cfg.get("focus_refresh"), False)
     worker_debug = as_bool(listen_cfg.get("worker_debug"), False)
+    load_retry_seconds = as_non_negative_float(listen_cfg.get("load_retry_seconds"), 10.0)
     message_dedupe_window_seconds = as_non_negative_float(
         listen_cfg.get("dedupe_window_seconds"),
         MESSAGE_DEDUPE_WINDOW_SECONDS,
@@ -962,6 +1034,10 @@ def main():
         listen_interval = validate_positive_float("listen.interval_seconds", listen_interval)
         translate_timeout = validate_positive_float("translate.timeout_seconds", translate_timeout)
         width = validate_int_min("display.width", width, MIN_SIDEBAR_WIDTH)
+        load_retry_seconds = validate_positive_float(
+            "listen.load_retry_seconds",
+            load_retry_seconds,
+        )
     except RuntimeError as e:
         print(f"[sidebar] invalid config: {e}", file=sys.stderr)
         raise SystemExit(2)
@@ -1009,6 +1085,7 @@ def main():
     append_log_file(log_file, "sidebar start")
     append_log_file(log_file, f"requested targets={targets}")
     append_log_file(log_file, f"running targets={running_targets}")
+    append_log_file(log_file, f"load retry seconds={load_retry_seconds}")
     append_log_file(log_file, f"chat cache limit={CHAT_CACHE_LIMIT}")
     append_log_file(
         log_file,
@@ -1027,13 +1104,45 @@ def main():
     translate_queue_drop_count = 0
     last_translate_queue_drop_log_at = 0.0
     workers: dict[str, subprocess.Popen] = {}
-    exited_workers: set[str] = set()
-    for target in running_targets:
-        worker = start_worker_process(
-            target, listen_interval, listen_mode, worker_debug, focus_refresh
-        )
+    worker_last_handled_exit_pid: dict[str, int] = {}
+    worker_restart_attempts: dict[str, int] = {target: 0 for target in running_targets}
+    worker_restart_deadlines: dict[str, float] = {}
+    worker_states: dict[str, str] = {target: "starting" for target in running_targets}
+    worker_details: dict[str, str] = {target: "starting worker" for target in running_targets}
+    closing = False
+    ui.set_status(build_worker_status_text(listen_mode, worker_states, worker_details))
+
+    def schedule_worker_restart(target: str, reason: str, attempt: int):
+        delay = compute_worker_restart_delay(attempt)
+        worker_restart_attempts[target] = attempt
+        worker_restart_deadlines[target] = time.time() + delay
+        worker_states[target] = "worker_backoff"
+        worker_details[target] = f"{reason}, retry in {delay:.1f}s"
+        backoff_line = f"worker backoff target={target} attempt={attempt} delay={delay:.1f}s reason={reason}"
+        ui.append_log(backoff_line)
+        append_log_file(log_file, backoff_line)
+
+    def launch_worker(target: str, reason: str) -> bool:
+        try:
+            worker = start_worker_process(
+                target,
+                listen_interval,
+                listen_mode,
+                worker_debug,
+                focus_refresh,
+                load_retry_seconds,
+            )
+        except Exception as e:
+            attempt = worker_restart_attempts.get(target, 0) + 1
+            schedule_worker_restart(target, f"{reason} failed: {e}", attempt)
+            return False
+
         workers[target] = worker
-        append_log_file(log_file, f"worker start target={target} pid={worker.pid}")
+        worker_last_handled_exit_pid.pop(target, None)
+        worker_restart_deadlines.pop(target, None)
+        worker_states[target] = "starting"
+        worker_details[target] = reason
+        append_log_file(log_file, f"worker start target={target} pid={worker.pid} reason={reason}")
         t_out = threading.Thread(
             target=stdout_reader, args=(worker, event_queue, target), daemon=True
         )
@@ -1042,6 +1151,10 @@ def main():
         )
         t_out.start()
         t_err.start()
+        return True
+
+    for target in running_targets:
+        launch_worker(target, "starting worker")
 
     def enqueue_translate_task(task: dict):
         nonlocal translate_queue_drop_count, last_translate_queue_drop_log_at
@@ -1144,7 +1257,14 @@ def main():
         log_prefix = f"[{worker_target}] " if worker_target else ""
         default_chat_name = worker_target or (running_targets[0] if running_targets else "")
         if kind == "status":
+            state = str(event.get("state", "status")).strip() or "status"
             value = str(event.get("value", ""))
+            if worker_target:
+                worker_states[worker_target] = state
+                worker_details[worker_target] = value
+                if state == "running":
+                    worker_restart_attempts[worker_target] = 0
+                    worker_restart_deadlines.pop(worker_target, None)
             ui.append_log(f"{log_prefix}status: {value}")
             append_log_file(log_file, f"{log_prefix}status: {value}")
             return
@@ -1254,22 +1374,39 @@ def main():
         except queue.Empty:
             pass
 
-        for target, worker in workers.items():
-            if target in exited_workers:
-                continue
+        now_ts = time.time()
+        for target, worker in list(workers.items()):
             return_code = worker.poll()
             if return_code is None:
                 continue
-            exited_workers.add(target)
+            if worker_last_handled_exit_pid.get(target) == worker.pid:
+                continue
+            worker_last_handled_exit_pid[target] = worker.pid
             exit_line = f"worker exited target={target} code={return_code}"
             ui.append_log(exit_line)
             append_log_file(log_file, exit_line)
-            if len(exited_workers) == len(workers):
-                ui.set_status(f"all workers exited mode={listen_mode}")
+            if closing:
+                worker_states[target] = "stopped"
+                worker_details[target] = f"code={return_code}"
+                continue
+            attempt = worker_restart_attempts.get(target, 0) + 1
+            schedule_worker_restart(target, f"code={return_code}", attempt)
+
+        if not closing:
+            for target, restart_at in list(worker_restart_deadlines.items()):
+                if now_ts < restart_at:
+                    continue
+                attempt = worker_restart_attempts.get(target, 1)
+                launch_worker(target, f"restarting worker attempt={attempt}")
+
+        ui.set_status(build_worker_status_text(listen_mode, worker_states, worker_details))
 
         ui.root.after(200, drain_queue)
 
     def on_close():
+        nonlocal closing
+        closing = True
+        worker_restart_deadlines.clear()
         for worker in workers.values():
             try:
                 if worker.poll() is None:

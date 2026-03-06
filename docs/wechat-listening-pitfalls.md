@@ -14,9 +14,14 @@
 
 ## 架构结论
 - 监听与 UI 必须分离：`group_listener_worker.py` 负责抓消息，`sidebar_translate_listener.py` 负责展示与翻译。
+- 当前持续优化范围只聚焦“监听 + 翻译 + 展示”主链路。
+- `wechat_auto/sender.py`、输入框写入、自动打开聊天等能力仅保留兼容，不作为当前主功能优化目标。
+- 后续优化默认只服务 `session` 模式；`chat` / `mixed` 仅保留兼容，不再作为主路径背负性能与恢复能力优化。
 - 默认推荐 `session` 模式，不推荐 `chat` 模式作为唯一监听来源。
 - 默认关闭焦点抢占与侧边栏置顶，避免打断用户操作。
 - 现支持多目标：单侧边栏窗口 + 左侧目标菜单 + 每个 target 独立 worker 子进程。
+- 侧边栏主进程会监管每个 worker；异常退出后按退避时间自动拉起，不要求整窗重启。
+- 当前阶段计划见：`docs/plan+2026-03-06_09-41-16.md`
 
 ## 关键坑位与处理
 
@@ -211,6 +216,46 @@
 处理：
 - 翻译队列改为有界（默认上限 `300`）。
 - 队列满时丢弃最旧待翻译任务并输出 `translate queue overflow` 日志，优先保持系统可用。
+
+### 18) 程序先启动，但微信还没启动
+现象：
+- 先运行侧边栏程序时，若微信尚未启动或未登录，旧逻辑会直接退出，必须手动重启程序。
+
+处理：
+- `group_listener_worker.py` 启动阶段改为等待微信就绪，不直接退出。
+- 使用 `listen.load_retry_seconds` 控制重试间隔。
+- 侧边栏状态栏显示 `waiting_wechat` / `connecting`，不再只有一次性失败文本。
+
+### 19) 监听中途微信被关闭，恢复不了
+现象：
+- 监听过程中关闭微信后，旧逻辑只会报 `window lost`，但不会真正重连。
+
+处理：
+- worker 发现窗口丢失后进入 `window_lost -> reconnecting -> running` 状态流。
+- 微信重新打开后，重新定位主窗口并恢复 `session` 基线，不要求手动重启侧边栏。
+- 多 target 下每个 worker 独立恢复，互不拖垮。
+
+### 20) worker 异常退出后，侧边栏只记录日志不自愈
+现象：
+- 某个 target 的 worker 因异常退出后，侧边栏进程仍存活，但该 target 永久停听，除非整窗手动重启。
+
+处理：
+- `sidebar_translate_listener.py` 现在对每个 target 做 supervisor：
+  - 发现 worker 退出后，进入 `worker_backoff` 状态；
+  - 按固定退避梯度自动重启：`3s -> 6s -> 12s -> 24s -> 30s(cap)`；
+  - 某个 target 重启失败时，只影响该 target，不拖垮其他 target。
+- worker 重新进入 `running` 后，退避次数清零，下一次异常退出重新从 `3s` 开始。
+
+### 21) `session` 模式轮询反复全树扫描，越跑越浪费
+现象：
+- `session` 模式长时间轮询时，会反复 DFS UIA 控件树查找会话列表/消息列表/搜索框，性能白白损耗。
+
+处理：
+- `wechat_auto/controls.py` 对稳定控件按窗口句柄做缓存：
+  - 命中缓存且控件仍 `Exists()` 时直接复用；
+  - 控件失效或窗口重建后自动丢弃并重新查找；
+  - 仅保留有限数量的窗口缓存，避免长期运行时缓存无界增长。
+- `group_listener_worker.py` 在 `session` 模式下连接/重连时不再读取聊天区初始签名，避免无意义地扫描消息列表。
 
 ## 推荐运行命令
 
