@@ -62,21 +62,29 @@ wx.listen(callback=on_message, interval=2, auto_reply=True)
 当前支持先启动本程序、后启动微信；若微信中途关闭并重新打开，主链路会继续尝试恢复监听。
 
 ```bash
-python examples/sidebar_translate_listener.py --config "D:\code\wechat-pc-auto\config\listener.json"
+python examples/sidebar_translate_listener.py --config ".\config\listener.json"
 ```
 
 接入 DeepLX：
 
 ```bash
-python examples/sidebar_translate_listener.py --config "D:\code\wechat-pc-auto\config\listener.json"
+python examples/sidebar_translate_listener.py --config ".\config\listener.json"
 ```
 
-或设置环境变量：
+或在 PowerShell 中临时设置环境变量：
 
 ```bash
-set DEEPLX_URL=http://127.0.0.1:1188/translate
-python examples/sidebar_translate_listener.py --config "D:\code\wechat-pc-auto\config\listener.json"
+$env:DEEPLX_URL="http://127.0.0.1:1188/translate"
+python examples/sidebar_translate_listener.py --config ".\config\listener.json"
 ```
+
+也可以写入项目根目录下的 `.env.local`：
+
+```bash
+DEEPLX_URL=http://127.0.0.1:1188/translate
+```
+
+启动阶段会自动清理 `logs/.runtime` 下的陈旧锁；仍在运行的实例锁会保留，避免重复监听。
 
 ## 注意事项
 

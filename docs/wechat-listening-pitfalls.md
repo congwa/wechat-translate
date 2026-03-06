@@ -161,7 +161,8 @@
 处理：
 - 为每个 target 增加运行时锁（`logs/.runtime/target_*.lock`）。
 - launcher 启动子进程前会检查锁并跳过已运行 target；剩余可用 target 继续启动。
-- 异常退出导致的陈旧锁会在下次启动时自动清理。
+- 启动阶段会先扫描 `logs/.runtime`，仅清理 `pid/start_token` 已失效或格式异常的陈旧锁。
+- 仍存活的锁必须保留，禁止“启动即全删锁”，否则会破坏单实例约束并造成重复监听。
 
 ### 12) 翻译网络抖动卡 UI
 现象：
@@ -211,6 +212,7 @@
 处理：
 - 运行时锁同时记录 `pid` 与进程启动时间 token（Windows `GetProcessTimes`）。
 - 清理陈旧锁前先校验 `pid+token` 一致性，减少误判概率。
+- Windows 上锁活性判断不再依赖 `os.kill(pid, 0)`，避免部分 Python/Win32 组合下对无效 PID 抛出异常导致启动即崩。
 
 ### 17) 翻译队列无限增长
 现象：
@@ -265,7 +267,7 @@
 ### 低干扰稳定方案（推荐）
 ```bash
 python examples/sidebar_translate_listener.py ^
-  --config "D:\code\wechat-pc-auto\config\listener.json"
+  --config ".\config\listener.json"
 ```
 
 ### 接入 DeepLX

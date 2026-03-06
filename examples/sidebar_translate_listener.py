@@ -501,6 +501,42 @@ def _read_lock_payload(lock_path: str) -> dict[str, Any]:
 def _is_pid_alive(pid: int) -> bool:
     if pid <= 0:
         return False
+    if os.name == "nt":
+        try:
+            import ctypes
+
+            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+            SYNCHRONIZE = 0x00100000
+            STILL_ACTIVE = 259
+
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel32.OpenProcess.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32]
+            kernel32.OpenProcess.restype = ctypes.c_void_p
+            kernel32.GetExitCodeProcess.argtypes = [
+                ctypes.c_void_p,
+                ctypes.POINTER(ctypes.c_uint32),
+            ]
+            kernel32.GetExitCodeProcess.restype = ctypes.c_int
+            kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+            kernel32.CloseHandle.restype = ctypes.c_int
+
+            handle = kernel32.OpenProcess(
+                PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE,
+                False,
+                int(pid),
+            )
+            if not handle:
+                return False
+            try:
+                exit_code = ctypes.c_uint32()
+                ok = kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code))
+                if not ok:
+                    return False
+                return int(exit_code.value) == STILL_ACTIVE
+            finally:
+                kernel32.CloseHandle(handle)
+        except Exception:
+            return False
     try:
         os.kill(pid, 0)
     except PermissionError:
@@ -587,6 +623,35 @@ def is_target_already_running(target: str) -> bool:
     except Exception:
         pass
     return False
+
+
+def cleanup_stale_target_locks() -> int:
+    if not os.path.isdir(RUNTIME_LOCK_DIR):
+        return 0
+
+    removed = 0
+    try:
+        entries = os.listdir(RUNTIME_LOCK_DIR)
+    except Exception:
+        return 0
+
+    for name in entries:
+        if not name.startswith("target_") or not name.endswith(".lock"):
+            continue
+        lock_path = os.path.join(RUNTIME_LOCK_DIR, name)
+        if not os.path.isfile(lock_path):
+            continue
+
+        lock_payload = _read_lock_payload(lock_path)
+        if _is_lock_owner_alive(lock_payload):
+            continue
+
+        try:
+            os.remove(lock_path)
+            removed += 1
+        except Exception:
+            pass
+    return removed
 
 
 def acquire_target_lock(target: str) -> tuple[bool, str]:
@@ -1082,6 +1147,10 @@ def main():
         raise SystemExit(2)
 
     log_file = resolve_log_file_path(logging_cfg.get("file", ""))
+    cleaned_stale_locks = cleanup_stale_target_locks()
+    if cleaned_stale_locks > 0:
+        print(f"[sidebar] cleaned stale locks: {cleaned_stale_locks}", flush=True)
+        append_log_file(log_file, f"cleaned stale locks: {cleaned_stale_locks}")
 
     running_targets: list[str] = []
     skipped_targets: list[tuple[str, str]] = []
