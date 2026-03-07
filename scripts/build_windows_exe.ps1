@@ -1,0 +1,194 @@
+param(
+    [string]$Python = "python",
+    [string]$ArtifactRoot = "artifacts/windows-app",
+    [switch]$Console
+)
+
+$ErrorActionPreference = "Stop"
+
+function Normalize-WindowsPath {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path
+    )
+
+    if ($Path.StartsWith("\\?\UNC\")) {
+        return "\" + $Path.Substring(7)
+    }
+    if ($Path.StartsWith("\\?\")) {
+        return $Path.Substring(4)
+    }
+    return $Path
+}
+
+function Invoke-BuildCommand {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$StepName,
+        [Parameter(Mandatory = $true)]
+        [string]$Python,
+        [Parameter(Mandatory = $true)]
+        [string[]]$Arguments
+    )
+
+    $stdoutPath = [System.IO.Path]::GetTempFileName()
+    $stderrPath = [System.IO.Path]::GetTempFileName()
+    try {
+        $process = Start-Process `
+            -FilePath $Python `
+            -ArgumentList $Arguments `
+            -NoNewWindow `
+            -Wait `
+            -PassThru `
+            -RedirectStandardOutput $stdoutPath `
+            -RedirectStandardError $stderrPath
+
+        $output = @()
+        if (Test-Path $stdoutPath) {
+            $output += Get-Content -Path $stdoutPath
+        }
+        if (Test-Path $stderrPath) {
+            $output += Get-Content -Path $stderrPath
+        }
+
+        if ($process.ExitCode -ne 0) {
+            if ($output.Count -gt 0) {
+                $output | ForEach-Object { Write-Host $_ }
+            }
+            throw "$StepName failed"
+        }
+
+        $warningLines = @($output | Where-Object { "$_" -match '\bWARNING\b|\bERROR\b' })
+        if ($warningLines.Count -gt 0) {
+            $warningLines | ForEach-Object { Write-Warning "$_" }
+        }
+    }
+    finally {
+        Remove-Item $stdoutPath, $stderrPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
+$ScriptPath = if ($PSCommandPath) { $PSCommandPath } else { $MyInvocation.MyCommand.Path }
+if (-not $ScriptPath) {
+    throw "Unable to resolve script path"
+}
+$ScriptPath = Normalize-WindowsPath $ScriptPath
+$ScriptDir = Split-Path -Parent $ScriptPath
+$RepoRoot = Split-Path -Parent $ScriptDir
+$BuildParentRoot = Join-Path $RepoRoot "build"
+$BuildRoot = Join-Path $RepoRoot "build\pyinstaller"
+$DistRoot = Join-Path $RepoRoot $ArtifactRoot
+$SpecRoot = Join-Path $BuildRoot "spec"
+$WorkerDistRoot = Join-Path $BuildRoot "worker-dist"
+$WorkerWorkRoot = Join-Path $BuildRoot "worker-work"
+$MainWorkRoot = Join-Path $BuildRoot "main-work"
+$MainName = "wechat_sidebar"
+$WorkerName = "group_listener_worker"
+$MainSource = Join-Path $RepoRoot "listener_app\sidebar_translate_listener.py"
+$WorkerSource = Join-Path $RepoRoot "listener_app\group_listener_worker.py"
+$ConfigData = "{0};config" -f (Join-Path $RepoRoot "config")
+$SourceConfigPath = Join-Path $RepoRoot "config\listener.json"
+$ConfigRequiresDeepLXEnv = $false
+
+if (Test-Path $SourceConfigPath) {
+    try {
+        $config = Get-Content -Path $SourceConfigPath -Raw | ConvertFrom-Json
+        $translate = $config.translate
+        $translateEnabled = $true
+        if ($null -ne $translate -and $null -ne $translate.enabled) {
+            $translateEnabled = [bool]$translate.enabled
+        }
+        $translateProvider = "deeplx"
+        if ($null -ne $translate -and $null -ne $translate.provider) {
+            $translateProvider = ([string]$translate.provider).Trim().ToLowerInvariant()
+        }
+        $deeplxUrl = ""
+        if ($null -ne $translate -and $null -ne $translate.deeplx_url) {
+            $deeplxUrl = [string]$translate.deeplx_url
+        }
+        if (
+            $translateEnabled -and
+            $translateProvider -eq "deeplx" -and
+            [string]::IsNullOrWhiteSpace($deeplxUrl)
+        ) {
+            $ConfigRequiresDeepLXEnv = $true
+        }
+    }
+    catch {
+    }
+}
+
+if (Test-Path $BuildRoot) {
+    Remove-Item $BuildRoot -Recurse -Force
+}
+if (Test-Path $DistRoot) {
+    Remove-Item $DistRoot -Recurse -Force
+}
+
+New-Item -ItemType Directory -Path $BuildRoot | Out-Null
+New-Item -ItemType Directory -Path $DistRoot | Out-Null
+New-Item -ItemType Directory -Path $SpecRoot | Out-Null
+
+$workerArgs = @(
+    "-m", "PyInstaller",
+    "--noconfirm",
+    "--clean",
+    "--log-level", "WARN",
+    "--onefile",
+    "--console",
+    "--name", $WorkerName,
+    "--distpath", $WorkerDistRoot,
+    "--workpath", $WorkerWorkRoot,
+    "--specpath", $SpecRoot,
+    "--paths", $RepoRoot,
+    $WorkerSource
+)
+
+Write-Host "Building worker executable..."
+Invoke-BuildCommand -StepName "PyInstaller worker build" -Python $Python -Arguments $workerArgs
+
+$mainMode = if ($Console) { "--console" } else { "--windowed" }
+$mainArgs = @(
+    "-m", "PyInstaller",
+    "--noconfirm",
+    "--clean",
+    "--log-level", "WARN",
+    "--onedir",
+    $mainMode,
+    "--name", $MainName,
+    "--distpath", $DistRoot,
+    "--workpath", $MainWorkRoot,
+    "--specpath", $SpecRoot,
+    "--paths", $RepoRoot,
+    "--add-data", $ConfigData,
+    $MainSource
+)
+
+Write-Host "Building sidebar executable..."
+Invoke-BuildCommand -StepName "PyInstaller sidebar build" -Python $Python -Arguments $mainArgs
+
+$MainAppRoot = Join-Path $DistRoot $MainName
+$WorkerExe = Join-Path $WorkerDistRoot "$WorkerName.exe"
+if (-not (Test-Path $WorkerExe)) {
+    throw "Worker executable missing after build: $WorkerExe"
+}
+
+Copy-Item $WorkerExe (Join-Path $MainAppRoot "$WorkerName.exe") -Force
+
+if (Test-Path $BuildRoot) {
+    Remove-Item $BuildRoot -Recurse -Force
+}
+if (Test-Path $BuildParentRoot) {
+    $remaining = @(Get-ChildItem -Force $BuildParentRoot -ErrorAction SilentlyContinue)
+    if ($remaining.Count -eq 0) {
+        Remove-Item $BuildParentRoot -Force -ErrorAction SilentlyContinue
+    }
+}
+
+Write-Host ""
+Write-Host "Build completed."
+Write-Host "Main app folder: $MainAppRoot"
+Write-Host "Launch: $(Join-Path $MainAppRoot "$MainName.exe")"
+if ($ConfigRequiresDeepLXEnv) {
+    Write-Host "NOTE: current config relies on DEEPLX_URL. .env.local is not copied into the app folder. Put .env.local beside wechat_sidebar.exe or set config\\listener.json translate.deeplx_url before launching."
+}

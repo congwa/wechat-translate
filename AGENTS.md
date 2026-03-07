@@ -24,15 +24,13 @@
 - `wechat_auto/controls.py`：UIA 控件定位与通用文本判定工具（会话列表、消息列表、搜索框）。
 - `wechat_auto/logger.py`：统一日志输出函数。
 
-### 当前主流程脚本 `examples/`
-- `examples/group_listener_worker.py`：监听 worker 进程；输出 JSON 行事件；单进程多 target 扫描会话预览。
-- `examples/sidebar_translate_listener.py`：侧边栏 UI + DeepLX 翻译 + 单 worker 管理。
+### 当前主流程脚本 `listener_app/`
+- `listener_app/group_listener_worker.py`：监听 worker 进程；输出 JSON 行事件；单进程多 target 扫描会话预览。
+- `listener_app/sidebar_translate_listener.py`：侧边栏 UI + DeepLX 翻译 + 单 worker 管理。
 
 ### 文档与运行产物
 - `docs/wechat-listening-pitfalls.md`：监听架构、坑位、排障与实现契约。
 - `logs/`：运行日志目录（例如侧边栏日志）。
-- `dist/`：构建产物目录（wheel/tar.gz）。
-- `wechat_pc_auto.egg-info/`：打包元数据目录（构建产物）。
 
 ## 文件级路径清单（当前仓库）
 - `LICENSE`：MIT 许可证文本。
@@ -46,27 +44,16 @@
 - `config/listener.md`：监听配置字段说明。
 - `@AutomationLog.txt`：本地调试日志。
 - `docs/wechat-listening-pitfalls.md`：监听与翻译链路踩坑文档。
-- `examples/sidebar_translate_listener.py`：侧边栏 UI、翻译、worker 管理。
-- `examples/group_listener_worker.py`：监听 worker，输出 JSON 事件。
+- `listener_app/sidebar_translate_listener.py`：侧边栏 UI、翻译、worker 管理。
+- `listener_app/group_listener_worker.py`：监听 worker，输出 JSON 事件。
 - `wechat_auto/__init__.py`：包导出入口。
 - `wechat_auto/core.py`：`WxAuto` 主类。
 - `wechat_auto/window.py`：窗口定位与激活。
 - `wechat_auto/controls.py`：UIA 控件查找与文本判定。
 - `wechat_auto/logger.py`：日志输出。
-- `wechat_pc_auto.egg-info/PKG-INFO`：构建生成的包元数据。
-- `wechat_pc_auto.egg-info/SOURCES.txt`：构建生成的源码清单。
-- `wechat_pc_auto.egg-info/requires.txt`：构建生成的依赖清单。
-- `wechat_pc_auto.egg-info/top_level.txt`：构建生成的顶层包名清单。
-- `wechat_pc_auto.egg-info/dependency_links.txt`：构建生成的依赖链接占位文件。
-- `dist/wechat_pc_auto-1.0.0-py3-none-any.whl`：历史构建产物。
-- `dist/wechat_pc_auto-1.0.0.tar.gz`：历史构建产物。
-- `dist/wechat_pc_auto-1.1.0-py3-none-any.whl`：历史构建产物。
-- `dist/wechat_pc_auto-1.1.0.tar.gz`：历史构建产物。
-- `dist/wechat_pc_auto-1.1.1-py3-none-any.whl`：历史构建产物。
-- `dist/wechat_pc_auto-1.1.1.tar.gz`：历史构建产物。
 
 ## 维护约束
-- 监听主链路默认只维护 `examples/sidebar_translate_listener.py` + `examples/group_listener_worker.py`。
+- 监听主链路默认只维护 `listener_app/sidebar_translate_listener.py` + `listener_app/group_listener_worker.py`。
 - 当前分支不再维护发送消息、发送文件、自动回复、写输入框等主动操作能力。
 - 任何监听相关改动都要同步更新 `docs/wechat-listening-pitfalls.md`。
 - 任何 `config/listener.json` 字段新增/删除/语义变更，必须同步更新 `config/listener.md` 对应说明与示例。

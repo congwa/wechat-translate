@@ -1,12 +1,16 @@
+import io
 import importlib.util
+import os
 import pathlib
+import tempfile
 import unittest
+from unittest import mock
 from urllib import error
 
 
 def _load_sidebar_module():
     repo_root = pathlib.Path(__file__).resolve().parents[1]
-    script_path = repo_root / "examples" / "sidebar_translate_listener.py"
+    script_path = repo_root / "listener_app" / "sidebar_translate_listener.py"
     spec = importlib.util.spec_from_file_location("sidebar_translate_listener", script_path)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"failed to load module from {script_path}")
@@ -60,6 +64,34 @@ class SidebarHelpersTest(unittest.TestCase):
         sidebar.validate_translate_config(False, "deeplx", "")
         sidebar.validate_translate_config(True, "passthrough", "")
 
+    def test_is_filtered_placeholder_matches_media_placeholders(self):
+        self.assertTrue(sidebar.is_filtered_placeholder("[图片]"))
+        self.assertTrue(sidebar.is_filtered_placeholder("[动画表情]"))
+        self.assertTrue(sidebar.is_filtered_placeholder('[语音] 2"'))
+        self.assertTrue(sidebar.is_filtered_placeholder('[Voice Over] 3"'))
+        self.assertFalse(sidebar.is_filtered_placeholder("咳"))
+
+    def test_exit_startup_error_prints_and_raises(self):
+        original_dialog = sidebar.maybe_show_frozen_error_dialog
+        calls = []
+
+        try:
+            sidebar.maybe_show_frozen_error_dialog = calls.append
+            with self.assertRaises(SystemExit) as cm, mock.patch(
+                "sys.stderr",
+                new_callable=io.StringIO,
+            ) as stderr:
+                sidebar.exit_startup_error("invalid config: missing deeplx url", exit_code=3)
+        finally:
+            sidebar.maybe_show_frozen_error_dialog = original_dialog
+
+        self.assertEqual(cm.exception.code, 3)
+        self.assertEqual(calls, ["invalid config: missing deeplx url"])
+        self.assertIn(
+            "[sidebar] invalid config: missing deeplx url",
+            stderr.getvalue(),
+        )
+
     def test_create_translator_rejects_missing_deeplx_url(self):
         with self.assertRaises(RuntimeError):
             sidebar.create_translator(
@@ -70,6 +102,57 @@ class SidebarHelpersTest(unittest.TestCase):
                 target_lang="EN",
                 timeout_seconds=8.0,
             )
+
+    def test_ensure_runtime_layout_copies_default_config(self):
+        with tempfile.TemporaryDirectory() as runtime_dir, tempfile.TemporaryDirectory() as bundle_dir:
+            bundled_config_dir = pathlib.Path(bundle_dir) / "config"
+            bundled_config_dir.mkdir(parents=True, exist_ok=True)
+            bundled_config_path = bundled_config_dir / "listener.json"
+            bundled_config_path.write_text('{"listen": {}}', encoding="utf-8")
+
+            runtime_config_path = sidebar.ensure_runtime_layout(
+                runtime_root=runtime_dir,
+                bundled_config_path=str(bundled_config_path),
+            )
+
+            self.assertTrue(os.path.exists(runtime_config_path))
+            self.assertEqual(pathlib.Path(runtime_config_path).read_text(encoding="utf-8"), '{"listen": {}}')
+            self.assertTrue(os.path.isdir(pathlib.Path(runtime_dir) / "logs"))
+
+    def test_build_worker_command_uses_python_script_in_source_mode(self):
+        cmd = sidebar.build_worker_command(
+            ["群1", "群2"],
+            0.6,
+            debug=True,
+            focus_refresh=True,
+            load_retry_seconds=10.0,
+            frozen=False,
+            python_executable="python",
+            source_root=r"D:\repo\wechat-pc-auto",
+            runtime_root=r"D:\runtime",
+        )
+
+        self.assertEqual(cmd[:5], ["python", "-X", "utf8", "-u", r"D:\repo\wechat-pc-auto\listener_app\group_listener_worker.py"])
+        self.assertIn("--targets-json", cmd)
+        self.assertIn("--debug", cmd)
+        self.assertIn("--focus-refresh", cmd)
+
+    def test_build_worker_command_uses_worker_exe_in_frozen_mode(self):
+        cmd = sidebar.build_worker_command(
+            ["群1"],
+            0.6,
+            debug=False,
+            focus_refresh=False,
+            load_retry_seconds=10.0,
+            frozen=True,
+            python_executable="python",
+            source_root=r"D:\repo\wechat-pc-auto",
+            runtime_root=r"D:\runtime",
+        )
+
+        self.assertEqual(cmd[0], r"D:\runtime\group_listener_worker.exe")
+        self.assertNotIn("-X", cmd)
+        self.assertIn("--targets-json", cmd)
 
     def test_deeplx_translator_retries_urlerror_then_succeeds(self):
         class FakeResponse:
@@ -162,7 +245,7 @@ class SidebarHelpersTest(unittest.TestCase):
         ui.chat_order = ["g1"]
         ui.active_chat = "g1"
         ui.message_limit = 2
-        ui._ensure_chat = lambda chat_name: None
+        ui._ensure_chat = lambda chat_name: True
         ui._refresh_target_list = lambda: None
 
         render_calls = []
@@ -202,7 +285,7 @@ class SidebarHelpersTest(unittest.TestCase):
         }
         ui.unread_counts = {"g1": 1}
         ui.active_chat = "g1"
-        ui._ensure_chat = lambda chat_name: None
+        ui._ensure_chat = lambda chat_name: True
         calls = []
         ui._update_active_chat_summary = lambda: calls.append("summary")
         ui._render_active_chat = lambda: calls.append("render")
@@ -223,7 +306,7 @@ class SidebarHelpersTest(unittest.TestCase):
         self.assertTrue(replaced)
         self.assertEqual(ui.chat_messages["g1"][0].text_en, "hello")
         self.assertEqual(ui.unread_counts["g1"], 1)
-        self.assertEqual(calls, ["summary", "render"])
+        self.assertEqual(calls, ["render"])
 
     def test_build_worker_status_text(self):
         text = sidebar.build_worker_status_text(
@@ -244,38 +327,8 @@ class SidebarHelpersTest(unittest.TestCase):
 
     def test_truncate_target_label(self):
         self.assertEqual(sidebar.truncate_target_label("测试群123"), "测试群123")
-        self.assertEqual(sidebar.truncate_target_label("测试群1234"), "测试群1234")
-        self.assertEqual(sidebar.truncate_target_label("测试群12345"), "测试群12345")
-        self.assertEqual(sidebar.truncate_target_label("测试群123456"), "测试群12345...")
-        self.assertEqual(sidebar.truncate_target_label("ABCDEFGHI"), "ABCDEFGH...")
-
-    def test_message_wraplength_and_side_gap_shrink_with_narrow_canvas(self):
-        class FakeText:
-            def __init__(self, width):
-                self._width = width
-
-            def winfo_width(self):
-                return self._width
-
-        class FakeRoot:
-            def __init__(self, width):
-                self._width = width
-
-            def winfo_width(self):
-                return self._width
-
-        ui = object.__new__(sidebar.SidebarUI)
-        ui.text = FakeText(150)
-        ui.root = FakeRoot(200)
-
-        gap = sidebar.SidebarUI._message_side_gap(ui)
-        wrap = sidebar.SidebarUI._message_wraplength(ui)
-
-        self.assertGreaterEqual(gap, sidebar.MIN_MESSAGE_SIDE_GAP)
-        self.assertLessEqual(gap, sidebar.MAX_MESSAGE_SIDE_GAP)
-        self.assertGreaterEqual(wrap, sidebar.MIN_MESSAGE_WRAP_WIDTH)
-        self.assertLessEqual(wrap, sidebar.MAX_MESSAGE_WRAP_WIDTH)
-        self.assertLess(wrap, 150)
+        self.assertEqual(sidebar.truncate_target_label("测试群1234"), "测试群123...")
+        self.assertEqual(sidebar.truncate_target_label("ABCDEFG"), "ABCDEF...")
 
     def test_toggle_target_panel_shortcut_returns_break(self):
         ui = object.__new__(sidebar.SidebarUI)
@@ -287,61 +340,65 @@ class SidebarHelpersTest(unittest.TestCase):
         self.assertEqual(calls, ["toggle"])
         self.assertEqual(result, "break")
 
-    def test_cycle_chat_wraps_and_switches_active_chat(self):
+    def test_append_message_ignores_unknown_chat_when_targets_fixed(self):
         ui = object.__new__(sidebar.SidebarUI)
-        ui.chat_order = ["群1", "群2", "群3"]
-        ui.active_chat = "群2"
-        switched = []
-        ui.switch_chat = lambda name: switched.append(name)
+        ui.allowed_chat_names = {"g1"}
+        ui.chat_messages = {"g1": []}
+        ui.unread_counts = {"g1": 0}
+        ui.chat_order = ["g1"]
+        ui.active_chat = "g1"
+        ui.message_limit = 2
+        ui._refresh_target_list = lambda: None
+        ui._render_active_chat = lambda: (_ for _ in ()).throw(AssertionError("should not render"))
 
-        sidebar.SidebarUI.cycle_chat(ui, 1)
-        sidebar.SidebarUI.cycle_chat(ui, -1)
+        sidebar.SidebarUI.append_message(
+            ui,
+            sidebar.SidebarMessage(
+                chat_name="unexpected",
+                sender_name="u",
+                text_en="hello",
+                created_at="10:00:00",
+                is_self=False,
+            ),
+        )
 
-        self.assertEqual(switched, ["群3", "群1"])
+        self.assertEqual(ui.chat_order, ["g1"])
+        self.assertEqual(ui.chat_messages["g1"], [])
 
-    def test_cycle_chat_uses_first_chat_when_active_missing(self):
+    def test_insert_message_content_uses_original_text_when_toggle_enabled(self):
+        class FakeVar:
+            def __init__(self, value):
+                self.value = value
+
+            def get(self):
+                return self.value
+
+        class FakeText:
+            def __init__(self):
+                self.calls = []
+
+            def insert(self, *_args):
+                self.calls.append(_args)
+
         ui = object.__new__(sidebar.SidebarUI)
-        ui.chat_order = ["群1", "群2"]
-        ui.active_chat = ""
-        switched = []
-        ui.switch_chat = lambda name: switched.append(name)
+        ui.show_original_var = FakeVar(True)
+        ui.text = FakeText()
 
-        sidebar.SidebarUI.cycle_chat(ui, 1)
+        sidebar.SidebarUI._insert_message_content(
+            ui,
+            sidebar.SidebarMessage(
+                chat_name="g1",
+                sender_name="高钰",
+                text_en="Ahem.",
+                text_cn="咳",
+                created_at="18:04:41",
+                is_self=False,
+                pending_translation=True,
+            ),
+        )
 
-        self.assertEqual(switched, ["群2"])
-
-    def test_switch_chat_shortcuts_return_break(self):
-        ui = object.__new__(sidebar.SidebarUI)
-        calls = []
-        ui._handle_chat_switch_shortcut = lambda step: calls.append(step)
-
-        prev_result = sidebar.SidebarUI.on_switch_prev_chat_shortcut(ui)
-        next_result = sidebar.SidebarUI.on_switch_next_chat_shortcut(ui)
-
-        self.assertEqual(calls, [-1, 1])
-        self.assertEqual(prev_result, "break")
-        self.assertEqual(next_result, "break")
-
-    def test_handle_chat_switch_shortcut_debounces_fast_repeat(self):
-        ui = object.__new__(sidebar.SidebarUI)
-        ui._last_chat_switch_shortcut_at = 0.0
-        calls = []
-        ui.cycle_chat = lambda step: calls.append(step)
-
-        original_monotonic = sidebar.time.monotonic
-        times = iter([1.0, 1.05, 1.30])
-        sidebar.time.monotonic = lambda: next(times)
-        try:
-            first = sidebar.SidebarUI._handle_chat_switch_shortcut(ui, 1)
-            second = sidebar.SidebarUI._handle_chat_switch_shortcut(ui, 1)
-            third = sidebar.SidebarUI._handle_chat_switch_shortcut(ui, -1)
-        finally:
-            sidebar.time.monotonic = original_monotonic
-
-        self.assertTrue(first)
-        self.assertFalse(second)
-        self.assertTrue(third)
-        self.assertEqual(calls, [1, -1])
+        self.assertEqual(ui.text.calls[1][1], "咳\n")
+        self.assertEqual(ui.text.calls[1][2], "msg_left")
 
 
 if __name__ == "__main__":

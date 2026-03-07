@@ -7,7 +7,7 @@ import unittest
 
 def _load_worker_module():
     repo_root = pathlib.Path(__file__).resolve().parents[1]
-    script_path = repo_root / "examples" / "group_listener_worker.py"
+    script_path = repo_root / "listener_app" / "group_listener_worker.py"
     spec = importlib.util.spec_from_file_location("group_listener_worker", script_path)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"failed to load module from {script_path}")
@@ -213,6 +213,23 @@ class GroupListenerWorkerHelpersTest(unittest.TestCase):
             worker.compute_poll_sleep_seconds(0.05, 10.0, 10.0),
             worker.MIN_LISTEN_INTERVAL_SECONDS,
         )
+
+    def test_configure_std_streams_for_utf8_reconfigures_supported_streams(self):
+        class FakeStream:
+            def __init__(self):
+                self.calls = []
+
+            def reconfigure(self, **kwargs):
+                self.calls.append(kwargs)
+
+        stdout = FakeStream()
+        stderr = FakeStream()
+
+        worker.configure_std_streams_for_utf8(stdout=stdout, stderr=stderr)
+
+        expected = [{"encoding": "utf-8", "errors": "replace"}]
+        self.assertEqual(stdout.calls, expected)
+        self.assertEqual(stderr.calls, expected)
 
 
 if __name__ == "__main__":

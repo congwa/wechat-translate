@@ -21,7 +21,7 @@ pip install -r requirements.txt
 监听目标、翻译策略、侧边栏参数都从 `config/listener.json` 读取：
 
 ```bash
-python examples/sidebar_translate_listener.py --config ".\config\listener.json"
+python listener_app/sidebar_translate_listener.py --config ".\config\listener.json"
 ```
 
 接入 DeepLX 时，推荐把真实地址放进项目根目录的 `.env.local`：
@@ -34,14 +34,32 @@ DEEPLX_URL=http://127.0.0.1:1188/translate
 
 ```powershell
 $env:DEEPLX_URL="http://127.0.0.1:1188/translate"
-python examples/sidebar_translate_listener.py --config ".\config\listener.json"
+python listener_app/sidebar_translate_listener.py --config ".\config\listener.json"
 ```
+
+## 打包成 Windows 应用
+
+这条分支支持直接打包成 Windows 应用，主程序和 worker 会一起构建：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\build_windows_exe.ps1
+```
+
+默认产物目录：
+
+```text
+artifacts\windows-app\wechat_sidebar\
+```
+
+更完整的打包说明见：
+
+- `docs/windows-packaging.md`
 
 ## 当前架构
 
-- `examples/sidebar_translate_listener.py`
+- `listener_app/sidebar_translate_listener.py`
   负责配置读取、侧边栏 UI、翻译线程、单 worker 管理、去重和运行时锁。
-- `examples/group_listener_worker.py`
+- `listener_app/group_listener_worker.py`
   负责单进程多目标监听；一次 UIA 扫描覆盖全部 `listen.targets`。
 - `wechat_auto/window.py`
   负责定位并激活微信主窗口。
@@ -68,7 +86,7 @@ config/
 └── listener.md
 docs/
 └── wechat-listening-pitfalls.md
-examples/
+listener_app/
 ├── group_listener_worker.py
 └── sidebar_translate_listener.py
 wechat_auto/

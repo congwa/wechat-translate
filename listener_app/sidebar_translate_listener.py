@@ -6,6 +6,7 @@ import math
 import os
 import queue
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -14,6 +15,7 @@ import tkinter as tk
 from dataclasses import dataclass
 from datetime import datetime
 from tkinter import font as tkfont
+from tkinter import scrolledtext, ttk
 from urllib import error, request
 from urllib.parse import urlparse
 from typing import Any, Dict
@@ -23,13 +25,41 @@ from typing import Any, Dict
 # - 启动 worker 监听目标会话
 # - 处理消息事件并执行翻译
 # - 以“聊天气泡”风格展示（支持自己消息右对齐）
-ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SOURCE_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def is_frozen_app() -> bool:
+    return bool(getattr(sys, "frozen", False))
+
+
+def get_bundle_root() -> str:
+    return str(getattr(sys, "_MEIPASS", SOURCE_ROOT))
+
+
+def get_runtime_root() -> str:
+    if is_frozen_app():
+        return os.path.dirname(os.path.abspath(sys.executable))
+    return SOURCE_ROOT
+
+
+ROOT_DIR = get_runtime_root()
+BUNDLE_ROOT = get_bundle_root()
 DEFAULT_CONFIG_PATH = os.path.join(ROOT_DIR, "config", "listener.json")
+BUNDLED_CONFIG_PATH = os.path.join(BUNDLE_ROOT, "config", "listener.json")
+WORKER_EXE_NAME = "group_listener_worker.exe"
 
 # 匹配 “发送人: 正文” / “发送人：正文”
 SENDER_PREFIX_RE = re.compile(r"^\s*([^:：]{1,40})[:：]\s*(.+?)\s*$")
 # 过滤图片占位文本（例如 [图片] / [Images]）
 IMAGE_PLACEHOLDER_RE = re.compile(r"^\[\s*(图片|image|images|photo)\s*\]$", re.IGNORECASE)
+ANIMATED_EMOTICON_PLACEHOLDER_RE = re.compile(
+    r"^\[\s*(动画表情|animated emoticon|emoticon|emoji|sticker)\s*\]$",
+    re.IGNORECASE,
+)
+VOICE_PLACEHOLDER_RE = re.compile(
+    r'^\[\s*(语音|voice(?:\s+over)?|audio)\s*\]\s*\d+\s*"*$',
+    re.IGNORECASE,
+)
 PREFERRED_UI_FONTS = ("Cascadia Code", "JetBrains Mono", "黑体")
 DEFAULT_SIDEBAR_HEIGHT = 550
 DEFAULT_META_FONT_SIZE = 10
@@ -49,7 +79,7 @@ DEEPLX_RETRY_BACKOFF_SECONDS = 0.6
 MIN_SIDEBAR_WIDTH = 280
 MIN_LISTEN_INTERVAL_SECONDS = 0.2
 CHAT_CACHE_LIMIT = 100
-TARGET_LABEL_MAX_CHARS = 8
+TARGET_LABEL_MAX_CHARS = 6
 DEFAULT_LISTEN_INTERVAL_SECONDS = 0.6
 UI_DRAIN_INTERVAL_MS = 80
 TRANSLATE_PENDING_TEXT = "Loading..."
@@ -58,33 +88,6 @@ WORKER_RESTART_INITIAL_BACKOFF_SECONDS = 3.0
 WORKER_RESTART_MAX_BACKOFF_SECONDS = 30.0
 RUNTIME_LOCK_DIR = os.path.join(ROOT_DIR, "logs", ".runtime")
 SUPPORTED_TRANSLATE_PROVIDERS = ("deeplx", "passthrough")
-WINDOW_BG = "#f3f4f6"
-HEADER_BG = "#f8f9fb"
-HEADER_TEXT = "#20242a"
-HEADER_SUBTEXT = "#7d848d"
-SURFACE_BG = "#ffffff"
-SURFACE_BORDER = "#d9dde3"
-PANEL_BG = "#eceff3"
-LIST_BG = "#eceff3"
-LIST_SELECT_BG = "#dfe4ea"
-LIST_SELECT_FG = "#1f2328"
-BUTTON_BG = "#ffffff"
-BUTTON_ACTIVE_BG = "#eef1f4"
-BUTTON_TEXT = "#2b3037"
-STATUS_BG = "#eef1f4"
-STATUS_TEXT = "#66707b"
-CHAT_HEADER_BG = "#f8f9fb"
-TEXT_PRIMARY = "#20242a"
-TEXT_SECONDARY = "#7b828c"
-LEFT_BUBBLE_BG = "#ffffff"
-LEFT_BUBBLE_BORDER = "#d9dde3"
-RIGHT_BUBBLE_BG = "#f4f5f7"
-RIGHT_BUBBLE_BORDER = "#d9dde3"
-MIN_MESSAGE_WRAP_WIDTH = 72
-MAX_MESSAGE_WRAP_WIDTH = 420
-MIN_MESSAGE_SIDE_GAP = 10
-MAX_MESSAGE_SIDE_GAP = 32
-CHAT_SWITCH_SHORTCUT_DEBOUNCE_SECONDS = 0.18
 _LOG_WRITE_LOCK = threading.Lock()
 _TARGET_LOCK_PATHS: list[str] = []
 
@@ -108,6 +111,27 @@ def load_local_env():
         pass
 
 
+def ensure_runtime_layout(
+    runtime_root: str = ROOT_DIR,
+    bundled_config_path: str = BUNDLED_CONFIG_PATH,
+) -> str:
+    config_dir = os.path.join(runtime_root, "config")
+    logs_dir = os.path.join(runtime_root, "logs")
+    os.makedirs(config_dir, exist_ok=True)
+    os.makedirs(logs_dir, exist_ok=True)
+
+    runtime_config_path = os.path.join(config_dir, "listener.json")
+    bundled_config = str(bundled_config_path or "").strip()
+    if (
+        bundled_config
+        and os.path.isfile(bundled_config)
+        and not os.path.exists(runtime_config_path)
+    ):
+        shutil.copy2(bundled_config, runtime_config_path)
+    return runtime_config_path
+
+
+ensure_runtime_layout()
 load_local_env()
 
 
@@ -230,6 +254,20 @@ def split_sender_and_body(text: str) -> tuple[str, str, bool]:
 
 def is_image_placeholder(text: str) -> bool:
     return bool(IMAGE_PLACEHOLDER_RE.match(str(text or "").strip()))
+
+
+def is_filtered_placeholder(text: str) -> bool:
+    value = str(text or "").strip()
+    if not value:
+        return False
+    return any(
+        pattern.match(value)
+        for pattern in (
+            IMAGE_PLACEHOLDER_RE,
+            ANIMATED_EMOTICON_PLACEHOLDER_RE,
+            VOICE_PLACEHOLDER_RE,
+        )
+    )
 
 
 def normalize_message_for_dedupe(text: str) -> str:
@@ -409,6 +447,7 @@ class SidebarMessage:
     text_en: str
     created_at: str
     is_self: bool
+    text_cn: str = ""
     message_id: str = ""
     pending_translation: bool = False
 
@@ -459,6 +498,55 @@ def resolve_log_file_path(path: Any) -> str:
         except Exception:
             pass
     return normalized
+
+
+def resolve_worker_executable_path(runtime_root: str = ROOT_DIR) -> str:
+    return os.path.join(runtime_root, WORKER_EXE_NAME)
+
+
+def build_worker_command(
+    targets: list[str],
+    interval: float,
+    debug: bool,
+    focus_refresh: bool,
+    load_retry_seconds: float,
+    *,
+    frozen: bool | None = None,
+    python_executable: str | None = None,
+    source_root: str = SOURCE_ROOT,
+    runtime_root: str = ROOT_DIR,
+) -> list[str]:
+    use_frozen = is_frozen_app() if frozen is None else bool(frozen)
+    if use_frozen:
+        cmd = [
+            resolve_worker_executable_path(runtime_root),
+            "--targets-json",
+            json.dumps(targets, ensure_ascii=False),
+            "--interval",
+            str(interval),
+            "--load-retry-seconds",
+            str(load_retry_seconds),
+        ]
+    else:
+        worker_script = os.path.join(source_root, "listener_app", "group_listener_worker.py")
+        cmd = [
+            python_executable or sys.executable,
+            "-X",
+            "utf8",
+            "-u",
+            worker_script,
+            "--targets-json",
+            json.dumps(targets, ensure_ascii=False),
+            "--interval",
+            str(interval),
+            "--load-retry-seconds",
+            str(load_retry_seconds),
+        ]
+    if debug:
+        cmd.append("--debug")
+    if focus_refresh:
+        cmd.append("--focus-refresh")
+    return cmd
 
 
 def rotate_log_file_if_needed(path: str):
@@ -741,6 +829,23 @@ def validate_translate_config(enabled: bool, provider: str, deeplx_url: str):
         )
 
 
+def maybe_show_frozen_error_dialog(message: str, title: str = "wechat_sidebar 启动失败"):
+    if not is_frozen_app() or os.name != "nt":
+        return
+    try:
+        import ctypes
+
+        ctypes.windll.user32.MessageBoxW(None, message, title, 0x10)
+    except Exception:
+        pass
+
+
+def exit_startup_error(message: str, exit_code: int = 2):
+    print(f"[sidebar] {message}", file=sys.stderr)
+    maybe_show_frozen_error_dialog(message)
+    raise SystemExit(exit_code)
+
+
 def build_translator_runtime_text(enabled: bool, provider: str) -> str:
     if not enabled:
         return "translator=passthrough reason=translate.disabled"
@@ -800,33 +905,20 @@ class SidebarUI:
     ):
         self.root = tk.Tk()
         self.root.title(title)
-        self.root.configure(bg=WINDOW_BG)
         self.ui_font_family = pick_ui_font_family(self.root)
         self.root.option_add("*Font", (self.ui_font_family, DEFAULT_META_FONT_SIZE))
         self.topmost_var = tk.BooleanVar(value=False)
+        self.show_original_var = tk.BooleanVar(value=False)
         self.root.attributes("-topmost", self.topmost_var.get())
-        self.status_var = tk.StringVar(value="")
+        self.status_var = tk.StringVar(value="starting...")
         self.target_panel_visible = False
-        self.target_panel_toggle_text = tk.StringVar(value="会话")
-        self.topmost_button_text = tk.StringVar(value="置顶关闭")
-        self.chat_title_var = tk.StringVar(value="未选中目标")
-        self.chat_meta_var = tk.StringVar(value="等待消息…")
+        self.target_panel_toggle_text = tk.StringVar(value="菜单")
         self.message_limit = max(1, int(message_limit))
+        self.allowed_chat_names = {str(item or "").strip() for item in targets if str(item or "").strip()}
         self.chat_order: list[str] = []
         self.chat_messages: dict[str, list[SidebarMessage]] = {}
         self.unread_counts: dict[str, int] = {}
         self.active_chat = ""
-        self._render_resize_pending = False
-        self._last_wraplength = 0
-        self._last_chat_switch_shortcut_at = 0.0
-        self.body_font = (
-            self.ui_font_family,
-            DEFAULT_META_FONT_SIZE + MESSAGE_FONT_EXTRA_PX,
-            "normal",
-        )
-        self.meta_font = (self.ui_font_family, DEFAULT_META_FONT_SIZE, "normal")
-        self.title_font = (self.ui_font_family, 14, "bold")
-        self.heading_font = (self.ui_font_family, 12, "bold")
 
         screen_w = self.root.winfo_screenwidth()
         screen_h = self.root.winfo_screenheight()
@@ -842,185 +934,103 @@ class SidebarUI:
         if y > max_y:
             y = max_y
         self.root.geometry(f"{width}x{height}+{x}+{y}")
-        self.root.minsize(300, 340)
 
-        header = tk.Frame(
-            self.root,
-            bg=HEADER_BG,
-            padx=8,
-            pady=6,
-            highlightthickness=1,
-            highlightbackground=SURFACE_BORDER,
-        )
-        header.pack(fill=tk.X, padx=4, pady=(4, 4))
-
-        title_block = tk.Frame(header, bg=HEADER_BG)
-        title_block.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        tk.Label(
-            title_block,
-            text="消息侧栏",
-            bg=HEADER_BG,
-            fg=HEADER_TEXT,
-            font=self.title_font,
-            anchor="w",
-        ).pack(anchor="w")
-
-        control_block = tk.Frame(header, bg=HEADER_BG)
-        control_block.pack(side=tk.RIGHT, anchor="ne")
-        self.menu_button = tk.Button(
-            control_block,
+        controls = ttk.Frame(self.root, padding=(8, 6, 8, 4))
+        controls.pack(fill=tk.X)
+        ttk.Button(
+            controls,
             textvariable=self.target_panel_toggle_text,
             command=self.toggle_target_panel,
-            bg=BUTTON_BG,
-            fg=BUTTON_TEXT,
-            activebackground=BUTTON_ACTIVE_BG,
-            activeforeground=BUTTON_TEXT,
-            relief=tk.FLAT,
-            bd=0,
-            highlightthickness=1,
-            highlightbackground=SURFACE_BORDER,
-            padx=7,
-            pady=4,
-            cursor="hand2",
-        )
-        self.menu_button.pack(side=tk.LEFT, padx=(0, 4))
-        self.topmost_button = tk.Button(
-            control_block,
-            textvariable=self.topmost_button_text,
+            width=6,
+        ).pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Checkbutton(
+            controls,
+            text="原文",
+            variable=self.show_original_var,
+            command=self._render_active_chat,
+        ).pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Checkbutton(
+            controls,
+            text="置顶",
+            variable=self.topmost_var,
             command=self.toggle_topmost,
-            bg=HEADER_BG,
-            fg=HEADER_TEXT,
-            activebackground=BUTTON_ACTIVE_BG,
-            activeforeground=BUTTON_TEXT,
-            relief=tk.FLAT,
-            bd=0,
-            highlightthickness=1,
-            highlightbackground=SURFACE_BORDER,
-            padx=7,
-            pady=4,
-            cursor="hand2",
+        ).pack(side=tk.LEFT)
+        ttk.Label(controls, textvariable=self.status_var).pack(
+            side=tk.LEFT, fill=tk.X, expand=True
         )
-        self.topmost_button.pack(side=tk.LEFT)
 
-        content = tk.Frame(self.root, bg=WINDOW_BG)
-        content.pack(fill=tk.BOTH, expand=True, padx=4, pady=(0, 4))
+        content = ttk.Frame(self.root)
+        content.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 8))
 
-        self.left_panel = tk.Frame(
-            content,
-            width=156,
-            bg=PANEL_BG,
-            highlightthickness=1,
-            highlightbackground=SURFACE_BORDER,
-        )
+        self.left_panel = ttk.Frame(content, width=180)
         self.left_panel.pack_propagate(False)
-        tk.Label(
-            self.left_panel,
-            text="会话列表",
-            bg=PANEL_BG,
-            fg=TEXT_PRIMARY,
-            font=self.heading_font,
-            anchor="w",
-        ).pack(fill=tk.X, padx=7, pady=(7, 1))
-        tk.Label(
-            self.left_panel,
-            text="Ctrl+B 切换展开",
-            bg=PANEL_BG,
-            fg=TEXT_SECONDARY,
-            font=self.meta_font,
-            anchor="w",
-        ).pack(fill=tk.X, padx=7, pady=(0, 4))
         self.target_list = tk.Listbox(
             self.left_panel,
             exportselection=False,
             activestyle="none",
-            font=self.meta_font,
-            bg=LIST_BG,
-            fg=TEXT_PRIMARY,
-            selectbackground=LIST_SELECT_BG,
-            selectforeground=LIST_SELECT_FG,
-            highlightthickness=0,
-            bd=0,
-            relief=tk.FLAT,
+            font=(self.ui_font_family, DEFAULT_META_FONT_SIZE),
         )
-        self.target_list.pack(fill=tk.BOTH, expand=True, padx=6, pady=(0, 6))
+        self.target_list.pack(fill=tk.BOTH, expand=True)
         self.target_list.bind("<<ListboxSelect>>", self._on_target_selected)
 
-        self.main_panel = tk.Frame(
+        self.text = scrolledtext.ScrolledText(
             content,
-            bg=SURFACE_BG,
-            highlightthickness=1,
-            highlightbackground=SURFACE_BORDER,
+            wrap=tk.WORD,
+            font=(self.ui_font_family, DEFAULT_META_FONT_SIZE),
+            state=tk.DISABLED,
         )
-        self.main_panel.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-
-        chat_header = tk.Frame(self.main_panel, bg=CHAT_HEADER_BG, padx=8, pady=6)
-        chat_header.pack(fill=tk.X, padx=4, pady=4)
-        tk.Label(
-            chat_header,
-            textvariable=self.chat_title_var,
-            bg=CHAT_HEADER_BG,
-            fg=TEXT_PRIMARY,
-            font=self.heading_font,
-            anchor="w",
-        ).pack(fill=tk.X)
-        tk.Label(
-            chat_header,
-            textvariable=self.chat_meta_var,
-            bg=CHAT_HEADER_BG,
-            fg=TEXT_SECONDARY,
-            font=self.meta_font,
-            anchor="w",
-        ).pack(fill=tk.X, pady=(2, 0))
-
-        message_shell = tk.Frame(self.main_panel, bg=SURFACE_BG)
-        message_shell.pack(fill=tk.BOTH, expand=True, padx=4, pady=(0, 4))
-        self.text = tk.Canvas(
-            message_shell,
-            bg=SURFACE_BG,
-            highlightthickness=0,
-            bd=0,
-        )
-        self.message_scrollbar = tk.Scrollbar(
-            message_shell,
-            orient=tk.VERTICAL,
-            command=self.text.yview,
-            bg=PANEL_BG,
-            activebackground=BUTTON_ACTIVE_BG,
-            troughcolor=WINDOW_BG,
-            relief=tk.FLAT,
-            bd=0,
-        )
-        self.text.configure(yscrollcommand=self.message_scrollbar.set)
         self.text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        self.message_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        self.message_viewport = tk.Frame(self.text, bg=SURFACE_BG)
-        self.message_window = self.text.create_window(
-            (0, 0),
-            window=self.message_viewport,
-            anchor="nw",
+        message_font_size = DEFAULT_META_FONT_SIZE + MESSAGE_FONT_EXTRA_PX
+        self.text.tag_configure(
+            "msg_left",
+            justify=tk.LEFT,
+            lmargin1=8,
+            lmargin2=8,
+            rmargin=40,
+            font=(self.ui_font_family, message_font_size),
         )
-        self.message_viewport.bind("<Configure>", self._on_message_viewport_configure)
-        self.text.bind("<Configure>", self._on_message_canvas_configure)
+        self.text.tag_configure(
+            "msg_right",
+            justify=tk.RIGHT,
+            lmargin1=40,
+            lmargin2=40,
+            rmargin=8,
+            font=(self.ui_font_family, message_font_size),
+        )
+        self.text.tag_configure(
+            "msg_left_pending",
+            justify=tk.LEFT,
+            lmargin1=8,
+            lmargin2=8,
+            rmargin=40,
+            font=(self.ui_font_family, message_font_size),
+            foreground=META_TEXT_COLOR,
+        )
+        self.text.tag_configure(
+            "msg_right_pending",
+            justify=tk.RIGHT,
+            lmargin1=40,
+            lmargin2=40,
+            rmargin=8,
+            font=(self.ui_font_family, message_font_size),
+            foreground=META_TEXT_COLOR,
+        )
+        self.text.tag_configure("meta_left", justify=tk.LEFT, foreground=META_TEXT_COLOR)
+        self.text.tag_configure("meta_right", justify=tk.RIGHT, foreground=META_TEXT_COLOR)
 
         for target in targets:
             self._ensure_chat(target)
         if self.chat_order:
             self.switch_chat(self.chat_order[0])
         self._set_target_panel_visible(False)
-        self._sync_topmost_button()
         self.root.bind("<Control-b>", self.on_toggle_target_panel_shortcut)
         self.root.bind("<Control-B>", self.on_toggle_target_panel_shortcut)
-        self.root.bind("<Control-Up>", self.on_switch_prev_chat_shortcut)
-        self.root.bind("<Control-Down>", self.on_switch_next_chat_shortcut)
 
     def set_status(self, text: str):
         self.status_var.set(text)
 
     def toggle_topmost(self):
-        next_value = not bool(self.topmost_var.get())
-        self.topmost_var.set(next_value)
-        self.root.attributes("-topmost", next_value)
-        self._sync_topmost_button()
+        self.root.attributes("-topmost", self.topmost_var.get())
 
     def toggle_target_panel(self):
         self._set_target_panel_visible(not self.target_panel_visible)
@@ -1039,54 +1049,27 @@ class SidebarUI:
 
     def _set_target_panel_visible(self, visible: bool):
         if visible:
-            self.left_panel.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 4), before=self.main_panel)
+            self.left_panel.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 8), before=self.text)
             self.target_panel_toggle_text.set("收起")
             self.target_panel_visible = True
             return
         self.left_panel.pack_forget()
-        self.target_panel_toggle_text.set("会话")
+        self.target_panel_toggle_text.set("菜单")
         self.target_panel_visible = False
-
-    def _sync_topmost_button(self):
-        if self.topmost_var.get():
-            self.topmost_button_text.set("置顶开启")
-            self.topmost_button.configure(
-                bg=BUTTON_ACTIVE_BG,
-                fg=BUTTON_TEXT,
-                highlightbackground=SURFACE_BORDER,
-            )
-            return
-        self.topmost_button_text.set("置顶关闭")
-        self.topmost_button.configure(
-            bg=BUTTON_BG,
-            fg=BUTTON_TEXT,
-            highlightbackground=SURFACE_BORDER,
-        )
-
-    def _on_message_viewport_configure(self, _event=None):
-        self.text.configure(scrollregion=self.text.bbox("all"))
-
-    def _on_message_canvas_configure(self, event):
-        width = max(1, int(event.width))
-        self.text.itemconfigure(self.message_window, width=width)
-        wraplength = self._message_wraplength()
-        if (
-            self.active_chat
-            and abs(wraplength - self._last_wraplength) >= 12
-            and not self._render_resize_pending
-        ):
-            self._render_resize_pending = True
-            self.root.after_idle(self._rerender_active_chat_for_resize)
 
     def _ensure_chat(self, chat_name: str):
         name = str(chat_name or "").strip()
         if not name:
-            return
+            return False
+        allowed_chat_names = getattr(self, "allowed_chat_names", set())
+        if allowed_chat_names and name not in allowed_chat_names:
+            return False
         if name not in self.chat_messages:
             self.chat_messages[name] = []
             self.unread_counts[name] = 0
             self.chat_order.append(name)
             self._refresh_target_list()
+        return True
 
     def _format_chat_label(self, chat_name: str) -> str:
         display_name = truncate_target_label(chat_name)
@@ -1114,187 +1097,57 @@ class SidebarUI:
             return
         self.switch_chat(self.chat_order[idx])
 
-    def _active_chat_index(self) -> int:
-        if not self.chat_order:
-            return -1
-        if self.active_chat in self.chat_order:
-            return self.chat_order.index(self.active_chat)
-        return 0
-
-    def _handle_chat_switch_shortcut(self, step: int) -> bool:
-        now_ts = time.monotonic()
-        if (
-            now_ts - self._last_chat_switch_shortcut_at
-            < CHAT_SWITCH_SHORTCUT_DEBOUNCE_SECONDS
-        ):
-            return False
-        self._last_chat_switch_shortcut_at = now_ts
-        self.cycle_chat(step)
-        return True
-
-    def cycle_chat(self, step: int):
-        if not self.chat_order:
-            return
-        if step == 0:
-            return
-        current_index = self._active_chat_index()
-        next_index = (current_index + step) % len(self.chat_order)
-        self.switch_chat(self.chat_order[next_index])
-
     def switch_chat(self, chat_name: str):
         name = str(chat_name or "").strip()
         if not name:
             return
-        self._ensure_chat(name)
+        if not self._ensure_chat(name):
+            return
         self.active_chat = name
         self.unread_counts[name] = 0
         self._refresh_target_list()
-        self._update_active_chat_summary()
         self._render_active_chat()
 
-    def _update_active_chat_summary(self):
-        if not hasattr(self, "chat_title_var") or not hasattr(self, "chat_meta_var"):
-            return
-        if not self.active_chat:
-            self.chat_title_var.set("未选中目标")
-            self.chat_meta_var.set("等待消息…")
-            return
-        messages = self.chat_messages.get(self.active_chat, [])
-        self.chat_title_var.set(self.active_chat)
-        if not messages:
-            self.chat_meta_var.set("等待消息…")
-            return
-        latest = messages[-1]
-        self.chat_meta_var.set(f"最近更新 {latest.created_at}")
-
-    def _message_side_gap(self) -> int:
-        available = self.text.winfo_width()
-        if available <= 1:
-            available = self.root.winfo_width() - 120
-        dynamic_gap = max(MIN_MESSAGE_SIDE_GAP, min(available // 8, MAX_MESSAGE_SIDE_GAP))
-        return int(dynamic_gap)
-
-    def _message_wraplength(self) -> int:
-        available = self.text.winfo_width()
-        if available <= 1:
-            available = self.root.winfo_width() - 96
-        side_gap = self._message_side_gap()
-        usable = available - side_gap - 18
-        return max(MIN_MESSAGE_WRAP_WIDTH, min(usable, MAX_MESSAGE_WRAP_WIDTH))
-
-    def _rerender_active_chat_for_resize(self):
-        self._render_resize_pending = False
-        if not self.active_chat:
-            return
-        if abs(self._message_wraplength() - self._last_wraplength) < 12:
-            return
-        self._render_active_chat()
-
-    def _clear_message_view(self):
-        for child in self.message_viewport.winfo_children():
-            child.destroy()
-
-    def _render_empty_state(self):
-        empty = tk.Frame(self.message_viewport, bg=SURFACE_BG, pady=24)
-        empty.pack(fill=tk.BOTH, expand=True)
-        tk.Label(
-            empty,
-            text="还没有可显示的消息",
-            bg=SURFACE_BG,
-            fg=TEXT_SECONDARY,
-            font=self.heading_font,
-        ).pack()
-        tk.Label(
-            empty,
-            text="监听到新的会话预览后会显示在这里",
-            bg=SURFACE_BG,
-            fg=TEXT_SECONDARY,
-            font=self.meta_font,
-        ).pack(pady=(4, 0))
-
-    def _build_message_card(self, msg: SidebarMessage):
-        row = tk.Frame(self.message_viewport, bg=SURFACE_BG, padx=2, pady=1)
-        row.pack(fill=tk.X)
-
-        bubble_bg = RIGHT_BUBBLE_BG if msg.is_self else LEFT_BUBBLE_BG
-        bubble_border = RIGHT_BUBBLE_BORDER if msg.is_self else LEFT_BUBBLE_BORDER
-        justify = tk.RIGHT if msg.is_self else tk.LEFT
-        anchor = "e" if msg.is_self else "w"
-        side_gap = self._message_side_gap()
-        side_pad = (side_gap, 0) if msg.is_self else (0, side_gap)
-
-        bubble = tk.Frame(
-            row,
-            bg=bubble_bg,
-            highlightthickness=1,
-            highlightbackground=bubble_border,
-            bd=0,
-            padx=1,
-            pady=1,
-        )
-        bubble.pack(anchor=anchor, padx=side_pad)
-
-        if msg.is_self:
-            header = f"{msg.created_at} · 你"
-        elif msg.sender_name:
-            header = f"{msg.sender_name} · {msg.created_at}"
+    def _insert_message_content(self, msg: SidebarMessage):
+        meta_tag = "meta_right" if msg.is_self else "meta_left"
+        display_text = msg.text_cn if self.show_original_var.get() and msg.text_cn else msg.text_en
+        if msg.pending_translation and not self.show_original_var.get():
+            msg_tag = "msg_right_pending" if msg.is_self else "msg_left_pending"
         else:
-            header = msg.created_at
-
-        body_fg = TEXT_SECONDARY if msg.pending_translation else TEXT_PRIMARY
-
-        tk.Label(
-            bubble,
-            text=header,
-            bg=bubble_bg,
-            fg=TEXT_SECONDARY,
-            font=self.meta_font,
-            justify=justify,
-            anchor=anchor,
-        ).pack(anchor=anchor)
-        tk.Label(
-            bubble,
-            text=msg.text_en,
-            bg=bubble_bg,
-            fg=body_fg,
-            font=self.body_font,
-            justify=justify,
-            anchor=anchor,
-            wraplength=self._message_wraplength(),
-        ).pack(anchor=anchor, pady=(1, 0))
+            msg_tag = "msg_right" if msg.is_self else "msg_left"
+        header = f"[{msg.created_at}]"
+        if msg.sender_name:
+            header += f" {msg.sender_name}"
+        self.text.insert(tk.END, header + "\n", meta_tag)
+        self.text.insert(tk.END, f"{display_text}\n", msg_tag)
 
     def _render_active_chat(self):
-        self.root.update_idletasks()
-        self._clear_message_view()
-        messages = self.chat_messages.get(self.active_chat, [])
-        if not messages:
-            self._render_empty_state()
-        else:
-            for msg in messages:
-                self._build_message_card(msg)
-        self.text.update_idletasks()
-        self._last_wraplength = self._message_wraplength()
-        self.text.yview_moveto(1.0)
+        self.text.configure(state=tk.NORMAL)
+        self.text.delete("1.0", tk.END)
+        for msg in self.chat_messages.get(self.active_chat, []):
+            self._insert_message_content(msg)
+        self.text.configure(state=tk.DISABLED)
+        self.text.see(tk.END)
 
     def append_message(self, msg: SidebarMessage):
-        self._ensure_chat(msg.chat_name)
+        if not self._ensure_chat(msg.chat_name):
+            return
         cache = self.chat_messages[msg.chat_name]
         append_message_with_limit(cache, msg, self.message_limit)
         if msg.chat_name != self.active_chat:
             self.unread_counts[msg.chat_name] = self.unread_counts.get(msg.chat_name, 0) + 1
             self._refresh_target_list()
             return
-        self._update_active_chat_summary()
         self._render_active_chat()
 
     def replace_message(self, msg: SidebarMessage) -> bool:
-        self._ensure_chat(msg.chat_name)
+        if not self._ensure_chat(msg.chat_name):
+            return False
         cache = self.chat_messages[msg.chat_name]
         replaced = replace_message_in_cache(cache, msg)
         if not replaced:
             return False
         if msg.chat_name == self.active_chat:
-            self._update_active_chat_summary()
             self._render_active_chat()
         return True
 
@@ -1310,24 +1163,15 @@ def start_worker_process(
     load_retry_seconds: float,
 ) -> subprocess.Popen:
     # 使用 UTF-8 管道，避免中文在父子进程间错码。
-    worker = os.path.join(ROOT_DIR, "examples", "group_listener_worker.py")
-    cmd = [
-        sys.executable,
-        "-X",
-        "utf8",
-        "-u",
-        worker,
-        "--targets-json",
-        json.dumps(targets, ensure_ascii=False),
-        "--interval",
-        str(interval),
-        "--load-retry-seconds",
-        str(load_retry_seconds),
-    ]
-    if debug:
-        cmd.append("--debug")
-    if focus_refresh:
-        cmd.append("--focus-refresh")
+    cmd = build_worker_command(
+        targets,
+        interval,
+        debug,
+        focus_refresh,
+        load_retry_seconds,
+    )
+    if is_frozen_app() and not os.path.exists(cmd[0]):
+        raise RuntimeError(f"missing worker executable: {cmd[0]}")
     env = os.environ.copy()
     env["PYTHONUTF8"] = "1"
     env["PYTHONIOENCODING"] = "utf-8"
@@ -1381,8 +1225,7 @@ def main():
     try:
         config = load_json_config(config_path)
     except Exception as e:
-        print(f"[sidebar] load config failed: {e}", file=sys.stderr)
-        raise SystemExit(2)
+        exit_startup_error(f"load config failed: {e}")
 
     listen_cfg = config.get("listen", {}) if isinstance(config.get("listen", {}), dict) else {}
     translate_cfg = (
@@ -1393,11 +1236,7 @@ def main():
 
     targets = normalize_targets(listen_cfg.get("targets"))
     if not targets:
-        print(
-            "[sidebar] config listen.targets is empty",
-            file=sys.stderr,
-        )
-        raise SystemExit(2)
+        exit_startup_error("config listen.targets is empty")
     if str(args.target or "").strip():
         forced_target = str(args.target).strip()
         if forced_target not in targets:
@@ -1409,11 +1248,7 @@ def main():
 
     listen_mode = str(listen_cfg.get("mode", "session")).strip().lower()
     if listen_mode and listen_mode != "session":
-        print(
-            "[sidebar] session-only branch only supports listen.mode=session",
-            file=sys.stderr,
-        )
-        raise SystemExit(2)
+        exit_startup_error("session-only branch only supports listen.mode=session")
     focus_refresh = as_bool(listen_cfg.get("focus_refresh"), False)
     worker_debug = as_bool(listen_cfg.get("worker_debug"), False)
     load_retry_seconds = as_non_negative_float(listen_cfg.get("load_retry_seconds"), 10.0)
@@ -1471,8 +1306,7 @@ def main():
             translate_provider,
         )
     except RuntimeError as e:
-        print(f"[sidebar] invalid config: {e}", file=sys.stderr)
-        raise SystemExit(2)
+        exit_startup_error(f"invalid config: {e}")
 
     log_file = resolve_log_file_path(logging_cfg.get("file", ""))
     cleaned_stale_locks = cleanup_stale_target_locks()
@@ -1572,6 +1406,7 @@ def main():
     def build_pending_message(
         chat_name: str,
         sender_name: str,
+        body_cn: str,
         created_at: str,
         is_self: bool,
         message_id: str,
@@ -1580,6 +1415,7 @@ def main():
             chat_name=chat_name,
             sender_name=sender_name if not is_self else "",
             text_en=TRANSLATE_PENDING_TEXT,
+            text_cn=body_cn,
             created_at=created_at,
             is_self=is_self,
             message_id=message_id,
@@ -1596,6 +1432,7 @@ def main():
                 "is_self": task["is_self"],
                 "source": task["source"],
                 "created_at": task["created_at"],
+                "text_cn": str(task.get("body_cn", "")),
                 "text_en": rendered_text,
                 "pending_translation": pending_translation,
             }
@@ -1725,6 +1562,7 @@ def main():
             created_at = str(event.get("created_at") or datetime.now().strftime("%H:%M:%S"))
             chat_name = str(event.get("chat_name") or default_chat_name)
             sender_name = str(event.get("sender_name", ""))
+            raw_text = str(event.get("text_cn", ""))
             rendered_text = str(event.get("text_en", ""))
             source = str(event.get("source", ""))
             is_self = bool(event.get("is_self", False))
@@ -1734,6 +1572,7 @@ def main():
                 chat_name=chat_name,
                 sender_name=sender_name if not is_self else "",
                 text_en=rendered_text,
+                text_cn=raw_text,
                 created_at=created_at,
                 is_self=is_self,
                 message_id=message_id,
@@ -1766,9 +1605,9 @@ def main():
         sender_name, body_cn, is_self = split_sender_and_body(cn_text)
         if not body_cn:
             return
-        # 2) 图片占位消息直接过滤（例如 [图片]），不渲染到侧边栏。
-        if is_image_placeholder(body_cn):
-            append_log_file(log_file, f"skip image placeholder: {chat_name} {cn_text}")
+        # 2) 明显的媒体占位消息直接过滤（例如 [图片] / [动画表情] / [语音]）。
+        if is_filtered_placeholder(body_cn):
+            append_log_file(log_file, f"skip filtered placeholder: {chat_name} {cn_text}")
             return
 
         normalized_body = normalize_message_for_dedupe(body_cn)
@@ -1797,6 +1636,7 @@ def main():
                 build_pending_message(
                     chat_name=chat_name,
                     sender_name=sender_name,
+                    body_cn=body_cn,
                     created_at=created_at,
                     is_self=is_self,
                     message_id=message_id,

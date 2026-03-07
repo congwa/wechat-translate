@@ -2,8 +2,8 @@
 
 ## 适用范围
 本说明覆盖以下实现：
-- `examples/group_listener_worker.py`
-- `examples/sidebar_translate_listener.py`
+- `listener_app/group_listener_worker.py`
+- `listener_app/sidebar_translate_listener.py`
 - `wechat_auto/window.py`
 - `wechat_auto/controls.py`
 
@@ -96,7 +96,7 @@
 - 某些 DeepLX 网关会对 Python 默认请求特征做风控，`urllib` 默认 UA 容易被拦截。
 
 处理：
-- 在 `examples/sidebar_translate_listener.py` 的 `DeepLXTranslator` 请求头中显式设置：
+- 在 `listener_app/sidebar_translate_listener.py` 的 `DeepLXTranslator` 请求头中显式设置：
   - `User-Agent`（浏览器风格）
   - `Accept`
   - `Content-Type: application/json; charset=utf-8`
@@ -223,11 +223,48 @@
 - 想更灵敏时，优先把 `listen.interval_seconds` 调到 `0.5 ~ 0.8` 区间；最低不要低于 `0.2`，继续下压会线性增加 UIA 扫描频率和 CPU 占用。
 - 如果体感仍慢，先区分是“采样慢”还是“翻译慢”；当前实现仍是翻译完成后再渲染最终文本，提频不能消掉 DeepLX 往返延迟。
 
+### 19) 打包后 worker 拉不起来
+现象：
+- 源码里本地运行正常，但打包成 exe 后主程序一启动就报 worker 启动失败。
+
+根因：
+- 开发态可以直接 `python listener_app/group_listener_worker.py`。
+- 打包态不能再假设用户机器上有一套可用的 `python + .py` 子进程模型。
+
+处理：
+- 打包产物必须包含两个 exe：
+  - 主程序 `wechat_sidebar.exe`
+  - 同目录 worker `group_listener_worker.exe`
+- 主程序在 frozen 环境下不再拉 `.py` 文件，而是直接拉同目录的 `group_listener_worker.exe`。
+- 打包态默认配置、日志、`.env.local`、运行时锁都按主程序目录解析，不再写回源码目录。
+
+### 20) 打包态目标名乱码，左侧多出脏会话项
+现象：
+- 源码运行时目标名正常，打包后侧边栏左侧会出现 `����` 之类乱码项。
+- 配置里的目标群明明在监听列表里，但实际消息跑进了一个乱码新项里。
+
+根因：
+- `group_listener_worker.exe` 是独立子进程。
+- 如果打包 worker 的 stdout/stderr 仍按系统本地编码写出，而主程序固定按 UTF-8 读管道，就会把事件里的 `chat_name`、debug 日志、`wx_auto` 日志全部解码坏。
+
+处理：
+- worker 启动时强制把 stdout/stderr 重配置为 UTF-8，保证 JSON 行事件在源码态和打包态都维持同一编码契约。
+- 侧边栏 UI 在 `session-only` 分支只接受配置里的 `listen.targets`；未知 `chat_name` 一律丢弃，不再把脏事件扩展成新的左侧会话项。
+
+### 21) 语音/动画表情占位污染翻译结果
+现象：
+- DeepLX 会把语音、动画表情这类方括号占位文本翻成 `[Voice Over] 3"`、`[animated emoticon]` 之类噪音。
+- 这类结果没有学习价值，还会占翻译队列和 UI 空间。
+
+处理：
+- 在主进程进入翻译前，先过滤明显的媒体占位文本（图片、动画表情、语音等）。
+- 侧边栏头部增加“原文”开关，便于在不改配置的情况下切换查看消息原文，继续补充新的占位样本。
+
 ## 推荐运行命令
 
 ### 低干扰稳定方案（推荐）
 ```bash
-python examples/sidebar_translate_listener.py ^
+python listener_app/sidebar_translate_listener.py ^
   --config ".\config\listener.json"
 ```
 

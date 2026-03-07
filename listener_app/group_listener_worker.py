@@ -31,6 +31,19 @@ FOCUS_REFRESH_MISSING_TARGET_THRESHOLD = 3
 FOCUS_REFRESH_COOLDOWN_SECONDS = 15.0
 
 
+def configure_std_streams_for_utf8(stdout=None, stderr=None):
+    streams = [sys.stdout if stdout is None else stdout, sys.stderr if stderr is None else stderr]
+    for stream in streams:
+        try:
+            if stream and hasattr(stream, "reconfigure"):
+                stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            continue
+
+
+configure_std_streams_for_utf8()
+
+
 def emit(event: dict):
     print(json.dumps(event, ensure_ascii=False), flush=True)
 
