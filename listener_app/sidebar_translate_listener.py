@@ -88,6 +88,8 @@ TRANSLATE_QUEUE_DROP_LOG_INTERVAL_SECONDS = 5.0
 DEEPLX_MAX_RETRIES = 2
 DEEPLX_RETRY_BACKOFF_SECONDS = 0.6
 MIN_SIDEBAR_WIDTH = 280
+DEFAULT_SIDEBAR_WIDTH = 470
+DEFAULT_TARGET_PANEL_WIDTH = 150
 MIN_LISTEN_INTERVAL_SECONDS = 0.2
 CHAT_CACHE_LIMIT = 100
 TARGET_LABEL_MAX_CHARS = 6
@@ -1769,7 +1771,7 @@ class SidebarUI:
         content = ttk.Frame(self.root)
         content.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 8))
 
-        self.left_panel = ttk.Frame(content, width=180)
+        self.left_panel = ttk.Frame(content, width=DEFAULT_TARGET_PANEL_WIDTH)
         self.left_panel.pack_propagate(False)
         self.target_list = tk.Listbox(
             self.left_panel,
@@ -1835,7 +1837,7 @@ class SidebarUI:
             self._ensure_chat(target)
         if self.chat_order:
             self.switch_chat(self.chat_order[0])
-        self._set_target_panel_visible(False)
+        self._set_target_panel_visible(True)
         self.root.bind("<Control-b>", self.on_toggle_target_panel_shortcut)
         self.root.bind("<Control-B>", self.on_toggle_target_panel_shortcut)
         self.root.bind("<Control-Up>", self.on_switch_prev_chat_shortcut)
@@ -2401,7 +2403,7 @@ def main():
             DEFAULT_LISTEN_INTERVAL_SECONDS,
         )
         translate_timeout = read_config_float(translate_cfg, "timeout_seconds", 8.0)
-        width = read_config_int(display_cfg, "width", 420)
+        width = read_config_int(display_cfg, "width", DEFAULT_SIDEBAR_WIDTH)
         listen_interval = validate_positive_float("listen.interval_seconds", listen_interval)
         listen_interval = validate_float_min(
             "listen.interval_seconds",

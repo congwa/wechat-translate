@@ -27,7 +27,7 @@
     "english_only": true,
     "tts_auto_read_active_chat": true,
     "on_translate_fail": "show_cn_with_reason",
-    "width": 420,
+    "width": 470,
     "side": "right"
   },
   "tts": {
