@@ -109,7 +109,7 @@ class SidebarHelpersTest(unittest.TestCase):
                         "speaker": "zh_female_yingyujiaoxue_uranus_bigtts",
                         "audio_format": "wav",
                         "sample_rate": 32000,
-                        "speech_rate": -5,
+                        "speech_rate": -15,
                         "loudness_rate": 0,
                         "use_cache": True,
                     }
@@ -132,7 +132,7 @@ class SidebarHelpersTest(unittest.TestCase):
         self.assertEqual(settings.audio_format, "wav")
         self.assertEqual(settings.resource_id, "seed-tts-2.0")
         self.assertEqual(settings.sample_rate, 32000)
-        self.assertEqual(settings.speech_rate, -5)
+        self.assertEqual(settings.speech_rate, -15)
         self.assertEqual(settings.loudness_rate, 0)
         self.assertTrue(settings.use_cache)
 
@@ -206,7 +206,7 @@ class SidebarHelpersTest(unittest.TestCase):
             resource_id="seed-tts-2.0",
             speaker="zh_female_yingyujiaoxue_uranus_bigtts",
             sample_rate=32000,
-            speech_rate=-5,
+            speech_rate=-15,
             loudness_rate=0,
             use_cache=True,
         )
@@ -221,7 +221,7 @@ class SidebarHelpersTest(unittest.TestCase):
         self.assertEqual(payload["req_params"]["speaker"], settings.speaker)
         self.assertEqual(payload["req_params"]["audio_params"]["format"], "wav")
         self.assertEqual(payload["req_params"]["audio_params"]["sample_rate"], 32000)
-        self.assertEqual(payload["req_params"]["audio_params"]["speech_rate"], -5)
+        self.assertEqual(payload["req_params"]["audio_params"]["speech_rate"], -15)
         self.assertEqual(payload["req_params"]["audio_params"]["loudness_rate"], 0)
         self.assertTrue(payload["req_params"]["additions"]["cache_config"]["use_cache"])
         self.assertEqual(payload["req_params"]["additions"]["cache_config"]["text_type"], 1)
@@ -260,7 +260,7 @@ class SidebarHelpersTest(unittest.TestCase):
                         "speaker": "zh_female_yingyujiaoxue_uranus_bigtts",
                         "audio_format": "wav",
                         "sample_rate": 32000,
-                        "speech_rate": -5,
+                        "speech_rate": -15,
                         "loudness_rate": 0,
                         "use_cache": False,
                     }
@@ -280,7 +280,7 @@ class SidebarHelpersTest(unittest.TestCase):
         self.assertIn("backend=doubao", runtime_text)
         self.assertIn("seed-tts-2.0", runtime_text)
         self.assertIn("sample_rate=32000", runtime_text)
-        self.assertIn("speech_rate=-5", runtime_text)
+        self.assertIn("speech_rate=-15", runtime_text)
         self.assertIn("loudness_rate=0", runtime_text)
         self.assertIn("use_cache=False", runtime_text)
 
@@ -897,7 +897,7 @@ class SidebarHelpersTest(unittest.TestCase):
             )
         )
 
-    def test_on_tts_action_reads_bound_english_text(self):
+    def test_on_tts_hover_reads_bound_english_text(self):
         class FakePlayer:
             def __init__(self):
                 self.calls = []
@@ -906,30 +906,42 @@ class SidebarHelpersTest(unittest.TestCase):
                 self.calls.append(text)
                 return True
 
+        class FakeText:
+            def configure(self, **_kwargs):
+                return None
+
         ui = object.__new__(sidebar.SidebarUI)
         ui.tts_player = FakePlayer()
+        ui.text = FakeText()
         ui._tts_action_tags = {"tts_action_1": "Ahem."}
+        ui._tts_hover_last_trigger_at = {}
 
-        result = sidebar.SidebarUI._on_tts_action(ui, "tts_action_1")
+        result = sidebar.SidebarUI._on_tts_hover(ui, "tts_action_1")
 
         self.assertEqual(ui.tts_player.calls, ["Ahem."])
         self.assertEqual(result, "break")
 
-    def test_on_tts_action_logs_rejected_result(self):
+    def test_on_tts_hover_logs_rejected_result(self):
         class FakePlayer:
             def speak_async(self, _text):
                 return False
 
+        class FakeText:
+            def configure(self, **_kwargs):
+                return None
+
         ui = object.__new__(sidebar.SidebarUI)
         ui.tts_player = FakePlayer()
+        ui.text = FakeText()
         logs = []
         ui.runtime_logger = logs.append
         ui._tts_action_tags = {"tts_action_1": "Ahem."}
+        ui._tts_hover_last_trigger_at = {}
 
-        result = sidebar.SidebarUI._on_tts_action(ui, "tts_action_1")
+        result = sidebar.SidebarUI._on_tts_hover(ui, "tts_action_1")
 
         self.assertEqual(result, "break")
-        self.assertTrue(any("tts click rejected" in line for line in logs))
+        self.assertTrue(any("tts hover rejected" in line for line in logs))
 
     def test_maybe_auto_read_message_only_reads_active_chat_when_enabled(self):
         class FakeVar:

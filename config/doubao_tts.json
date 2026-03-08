@@ -7,7 +7,7 @@
   "speaker": "en_female_dacey_uranus_bigtts",
   "audio_format": "wav",
   "sample_rate": 32000,
-  "speech_rate": -5,
+  "speech_rate": -15,
   "loudness_rate": 0,
   "use_cache": false,
   "uid": "wechat-pc-auto",

@@ -274,7 +274,7 @@
 - `tts.provider=windows_system` 时，仍走 Windows 系统 `System.Speech`，默认优先选 `Microsoft Zira Desktop`，不存在时再回退到其他英文 voice。
 - `tts.provider=doubao` 时，走豆包单向流式 WebSocket；当前播放链路要求 provider 配置里的 `audio_format=wav`，否则启动阶段直接报错。
 - 豆包配置当前额外支持 `sample_rate` / `speech_rate` / `loudness_rate` / `use_cache`。
-- 默认值收敛为 `sample_rate=32000`、`speech_rate=-5`、`loudness_rate=0`、`use_cache=false`。
+- 默认值收敛为 `sample_rate=32000`、`speech_rate=-15`、`loudness_rate=0`、`use_cache=false`。
 - `sample_rate` 不再只做“>=8000”这种宽松校验，而是限制在官方支持值集合内；`speech_rate` / `loudness_rate` 也按官方范围 fail-fast 校验，避免把脏值拖到运行时才炸。
 - `use_cache` 只做成显式开关，默认不启用；聊天短句重复率有限，而且缓存会干扰不同语速/音量参数的对比。
 - 这条链路允许引入云 TTS，但必须把 provider 私有参数与监听主配置解耦，避免把不同供应商字段继续堆进 `listener.json`。
