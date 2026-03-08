@@ -103,6 +103,10 @@ SUPPORTED_TTS_PROVIDERS = ("windows_system", "doubao")
 DEFAULT_TTS_PROVIDER = "doubao"
 DOUBAO_TTS_DEFAULT_CONFIG_PATH = os.path.join("config", "doubao_tts.json")
 DOUBAO_TTS_DEFAULT_ENDPOINT = "wss://openspeech.bytedance.com/api/v3/tts/unidirectional/stream"
+DOUBAO_TTS_SUPPORTED_SAMPLE_RATES = (8000, 16000, 22050, 24000, 32000, 44100, 48000)
+DOUBAO_TTS_DEFAULT_SAMPLE_RATE = 32000
+DOUBAO_TTS_DEFAULT_SPEECH_RATE = -5
+DOUBAO_TTS_DEFAULT_LOUDNESS_RATE = 0
 DOUBAO_HEADER_FIXED = bytes([0x11, 0x10, 0x10, 0x00])
 DOUBAO_MSG_TYPE_FULL_SERVER_RESPONSE = 0x9
 DOUBAO_MSG_TYPE_AUDIO_ONLY_SERVER = 0xB
@@ -281,6 +285,19 @@ def validate_float_min(name: str, value: float, minimum: float) -> float:
 def validate_int_min(name: str, value: int, minimum: int) -> int:
     if value < minimum:
         raise RuntimeError(f"{name} must be >= {minimum}, got {value!r}")
+    return value
+
+
+def validate_int_range(name: str, value: int, minimum: int, maximum: int) -> int:
+    if value < minimum or value > maximum:
+        raise RuntimeError(f"{name} must be in [{minimum}, {maximum}], got {value!r}")
+    return value
+
+
+def validate_int_choices(name: str, value: int, choices: tuple[int, ...]) -> int:
+    if value not in choices:
+        joined = ", ".join(str(item) for item in choices)
+        raise RuntimeError(f"{name} must be one of [{joined}], got {value!r}")
     return value
 
 
@@ -577,7 +594,10 @@ class DoubaoTTSSettings:
     resource_id: str
     speaker: str
     audio_format: str = "wav"
-    sample_rate: int = 24000
+    sample_rate: int = DOUBAO_TTS_DEFAULT_SAMPLE_RATE
+    speech_rate: int = DOUBAO_TTS_DEFAULT_SPEECH_RATE
+    loudness_rate: int = DOUBAO_TTS_DEFAULT_LOUDNESS_RATE
+    use_cache: bool = False
     uid: str = "wechat-pc-auto"
     connect_timeout_seconds: float = 10.0
 
@@ -606,7 +626,10 @@ def load_doubao_tts_settings(config_path: str, *, base_dir: str = ROOT_DIR) -> D
     resource_id = str(raw.get("resource_id") or "").strip()
     speaker = str(raw.get("speaker") or "").strip()
     audio_format = str(raw.get("audio_format") or "wav").strip().lower()
-    sample_rate = read_config_int(raw, "sample_rate", 24000)
+    sample_rate = read_config_int(raw, "sample_rate", DOUBAO_TTS_DEFAULT_SAMPLE_RATE)
+    speech_rate = read_config_int(raw, "speech_rate", DOUBAO_TTS_DEFAULT_SPEECH_RATE)
+    loudness_rate = read_config_int(raw, "loudness_rate", DOUBAO_TTS_DEFAULT_LOUDNESS_RATE)
+    use_cache = as_bool(raw.get("use_cache"), False)
     uid = str(raw.get("uid") or "wechat-pc-auto").strip() or "wechat-pc-auto"
     connect_timeout_seconds = read_config_float(raw, "connect_timeout_seconds", 10.0)
 
@@ -624,7 +647,11 @@ def load_doubao_tts_settings(config_path: str, *, base_dir: str = ROOT_DIR) -> D
         raise RuntimeError(
             f"doubao audio_format must be 'wav' for current Windows playback path, got {audio_format!r}"
         )
-    sample_rate = validate_int_min("doubao.sample_rate", sample_rate, 8000)
+    sample_rate = validate_int_choices(
+        "doubao.sample_rate", sample_rate, DOUBAO_TTS_SUPPORTED_SAMPLE_RATES
+    )
+    speech_rate = validate_int_range("doubao.speech_rate", speech_rate, -50, 100)
+    loudness_rate = validate_int_range("doubao.loudness_rate", loudness_rate, -50, 100)
     connect_timeout_seconds = validate_positive_float(
         "doubao.connect_timeout_seconds",
         connect_timeout_seconds,
@@ -637,6 +664,9 @@ def load_doubao_tts_settings(config_path: str, *, base_dir: str = ROOT_DIR) -> D
         speaker=speaker,
         audio_format=audio_format,
         sample_rate=sample_rate,
+        speech_rate=speech_rate,
+        loudness_rate=loudness_rate,
+        use_cache=use_cache,
         uid=uid,
         connect_timeout_seconds=connect_timeout_seconds,
     )
@@ -652,18 +682,28 @@ def build_doubao_ws_headers(settings: DoubaoTTSSettings, connect_id: str) -> dic
 
 
 def build_doubao_tts_request_payload(settings: DoubaoTTSSettings, text: str) -> dict[str, Any]:
+    req_params: dict[str, Any] = {
+        "text": text,
+        "speaker": settings.speaker,
+        "audio_params": {
+            "format": settings.audio_format,
+            "sample_rate": settings.sample_rate,
+            "speech_rate": settings.speech_rate,
+            "loudness_rate": settings.loudness_rate,
+        },
+    }
+    if settings.use_cache:
+        req_params["additions"] = {
+            "cache_config": {
+                "text_type": 1,
+                "use_cache": True,
+            }
+        }
     return {
         "user": {
             "uid": settings.uid,
         },
-        "req_params": {
-            "text": text,
-            "speaker": settings.speaker,
-            "audio_params": {
-                "format": settings.audio_format,
-                "sample_rate": settings.sample_rate,
-            },
-        },
+        "req_params": req_params,
     }
 
 
@@ -920,7 +960,13 @@ def create_tts_player(
     settings = player.settings
     return (
         player,
-        f"tts configured backend=doubao config={resolve_config_file_path(config_path, base_dir=config_dir)} resource_id={settings.resource_id} speaker={settings.speaker} format={settings.audio_format} sample_rate={settings.sample_rate}",
+        (
+            "tts configured "
+            f"backend=doubao config={resolve_config_file_path(config_path, base_dir=config_dir)} "
+            f"resource_id={settings.resource_id} speaker={settings.speaker} format={settings.audio_format} "
+            f"sample_rate={settings.sample_rate} speech_rate={settings.speech_rate} "
+            f"loudness_rate={settings.loudness_rate} use_cache={settings.use_cache}"
+        ),
     )
 
 

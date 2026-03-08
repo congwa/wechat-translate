@@ -119,7 +119,10 @@
   "resource_id": "seed-tts-2.0",
   "speaker": "en_female_dacey_uranus_bigtts",
   "audio_format": "wav",
-  "sample_rate": 24000,
+  "sample_rate": 32000,
+  "speech_rate": -5,
+  "loudness_rate": 0,
+  "use_cache": false,
   "uid": "wechat-pc-auto",
   "connect_timeout_seconds": 10.0
 }
@@ -135,7 +138,19 @@
 - `audio_format`：当前必须是 `wav`。
   - 这不是拍脑袋限制；当前播放链路走 Windows 原生 `winsound`，它不适合直接播 `mp3`。
   - 如果你强行配 `mp3`，启动阶段会直接报错，而不是拖到运行时随机炸。
-- `sample_rate`：采样率，当前默认 `24000`。
+- `sample_rate`：采样率，当前默认 `32000`。
+  - 当前只接受官方支持值：`8000 / 16000 / 22050 / 24000 / 32000 / 44100 / 48000`。
+  - 默认提到 `32000`，是为了在“短句朗读更细一点”和“网络/播放成本别乱涨”之间取平衡；不是让你无脑拉到 `48000`。
+- `speech_rate`：语速，当前默认 `-5`。
+  - 允许范围：`-50 ~ 100`。
+  - 默认略慢一点，适合当前英文短句学习场景；继续下压会更像慢放，不是更自然。
+- `loudness_rate`：音量倍率调节，当前默认 `0`。
+  - 允许范围：`-50 ~ 100`。
+  - 只有在某个音色明显偏小声时再加，不要把它当成“音质增强”开关。
+- `use_cache`：是否启用豆包文本缓存，当前默认 `false`。
+  - 开启后，相同文本可以直接命中服务端缓存，加快重复合成。
+  - 默认关闭；聊天消息重复率没那么高，而且调音色/语速时缓存会污染对比结果。
+  - 当前实现启用缓存时固定按“普通文本”发送 `cache_config.text_type=1`，不支持把 SSML 一起混进来。
 - `uid`：业务侧用户标识，用于请求体。
 - `connect_timeout_seconds`：建连超时秒数，必须 `> 0`。
 
@@ -149,6 +164,7 @@
 - 关闭“原文”且消息正文可判定为英文时，消息尾部会显示一个 `▶`，点击后通过当前 `tts.provider` 朗读英文。
 - 当 `tts.provider=windows_system` 时，默认优先选用 `Microsoft Zira Desktop`，不存在时回退到其他英文 voice。
 - 当 `tts.provider=doubao` 时，会先请求豆包单向流式 WebSocket，再把返回的 `wav` 在本机顺序播放。
+- 豆包请求当前会固定带上 `audio_params.sample_rate` / `speech_rate` / `loudness_rate`；启用 `use_cache=true` 时，还会附带 `cache_config.use_cache=true`。
 - 当 `display.tts_auto_read_active_chat=true` 时，当前选中会话的新英文消息在翻译结果落地后会自动朗读；切到其他会话后，旧会话新消息不会补读。
 - UI 不显示 `source=session_preview`，该字段仅用于内部日志。
 - 当前侧边栏仅用于监听与展示，不提供消息发送输入框。

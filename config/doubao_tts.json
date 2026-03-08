@@ -6,7 +6,10 @@
   "resource_id": "seed-tts-2.0",
   "speaker": "en_female_dacey_uranus_bigtts",
   "audio_format": "wav",
-  "sample_rate": 24000,
+  "sample_rate": 32000,
+  "speech_rate": -5,
+  "loudness_rate": 0,
+  "use_cache": false,
   "uid": "wechat-pc-auto",
   "connect_timeout_seconds": 10.0
 }

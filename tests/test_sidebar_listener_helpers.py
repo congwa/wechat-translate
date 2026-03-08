@@ -45,6 +45,21 @@ class SidebarHelpersTest(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             sidebar.validate_int_min("w", 200, 280)
 
+    def test_validate_int_range(self):
+        self.assertEqual(sidebar.validate_int_range("x", -5, -50, 100), -5)
+        with self.assertRaises(RuntimeError):
+            sidebar.validate_int_range("x", -51, -50, 100)
+        with self.assertRaises(RuntimeError):
+            sidebar.validate_int_range("x", 101, -50, 100)
+
+    def test_validate_int_choices(self):
+        self.assertEqual(
+            sidebar.validate_int_choices("x", 32000, (8000, 16000, 32000)),
+            32000,
+        )
+        with self.assertRaises(RuntimeError):
+            sidebar.validate_int_choices("x", 12345, (8000, 16000, 32000))
+
     def test_read_config_type_validation(self):
         self.assertEqual(sidebar.read_config_float({}, "interval_seconds", 1.0), 1.0)
         self.assertEqual(sidebar.read_config_int({}, "width", 420), 420)
@@ -93,7 +108,10 @@ class SidebarHelpersTest(unittest.TestCase):
                         "resource_id": "seed-tts-2.0",
                         "speaker": "zh_female_yingyujiaoxue_uranus_bigtts",
                         "audio_format": "wav",
-                        "sample_rate": 24000,
+                        "sample_rate": 32000,
+                        "speech_rate": -5,
+                        "loudness_rate": 0,
+                        "use_cache": True,
                     }
                 ),
                 encoding="utf-8",
@@ -113,6 +131,10 @@ class SidebarHelpersTest(unittest.TestCase):
         self.assertEqual(settings.access_token, "token-1")
         self.assertEqual(settings.audio_format, "wav")
         self.assertEqual(settings.resource_id, "seed-tts-2.0")
+        self.assertEqual(settings.sample_rate, 32000)
+        self.assertEqual(settings.speech_rate, -5)
+        self.assertEqual(settings.loudness_rate, 0)
+        self.assertTrue(settings.use_cache)
 
     def test_load_doubao_tts_settings_rejects_non_wav_format(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -134,6 +156,48 @@ class SidebarHelpersTest(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 sidebar.load_doubao_tts_settings(str(config_path))
 
+    def test_load_doubao_tts_settings_rejects_unsupported_sample_rate(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = pathlib.Path(tmpdir) / "doubao_tts.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "provider": "doubao",
+                        "appid": "appid-1",
+                        "access_token": "token-1",
+                        "resource_id": "seed-tts-2.0",
+                        "speaker": "zh_female_yingyujiaoxue_uranus_bigtts",
+                        "audio_format": "wav",
+                        "sample_rate": 12345,
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaises(RuntimeError):
+                sidebar.load_doubao_tts_settings(str(config_path))
+
+    def test_load_doubao_tts_settings_rejects_out_of_range_speech_rate(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = pathlib.Path(tmpdir) / "doubao_tts.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "provider": "doubao",
+                        "appid": "appid-1",
+                        "access_token": "token-1",
+                        "resource_id": "seed-tts-2.0",
+                        "speaker": "zh_female_yingyujiaoxue_uranus_bigtts",
+                        "audio_format": "wav",
+                        "speech_rate": -51,
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaises(RuntimeError):
+                sidebar.load_doubao_tts_settings(str(config_path))
+
     def test_build_doubao_ws_headers_and_payload(self):
         settings = sidebar.DoubaoTTSSettings(
             endpoint="wss://example.invalid/tts",
@@ -141,6 +205,10 @@ class SidebarHelpersTest(unittest.TestCase):
             access_token="token-1",
             resource_id="seed-tts-2.0",
             speaker="zh_female_yingyujiaoxue_uranus_bigtts",
+            sample_rate=32000,
+            speech_rate=-5,
+            loudness_rate=0,
+            use_cache=True,
         )
 
         headers = sidebar.build_doubao_ws_headers(settings, "connect-id")
@@ -152,6 +220,11 @@ class SidebarHelpersTest(unittest.TestCase):
         self.assertEqual(headers["X-Api-Connect-Id"], "connect-id")
         self.assertEqual(payload["req_params"]["speaker"], settings.speaker)
         self.assertEqual(payload["req_params"]["audio_params"]["format"], "wav")
+        self.assertEqual(payload["req_params"]["audio_params"]["sample_rate"], 32000)
+        self.assertEqual(payload["req_params"]["audio_params"]["speech_rate"], -5)
+        self.assertEqual(payload["req_params"]["audio_params"]["loudness_rate"], 0)
+        self.assertTrue(payload["req_params"]["additions"]["cache_config"]["use_cache"])
+        self.assertEqual(payload["req_params"]["additions"]["cache_config"]["text_type"], 1)
 
     def test_normalize_wav_size_fields_rewrites_streaming_placeholders(self):
         wav_bytes = (
@@ -186,6 +259,10 @@ class SidebarHelpersTest(unittest.TestCase):
                         "resource_id": "seed-tts-2.0",
                         "speaker": "zh_female_yingyujiaoxue_uranus_bigtts",
                         "audio_format": "wav",
+                        "sample_rate": 32000,
+                        "speech_rate": -5,
+                        "loudness_rate": 0,
+                        "use_cache": False,
                     }
                 ),
                 encoding="utf-8",
@@ -202,6 +279,10 @@ class SidebarHelpersTest(unittest.TestCase):
         self.assertIsInstance(player, sidebar.DoubaoWebsocketTTS)
         self.assertIn("backend=doubao", runtime_text)
         self.assertIn("seed-tts-2.0", runtime_text)
+        self.assertIn("sample_rate=32000", runtime_text)
+        self.assertIn("speech_rate=-5", runtime_text)
+        self.assertIn("loudness_rate=0", runtime_text)
+        self.assertIn("use_cache=False", runtime_text)
 
     def test_doubao_run_blocking_emits_failure_log(self):
         settings = sidebar.DoubaoTTSSettings(
