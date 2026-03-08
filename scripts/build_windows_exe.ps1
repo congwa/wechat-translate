@@ -1,10 +1,15 @@
 param(
     [string]$Python = "python",
     [string]$ArtifactRoot = "artifacts/windows-app",
-    [switch]$Console
+    [switch]$Console,
+    [switch]$CopyDotEnvLocal
 )
 
 $ErrorActionPreference = "Stop"
+$KnownBenignBuildWarningPatterns = @(
+    'WARNING:\s+Library UIAutomationClient_VC140_X64\.dll required via ctypes not found',
+    'WARNING:\s+Library UIAutomationClient_VC140_X86\.dll required via ctypes not found'
+)
 
 function Normalize-WindowsPath {
     param(
@@ -19,6 +24,20 @@ function Normalize-WindowsPath {
         return $Path.Substring(4)
     }
     return $Path
+}
+
+function Test-IsKnownBenignBuildWarning {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Line
+    )
+
+    foreach ($pattern in $KnownBenignBuildWarningPatterns) {
+        if ($Line -match $pattern) {
+            return $true
+        }
+    }
+    return $false
 }
 
 function Invoke-BuildCommand {
@@ -60,7 +79,64 @@ function Invoke-BuildCommand {
 
         $warningLines = @($output | Where-Object { "$_" -match '\bWARNING\b|\bERROR\b' })
         if ($warningLines.Count -gt 0) {
-            $warningLines | ForEach-Object { Write-Warning "$_" }
+            $knownBenignWarnings = @(
+                $warningLines |
+                Where-Object { Test-IsKnownBenignBuildWarning -Line "$_" } |
+                Sort-Object -Unique
+            )
+            $unexpectedWarnings = @(
+                $warningLines |
+                Where-Object { -not (Test-IsKnownBenignBuildWarning -Line "$_") }
+            )
+
+            if ($knownBenignWarnings.Count -gt 0) {
+                Write-Host "NOTE: PyInstaller reported optional uiautomation Bitmap helper DLLs missing. Current session listener build does not use Bitmap APIs; these lines do not block worker/sidebar startup."
+            }
+            if ($unexpectedWarnings.Count -gt 0) {
+                $unexpectedWarnings | ForEach-Object { Write-Warning "$_" }
+            }
+        }
+    }
+    finally {
+        Remove-Item $stdoutPath, $stderrPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Invoke-SmokeTestCommand {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$StepName,
+        [Parameter(Mandatory = $true)]
+        [string]$FilePath,
+        [Parameter(Mandatory = $true)]
+        [string[]]$Arguments
+    )
+
+    $stdoutPath = [System.IO.Path]::GetTempFileName()
+    $stderrPath = [System.IO.Path]::GetTempFileName()
+    try {
+        $process = Start-Process `
+            -FilePath $FilePath `
+            -ArgumentList $Arguments `
+            -NoNewWindow `
+            -Wait `
+            -PassThru `
+            -RedirectStandardOutput $stdoutPath `
+            -RedirectStandardError $stderrPath
+
+        $output = @()
+        if (Test-Path $stdoutPath) {
+            $output += Get-Content -Path $stdoutPath
+        }
+        if (Test-Path $stderrPath) {
+            $output += Get-Content -Path $stderrPath
+        }
+
+        if ($process.ExitCode -ne 0) {
+            if ($output.Count -gt 0) {
+                $output | ForEach-Object { Write-Host $_ }
+            }
+            throw "$StepName failed"
         }
     }
     finally {
@@ -88,7 +164,9 @@ $MainSource = Join-Path $RepoRoot "listener_app\sidebar_translate_listener.py"
 $WorkerSource = Join-Path $RepoRoot "listener_app\group_listener_worker.py"
 $ConfigData = "{0};config" -f (Join-Path $RepoRoot "config")
 $SourceConfigPath = Join-Path $RepoRoot "config\listener.json"
+$SourceDotEnvPath = Join-Path $RepoRoot ".env.local"
 $ConfigRequiresDeepLXEnv = $false
+$DotEnvCopied = $false
 
 if (Test-Path $SourceConfigPath) {
     try {
@@ -173,7 +251,24 @@ if (-not (Test-Path $WorkerExe)) {
     throw "Worker executable missing after build: $WorkerExe"
 }
 
+Write-Host "Smoke testing worker executable..."
+Invoke-SmokeTestCommand `
+    -StepName "Worker smoke test (--help)" `
+    -FilePath $WorkerExe `
+    -Arguments @("--help")
+
 Copy-Item $WorkerExe (Join-Path $MainAppRoot "$WorkerName.exe") -Force
+
+if ($CopyDotEnvLocal) {
+    if (Test-Path $SourceDotEnvPath) {
+        Copy-Item $SourceDotEnvPath (Join-Path $MainAppRoot ".env.local") -Force
+        $DotEnvCopied = $true
+        Write-Host "NOTE: copied .env.local into the app folder. This artifact now contains local environment secrets; do not distribute it as-is."
+    }
+    else {
+        Write-Warning "CopyDotEnvLocal requested, but source file is missing: $SourceDotEnvPath"
+    }
+}
 
 if (Test-Path $BuildRoot) {
     Remove-Item $BuildRoot -Recurse -Force
@@ -189,6 +284,6 @@ Write-Host ""
 Write-Host "Build completed."
 Write-Host "Main app folder: $MainAppRoot"
 Write-Host "Launch: $(Join-Path $MainAppRoot "$MainName.exe")"
-if ($ConfigRequiresDeepLXEnv) {
+if ($ConfigRequiresDeepLXEnv -and -not $DotEnvCopied) {
     Write-Host "NOTE: current config relies on DEEPLX_URL. .env.local is not copied into the app folder. Put .env.local beside wechat_sidebar.exe or set config\\listener.json translate.deeplx_url before launching."
 }

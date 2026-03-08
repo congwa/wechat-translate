@@ -18,17 +18,21 @@ pip install -r requirements.txt
 
 ## 启动
 
-监听目标、翻译策略、侧边栏参数都从 `config/listener.json` 读取：
+监听目标、翻译策略、侧边栏参数都从 `config/listener.json` 读取；当前默认 TTS provider 是豆包，provider 的私有参数拆到独立 JSON（例如 `config/doubao_tts.json`）：
 
 ```bash
 python listener_app/sidebar_translate_listener.py --config ".\config\listener.json"
 ```
 
-接入 DeepLX 时，推荐把真实地址放进项目根目录的 `.env.local`：
+接入 DeepLX / 豆包 TTS 时，推荐把真实密钥放进项目根目录的 `.env.local`：
 
 ```bash
 DEEPLX_URL=http://127.0.0.1:1188/translate
+VOLCENGINE_TTS_APPID=<your-appid>
+VOLCENGINE_TTS_ACCESS_TOKEN=<your-access-token>
 ```
+
+如果你不想依赖云 TTS，把 `config/listener.json` 里的 `tts.provider` 改回 `windows_system` 即可。
 
 或者临时在 PowerShell 中设置：
 
@@ -45,6 +49,14 @@ python listener_app/sidebar_translate_listener.py --config ".\config\listener.js
 powershell -ExecutionPolicy Bypass -File .\scripts\build_windows_exe.ps1
 ```
 
+如果你确认这是本机自用包，想把仓库根目录 `.env.local` 一起复制到产物目录：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\build_windows_exe.ps1 -CopyDotEnvLocal
+```
+
+默认不复制。别把这个开关当默认配置，否则你就是在主动把本机环境变量跟着产物一起打出去。
+
 默认产物目录：
 
 ```text
@@ -58,7 +70,7 @@ artifacts\windows-app\wechat_sidebar\
 ## 当前架构
 
 - `listener_app/sidebar_translate_listener.py`
-  负责配置读取、侧边栏 UI、翻译线程、单 worker 管理、去重和运行时锁。
+  负责配置读取、侧边栏 UI、翻译线程、可插拔 TTS、单 worker 管理、去重和运行时锁。
 - `listener_app/group_listener_worker.py`
   负责单进程多目标监听；一次 UIA 扫描覆盖全部 `listen.targets`。
 - `wechat_auto/window.py`
@@ -82,6 +94,7 @@ artifacts\windows-app\wechat_sidebar\
 
 ```text
 config/
+├── doubao_tts.json
 ├── listener.json
 └── listener.md
 docs/
