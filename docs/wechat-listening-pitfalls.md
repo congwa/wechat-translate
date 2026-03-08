@@ -9,12 +9,13 @@
 
 目标：在不改微信客户端的前提下，稳定监听指定会话的预览消息并在侧边栏展示（可接 DeepLX 翻译）。
 
-当前监听目标来源于配置文件：`config/listener.json` 的 `listen.targets`。
+启动时监听目标来源于配置文件：`config/listener.json` 的 `listen.targets`；运行中若用户在侧边栏显式添加/删除 target，也会回写该配置并重启 worker 生效。
 
 ## 架构结论
 - 监听与 UI 必须分离：`group_listener_worker.py` 负责抓消息，`sidebar_translate_listener.py` 负责展示与翻译。
 - 当前监听主链路已收敛为 `session-only`。
 - 当前 worker 为单进程多目标：一次扫描微信主窗口左侧会话列表，覆盖全部 `listen.targets`。
+- 运行时 target 变更不走 IPC 热更新；当前实现是“UI 显式增删 -> 回写 `listener.json` -> 平滑重启同一个 worker”。
 - 当前主路径不再维护 `chat` / `mixed` 监听模式；相关复杂度已从主链路删除。
 - 当前分支不再维护任何主动操作微信的能力（发送消息、发送文件、自动回复、写输入框）。
 - 默认行为必须低干扰：
@@ -249,7 +250,7 @@
 
 处理：
 - worker 启动时强制把 stdout/stderr 重配置为 UTF-8，保证 JSON 行事件在源码态和打包态都维持同一编码契约。
-- 侧边栏 UI 在 `session-only` 分支只接受配置里的 `listen.targets`；未知 `chat_name` 一律丢弃，不再把脏事件扩展成新的左侧会话项。
+- 侧边栏 UI 在 `session-only` 分支只接受“当前运行 target 集”；它来自启动配置，外加用户在窗口中显式添加/删除并回写配置后的结果。未知 `chat_name` 一律丢弃，不再把脏事件扩展成新的左侧会话项。
 
 ### 21) 语音/视频/动画表情占位污染翻译结果
 现象：
@@ -267,6 +268,7 @@
 
 处理：
 - 当前 `▶` 朗读入口只在“原文关闭 + 正文可判定为英文 + 非 Loading/失败文本”时显示。
+- 当前 `▶` 改为“悬停即触发”，不再要求点击；但悬停入口带短冷却，避免鼠标抖动把同一段英文重复塞进 TTS 队列。
 - TTS provider 现在走独立配置：`listener.json` 只负责选择 `tts.provider`，豆包私有参数拆到 `config/doubao_tts.json`。
 - 当前默认 provider 已切到 `doubao`；这会让启动默认依赖豆包凭证，不再像旧版那样天然只依赖本机系统语音。
 - `tts.provider=windows_system` 时，仍走 Windows 系统 `System.Speech`，默认优先选 `Microsoft Zira Desktop`，不存在时再回退到其他英文 voice。
@@ -290,20 +292,20 @@
 
 ### 24) TTS 出问题但日志看不见
 现象：
-- 豆包或系统 TTS 明明“没响”，但日志文件里只有启动配置，没有手点 `▶`、自动朗读、合成失败、播放失败的细节。
+- 豆包或系统 TTS 明明“没响”，但日志文件里只有启动配置，没有悬停 `▶`、自动朗读、合成失败、播放失败的细节。
 - 用户只能猜是按钮没触发、条件被拦截、豆包鉴权失败，还是播放链路挂了。
 - 还有一种更误导人的情况：日志里已经出现 `tts synthesize success`，甚至业务代码已经走到 `tts played`，但耳朵里仍然没有实际语音。
 
 根因：
 - 旧逻辑只在启动时记录 `tts configured ...`。
 - 运行期失败原因只写进 TTS 对象内部 `_last_error`，UI 和日志文件都看不到。
-- `▶` 点击与自动朗读的触发点原先也没有补充运行期日志。
+- `▶` 悬停与自动朗读的触发点原先也没有补充运行期日志。
 - 豆包单向流式返回的 WAV 可能把 `RIFF` / `data` chunk size 写成 `0xFFFFFFFF` 占位值；这种音频有时能被宽松播放器容忍，但 `winsound` 这类 Windows 播放路径兼容性更差，表现成“合成成功但不出声”。
 
 处理：
 - TTS runtime 日志统一回流到主进程事件队列，再写入状态栏与 `logging.file`。
 - 当前至少会记录这些关键节点：
-  - `tts click queued/rejected`
+  - `tts hover queued/rejected/ignored`
   - `tts auto queued/skipped/rejected`
   - `tts synthesize start/success`
   - `tts played`
@@ -332,8 +334,8 @@ python listener_app/sidebar_translate_listener.py ^
 3. 若无消息事件，临时设 `listen.worker_debug=true`，观察 `debug target=... session_preview=... unread=...` 是否变化。
 4. `session_preview` 不变化时，再设 `listen.focus_refresh=true` 验证是否恢复。
 5. 若怀疑 TTS 无效，直接搜 `tts ` 关键字：
-   - 只有 `tts configured ...`，没有 `tts click/tts auto`：说明根本没触发朗读入口。
-   - 有 `tts click/tts auto rejected|skipped`：看 `reason=...` 判断是原文模式、待翻译还是非英文。
+   - 只有 `tts configured ...`，没有 `tts hover/tts auto`：说明根本没触发朗读入口。
+   - 有 `tts hover/tts auto rejected|skipped|ignored`：看 `reason=...` 判断是原文模式、待翻译、冷却命中还是非英文。
    - 有 `tts synthesize start` 但没有 `tts played`：优先看后续 `tts failed`，通常就是豆包网络/鉴权/协议或本机播放失败。
    - 有 `tts synthesize success` 但实际没声：优先怀疑返回的是流式占位 WAV 头或 Windows 播放兼容性，不要先把锅甩给豆包鉴权或系统静音。
 

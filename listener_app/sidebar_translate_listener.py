@@ -19,7 +19,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from tkinter import font as tkfont
-from tkinter import scrolledtext, ttk
+from tkinter import messagebox, scrolledtext, simpledialog, ttk
 from urllib import error, request
 from urllib.parse import urlparse
 from typing import Any, Callable, Dict
@@ -94,6 +94,7 @@ UI_DRAIN_INTERVAL_MS = 80
 TRANSLATE_PENDING_TEXT = "Loading..."
 META_TEXT_COLOR = "#555555"
 TTS_ACTION_SYMBOL = "▶"
+TTS_HOVER_TRIGGER_COOLDOWN_SECONDS = 1.2
 CHAT_SWITCH_SHORTCUT_DEBOUNCE_SECONDS = 0.15
 WORKER_RESTART_INITIAL_BACKOFF_SECONDS = 3.0
 WORKER_RESTART_MAX_BACKOFF_SECONDS = 30.0
@@ -176,6 +177,52 @@ def load_json_config(path: str) -> Dict[str, Any]:
     if not isinstance(raw, dict):
         raise RuntimeError(f"config root must be object: {path}")
     return raw
+
+
+def save_json_config_atomic(path: str, payload: Dict[str, Any]):
+    normalized = os.path.abspath(path)
+    parent = os.path.dirname(normalized)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+
+    fd, temp_path = tempfile.mkstemp(
+        prefix="listener.",
+        suffix=".tmp",
+        dir=parent or None,
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+            f.write("\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temp_path, normalized)
+    except Exception:
+        try:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+        except Exception:
+            pass
+        raise
+
+
+def save_listener_targets_config(path: str, config: Dict[str, Any], targets: list[str]):
+    normalized_targets = normalize_targets(targets)
+    if not normalized_targets:
+        raise RuntimeError("listen.targets cannot be empty")
+
+    payload = dict(config)
+    listen_cfg = payload.get("listen", {})
+    if not isinstance(listen_cfg, dict):
+        listen_cfg = {}
+    else:
+        listen_cfg = dict(listen_cfg)
+    listen_cfg["targets"] = normalized_targets
+    payload["listen"] = listen_cfg
+
+    save_json_config_atomic(path, payload)
+    config.clear()
+    config.update(payload)
 
 
 def resolve_config_file_path(path: Any, *, base_dir: str = ROOT_DIR) -> str:
@@ -1486,10 +1533,7 @@ def acquire_target_lock(target: str) -> tuple[bool, str]:
     return True, lock_path
 
 
-def release_target_lock():
-    global _TARGET_LOCK_PATHS
-    lock_paths = list(_TARGET_LOCK_PATHS)
-    _TARGET_LOCK_PATHS = []
+def _release_lock_paths(lock_paths: list[str]):
     for path in lock_paths:
         if not path:
             continue
@@ -1505,6 +1549,22 @@ def release_target_lock():
                 os.remove(path)
         except Exception:
             pass
+
+
+def release_target_lock_path(lock_path: str):
+    global _TARGET_LOCK_PATHS
+    path = str(lock_path or "").strip()
+    if not path:
+        return
+    _TARGET_LOCK_PATHS = [item for item in _TARGET_LOCK_PATHS if item != path]
+    _release_lock_paths([path])
+
+
+def release_target_lock():
+    global _TARGET_LOCK_PATHS
+    lock_paths = list(_TARGET_LOCK_PATHS)
+    _TARGET_LOCK_PATHS = []
+    _release_lock_paths(lock_paths)
 
 
 def normalize_translate_provider(value: Any) -> str:
@@ -1620,8 +1680,12 @@ class SidebarUI:
         self.chat_messages: dict[str, list[SidebarMessage]] = {}
         self.unread_counts: dict[str, int] = {}
         self.active_chat = ""
+        self._on_add_target_request: Callable[[str], None] | None = None
+        self._on_remove_target_request: Callable[[str], None] | None = None
+        self._context_menu_target = ""
         self._tts_action_tags: dict[str, str] = {}
         self._tts_action_index = 0
+        self._tts_hover_last_trigger_at: dict[str, float] = {}
         self._last_chat_switch_shortcut_at = 0.0
 
         screen_w = self.root.winfo_screenwidth()
@@ -1647,6 +1711,14 @@ class SidebarUI:
             command=self.toggle_target_panel,
             width=6,
         ).pack(side=tk.LEFT, padx=(0, 6))
+        self.add_target_button = ttk.Button(
+            controls,
+            text="添加群",
+            command=self._on_add_target_clicked,
+            width=8,
+            state=tk.DISABLED,
+        )
+        self.add_target_button.pack(side=tk.LEFT, padx=(0, 6))
         ttk.Checkbutton(
             controls,
             text="原文",
@@ -1682,6 +1754,12 @@ class SidebarUI:
         )
         self.target_list.pack(fill=tk.BOTH, expand=True)
         self.target_list.bind("<<ListboxSelect>>", self._on_target_selected)
+        self.target_list.bind("<Button-3>", self._on_target_context_menu)
+        self.target_context_menu = tk.Menu(self.root, tearoff=0)
+        self.target_context_menu.add_command(
+            label="删除监听目标",
+            command=self._on_remove_target_menu,
+        )
 
         self.text = scrolledtext.ScrolledText(
             content,
@@ -1740,6 +1818,15 @@ class SidebarUI:
 
     def set_status(self, text: str):
         self.status_var.set(text)
+
+    def set_target_editor_handlers(
+        self,
+        on_add_target: Callable[[str], None] | None,
+        on_remove_target: Callable[[str], None] | None,
+    ):
+        self._on_add_target_request = on_add_target
+        self._on_remove_target_request = on_remove_target
+        self.add_target_button.configure(state=tk.NORMAL if on_add_target else tk.DISABLED)
 
     def toggle_topmost(self):
         self.root.attributes("-topmost", self.topmost_var.get())
@@ -1803,6 +1890,33 @@ class SidebarUI:
             self._refresh_target_list()
         return True
 
+    def add_target(self, chat_name: str) -> bool:
+        name = str(chat_name or "").strip()
+        if not name:
+            return False
+        self.allowed_chat_names.add(name)
+        created = self._ensure_chat(name)
+        if not self.active_chat:
+            self.switch_chat(name)
+        else:
+            self._refresh_target_list()
+        return created
+
+    def remove_target(self, chat_name: str) -> str:
+        name = str(chat_name or "").strip()
+        if not name:
+            return self.active_chat
+        self.allowed_chat_names.discard(name)
+        self.chat_messages.pop(name, None)
+        self.unread_counts.pop(name, None)
+        if name in self.chat_order:
+            self.chat_order.remove(name)
+        if self.active_chat == name:
+            self.active_chat = self.chat_order[0] if self.chat_order else ""
+        self._refresh_target_list()
+        self._render_active_chat()
+        return self.active_chat
+
     def _format_chat_label(self, chat_name: str) -> str:
         display_name = truncate_target_label(chat_name)
         unread = self.unread_counts.get(chat_name, 0)
@@ -1828,6 +1942,65 @@ class SidebarUI:
         if idx < 0 or idx >= len(self.chat_order):
             return
         self.switch_chat(self.chat_order[idx])
+
+    def _on_target_context_menu(self, event):
+        if not self.chat_order or not self._on_remove_target_request:
+            return "break"
+        idx = self.target_list.nearest(event.y)
+        if idx < 0 or idx >= len(self.chat_order):
+            return "break"
+        bbox = self.target_list.bbox(idx)
+        if not bbox:
+            return "break"
+        _, item_y, _, item_height = bbox
+        if event.y < item_y or event.y > item_y + item_height:
+            return "break"
+        self.target_list.selection_clear(0, tk.END)
+        self.target_list.selection_set(idx)
+        self.target_list.activate(idx)
+        self._context_menu_target = self.chat_order[idx]
+        try:
+            self.target_context_menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            self.target_context_menu.grab_release()
+        return "break"
+
+    def _on_add_target_clicked(self):
+        handler = self._on_add_target_request
+        if not handler:
+            return
+        raw_name = simpledialog.askstring(
+            "添加监听目标",
+            "输入微信左侧会话名（必须完全一致）",
+            parent=self.root,
+        )
+        if raw_name is None:
+            return
+        target_name = str(raw_name or "").strip()
+        if not target_name:
+            messagebox.showerror("添加失败", "会话名不能为空", parent=self.root)
+            return
+        try:
+            handler(target_name)
+        except Exception as e:
+            messagebox.showerror("添加失败", str(e), parent=self.root)
+
+    def _on_remove_target_menu(self):
+        target_name = str(self._context_menu_target or "").strip()
+        handler = self._on_remove_target_request
+        if not target_name or not handler:
+            return
+        confirmed = messagebox.askyesno(
+            "删除监听目标",
+            f"删除后会写回配置并重启 worker。\n\n确认删除：{target_name}",
+            parent=self.root,
+        )
+        if not confirmed:
+            return
+        try:
+            handler(target_name)
+        except Exception as e:
+            messagebox.showerror("删除失败", str(e), parent=self.root)
 
     def switch_chat(self, chat_name: str):
         name = str(chat_name or "").strip()
@@ -1924,24 +2097,32 @@ class SidebarUI:
         tag_name = f"tts_action_{self._tts_action_index}"
         self._tts_action_tags[tag_name] = str(msg.text_en or "")
         self.text.tag_configure(tag_name, foreground="#1f1f1f", underline=False)
-        self.text.tag_bind(tag_name, "<Button-1>", lambda _event, tag=tag_name: self._on_tts_action(tag))
-        self.text.tag_bind(tag_name, "<Enter>", lambda _event: self.text.configure(cursor="hand2"))
+        self.text.tag_bind(tag_name, "<Enter>", lambda _event, tag=tag_name: self._on_tts_hover(tag))
         self.text.tag_bind(tag_name, "<Leave>", lambda _event: self.text.configure(cursor=""))
         return tag_name
 
-    def _on_tts_action(self, tag_name: str):
+    def _on_tts_hover(self, tag_name: str):
+        self.text.configure(cursor="hand2")
         text = self._tts_action_tags.get(str(tag_name or ""))
         if not text:
-            self._emit_runtime_log("tts click ignored reason=missing_bound_text")
+            self._emit_runtime_log("tts hover ignored reason=missing_bound_text")
+            return "break"
+        now_ts = time.time()
+        last_trigger_at = self._tts_hover_last_trigger_at.get(text, 0.0)
+        if last_trigger_at and now_ts - last_trigger_at < TTS_HOVER_TRIGGER_COOLDOWN_SECONDS:
+            self._emit_runtime_log(
+                f"tts hover ignored reason=cooldown preview={summarize_tts_text(text)}"
+            )
             return "break"
         tts_player = getattr(self, "tts_player", None)
         if not tts_player:
-            self._emit_runtime_log("tts click ignored reason=no_player")
+            self._emit_runtime_log("tts hover ignored reason=no_player")
             return "break"
         result = tts_player.speak_async(text)
+        self._tts_hover_last_trigger_at[text] = now_ts
         preview = summarize_tts_text(text)
         action = "queued" if result else "rejected"
-        self._emit_runtime_log(f"tts click {action} preview={preview}")
+        self._emit_runtime_log(f"tts hover {action} preview={preview}")
         return "break"
 
     def maybe_auto_read_message(self, msg: SidebarMessage) -> bool:
@@ -2142,8 +2323,8 @@ def main():
         append_log_file(log_file, f"cleaned stale locks: {cleaned_stale_locks}")
 
     running_targets: list[str] = []
+    running_target_locks: dict[str, str] = {}
     skipped_targets: list[tuple[str, str]] = []
-    locked_paths: list[str] = []
     for target in targets:
         locked, lock_info = acquire_target_lock(target)
         if not locked:
@@ -2151,11 +2332,11 @@ def main():
             print(f"[sidebar] skip target={target}: {lock_info}", flush=True)
             continue
         running_targets.append(target)
-        locked_paths.append(lock_info)
+        running_target_locks[target] = lock_info
     if not running_targets:
         print("[sidebar] no available targets to start", flush=True)
         return
-    _TARGET_LOCK_PATHS = locked_paths
+    _TARGET_LOCK_PATHS = list(running_target_locks.values())
     atexit.register(release_target_lock)
 
     ui = SidebarUI(
@@ -2196,8 +2377,22 @@ def main():
     worker_restart_deadline = 0.0
     worker_state = "starting"
     worker_detail = "starting worker"
+    pending_worker_launch_reason = ""
     closing = False
     ui.set_status(build_worker_status_text(worker_state, worker_detail, len(running_targets)))
+
+    def sync_target_lock_paths():
+        global _TARGET_LOCK_PATHS
+        _TARGET_LOCK_PATHS = list(running_target_locks.values())
+
+    def persist_targets_to_config(next_targets: list[str]):
+        save_listener_targets_config(config_path, config, next_targets)
+
+    def clear_target_runtime_state(target_name: str):
+        prefix = f"{target_name}::"
+        stale_keys = [key for key in dedupe_cache if key.startswith(prefix)]
+        for key in stale_keys:
+            dedupe_cache.pop(key, None)
 
     def schedule_worker_restart(reason: str, attempt: int):
         nonlocal worker_restart_attempt, worker_restart_deadline, worker_state, worker_detail
@@ -2235,6 +2430,101 @@ def main():
         t_out.start()
         t_err.start()
         return True
+
+    def request_worker_restart(reason: str):
+        nonlocal worker, worker_restart_attempt, worker_restart_deadline
+        nonlocal worker_state, worker_detail, pending_worker_launch_reason
+        restart_reason = str(reason or "targets changed").strip() or "targets changed"
+        pending_worker_launch_reason = restart_reason
+        worker_restart_attempt = 0
+        worker_restart_deadline = 0.0
+        worker_state = "restarting"
+        worker_detail = restart_reason
+        append_log_file(log_file, f"worker restarting: {restart_reason}")
+        if worker is None:
+            launch_reason = pending_worker_launch_reason
+            pending_worker_launch_reason = ""
+            launch_worker(launch_reason)
+            return
+        if worker.poll() is not None:
+            worker = None
+            launch_reason = pending_worker_launch_reason
+            pending_worker_launch_reason = ""
+            launch_worker(launch_reason)
+            return
+        try:
+            worker.terminate()
+        except Exception:
+            try:
+                worker.kill()
+            except Exception as e:
+                pending_worker_launch_reason = ""
+                raise RuntimeError(f"stop worker failed: {e}")
+
+    def handle_add_target_request(raw_target: str):
+        target_name = str(raw_target or "").strip()
+        if not target_name:
+            raise RuntimeError("会话名不能为空")
+        if target_name in running_targets:
+            raise RuntimeError(f"监听目标已存在：{target_name}")
+
+        locked, lock_info = acquire_target_lock(target_name)
+        if not locked:
+            raise RuntimeError(f"无法添加：{lock_info}")
+
+        running_targets.append(target_name)
+        running_target_locks[target_name] = lock_info
+        sync_target_lock_paths()
+        ui.add_target(target_name)
+        try:
+            persist_targets_to_config(running_targets)
+        except Exception as e:
+            ui.remove_target(target_name)
+            if target_name in running_targets:
+                running_targets.remove(target_name)
+            lock_path = running_target_locks.pop(target_name, "")
+            sync_target_lock_paths()
+            if lock_path:
+                release_target_lock_path(lock_path)
+            raise RuntimeError(f"写回配置失败：{e}")
+
+        clear_target_runtime_state(target_name)
+        change_line = f"target added: {target_name}"
+        ui.append_log(change_line)
+        append_log_file(log_file, change_line)
+        request_worker_restart(f"targets updated after add: {target_name}")
+
+    def handle_remove_target_request(raw_target: str):
+        target_name = str(raw_target or "").strip()
+        if not target_name:
+            raise RuntimeError("会话名不能为空")
+        if target_name not in running_targets:
+            raise RuntimeError(f"监听目标不存在：{target_name}")
+        if len(running_targets) <= 1:
+            raise RuntimeError("至少保留 1 个监听目标；最后一个不允许直接删除")
+
+        next_targets = [item for item in running_targets if item != target_name]
+        try:
+            persist_targets_to_config(next_targets)
+        except Exception as e:
+            raise RuntimeError(f"写回配置失败：{e}")
+
+        running_targets[:] = next_targets
+        lock_path = running_target_locks.pop(target_name, "")
+        sync_target_lock_paths()
+        if lock_path:
+            release_target_lock_path(lock_path)
+        clear_target_runtime_state(target_name)
+        ui.remove_target(target_name)
+        change_line = f"target removed: {target_name}"
+        ui.append_log(change_line)
+        append_log_file(log_file, change_line)
+        request_worker_restart(f"targets updated after remove: {target_name}")
+
+    ui.set_target_editor_handlers(
+        handle_add_target_request,
+        handle_remove_target_request,
+    )
 
     launch_worker("starting worker")
 
@@ -2501,7 +2791,8 @@ def main():
         )
 
     def drain_queue():
-        nonlocal worker_last_handled_exit_pid, worker_state, worker_detail
+        nonlocal worker, worker_last_handled_exit_pid, worker_state, worker_detail
+        nonlocal pending_worker_launch_reason
         try:
             while True:
                 event = event_queue.get_nowait()
@@ -2514,12 +2805,17 @@ def main():
             return_code = worker.poll()
             if return_code is not None and worker_last_handled_exit_pid != worker.pid:
                 worker_last_handled_exit_pid = worker.pid
+                worker = None
                 exit_line = f"worker exited code={return_code}"
                 ui.append_log(exit_line)
                 append_log_file(log_file, exit_line)
                 if closing:
                     worker_state = "stopped"
                     worker_detail = f"code={return_code}"
+                elif pending_worker_launch_reason:
+                    restart_reason = pending_worker_launch_reason
+                    pending_worker_launch_reason = ""
+                    launch_worker(restart_reason)
                 else:
                     attempt = worker_restart_attempt + 1
                     schedule_worker_restart(f"code={return_code}", attempt)
