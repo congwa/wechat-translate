@@ -66,6 +66,7 @@ VOICE_PLACEHOLDER_RE = re.compile(
     re.IGNORECASE,
 )
 GENERIC_BRACKET_PLACEHOLDER_RE = re.compile(r"^\[[^\r\n]+\]$")
+HTTP_LINK_RE = re.compile(r"https?://", re.IGNORECASE)
 PREFERRED_UI_FONTS = ("Cascadia Code", "JetBrains Mono", "黑体")
 PREFERRED_ENGLISH_TTS_VOICES = ("Microsoft Zira Desktop", "Microsoft David Desktop")
 DEFAULT_SIDEBAR_HEIGHT = 550
@@ -401,6 +402,13 @@ def is_filtered_placeholder(text: str) -> bool:
             GENERIC_BRACKET_PLACEHOLDER_RE,
         )
     )
+
+
+def is_filtered_link_message(text: str) -> bool:
+    value = str(text or "").strip()
+    if not value:
+        return False
+    return bool(HTTP_LINK_RE.search(value))
 
 
 def normalize_message_for_dedupe(text: str) -> str:
@@ -2759,6 +2767,10 @@ def main():
         # 2) 明显的媒体占位消息直接过滤（例如 [图片] / [视频] / [动画表情] / [语音]）。
         if is_filtered_placeholder(body_cn):
             append_log_file(log_file, f"skip filtered placeholder: {chat_name} {cn_text}")
+            return
+        # 3) 带显式 http/https 链接的消息直接过滤，不显示也不翻译。
+        if is_filtered_link_message(body_cn):
+            append_log_file(log_file, f"skip filtered link: {chat_name} {cn_text}")
             return
 
         normalized_body = normalize_message_for_dedupe(body_cn)

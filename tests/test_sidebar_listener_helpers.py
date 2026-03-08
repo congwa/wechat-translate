@@ -337,6 +337,13 @@ class SidebarHelpersTest(unittest.TestCase):
         self.assertTrue(sidebar.is_filtered_placeholder("[系统提示]"))
         self.assertFalse(sidebar.is_filtered_placeholder("咳"))
 
+    def test_is_filtered_link_message_matches_explicit_http_links(self):
+        self.assertTrue(sidebar.is_filtered_link_message("http://example.com"))
+        self.assertTrue(sidebar.is_filtered_link_message("看看这个 https://example.com/a?b=1"))
+        self.assertTrue(sidebar.is_filtered_link_message("张三: HTTPS://example.com"))
+        self.assertFalse(sidebar.is_filtered_link_message("www.example.com"))
+        self.assertFalse(sidebar.is_filtered_link_message("hello: world"))
+
     def test_is_speakable_english_text(self):
         self.assertTrue(sidebar.is_speakable_english_text("Ahem."))
         self.assertFalse(sidebar.is_speakable_english_text("咳"))
