@@ -29,7 +29,7 @@
     "english_only": true,
     "tts_auto_read_active_chat": true,
     "on_translate_fail": "show_cn_with_reason",
-    "width": 420,
+    "width": 470,
     "side": "right"
   },
   "tts": {
@@ -92,6 +92,7 @@
   - 不依赖侧边栏窗口焦点；只要功能开着、消息属于当前选中会话且正文可判定为英文，就会朗读。
   - 该开关只影响自动朗读，不影响“轻点正文”的手动触发。
 - `width`：侧边栏宽度。
+  - 当前默认 `470`。
   - 必须 `>= 280`，否则启动阶段会直接报错退出。
 - `side`：侧边栏停靠位置，`left` 或 `right`。
 - 置顶仅通过侧边栏头部“置顶”按钮手动切换，不再提供启动配置项。
