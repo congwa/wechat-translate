@@ -1,5 +1,6 @@
 import io
 import importlib.util
+import json
 import os
 import pathlib
 import tempfile
@@ -64,12 +65,230 @@ class SidebarHelpersTest(unittest.TestCase):
         sidebar.validate_translate_config(False, "deeplx", "")
         sidebar.validate_translate_config(True, "passthrough", "")
 
+    def test_normalize_tts_provider_rejects_invalid_value(self):
+        self.assertEqual(sidebar.normalize_tts_provider("DOUBAO"), "doubao")
+        self.assertEqual(sidebar.normalize_tts_provider(""), "doubao")
+        with self.assertRaises(RuntimeError):
+            sidebar.normalize_tts_provider("unknown")
+
+    def test_resolve_config_file_path_prefers_base_dir(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_dir = pathlib.Path(tmpdir)
+            file_path = config_dir / "doubao_tts.json"
+            file_path.write_text("{}", encoding="utf-8")
+
+            resolved = sidebar.resolve_config_file_path("doubao_tts.json", base_dir=str(config_dir))
+
+        self.assertEqual(pathlib.Path(resolved), file_path)
+
+    def test_load_doubao_tts_settings_reads_env_backed_credentials(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = pathlib.Path(tmpdir) / "doubao_tts.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "provider": "doubao",
+                        "appid_env": "VOLC_TTS_APPID",
+                        "access_token_env": "VOLC_TTS_TOKEN",
+                        "resource_id": "seed-tts-2.0",
+                        "speaker": "zh_female_yingyujiaoxue_uranus_bigtts",
+                        "audio_format": "wav",
+                        "sample_rate": 24000,
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "VOLC_TTS_APPID": "appid-1",
+                    "VOLC_TTS_TOKEN": "token-1",
+                },
+                clear=False,
+            ):
+                settings = sidebar.load_doubao_tts_settings(str(config_path))
+
+        self.assertEqual(settings.appid, "appid-1")
+        self.assertEqual(settings.access_token, "token-1")
+        self.assertEqual(settings.audio_format, "wav")
+        self.assertEqual(settings.resource_id, "seed-tts-2.0")
+
+    def test_load_doubao_tts_settings_rejects_non_wav_format(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = pathlib.Path(tmpdir) / "doubao_tts.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "provider": "doubao",
+                        "appid": "appid-1",
+                        "access_token": "token-1",
+                        "resource_id": "seed-tts-2.0",
+                        "speaker": "zh_female_yingyujiaoxue_uranus_bigtts",
+                        "audio_format": "mp3",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaises(RuntimeError):
+                sidebar.load_doubao_tts_settings(str(config_path))
+
+    def test_build_doubao_ws_headers_and_payload(self):
+        settings = sidebar.DoubaoTTSSettings(
+            endpoint="wss://example.invalid/tts",
+            appid="appid-1",
+            access_token="token-1",
+            resource_id="seed-tts-2.0",
+            speaker="zh_female_yingyujiaoxue_uranus_bigtts",
+        )
+
+        headers = sidebar.build_doubao_ws_headers(settings, "connect-id")
+        payload = sidebar.build_doubao_tts_request_payload(settings, "Hello world")
+
+        self.assertEqual(headers["X-Api-App-Key"], "appid-1")
+        self.assertEqual(headers["X-Api-Access-Key"], "token-1")
+        self.assertEqual(headers["X-Api-Resource-Id"], "seed-tts-2.0")
+        self.assertEqual(headers["X-Api-Connect-Id"], "connect-id")
+        self.assertEqual(payload["req_params"]["speaker"], settings.speaker)
+        self.assertEqual(payload["req_params"]["audio_params"]["format"], "wav")
+
+    def test_normalize_wav_size_fields_rewrites_streaming_placeholders(self):
+        wav_bytes = (
+            b"RIFF"
+            + b"\xff\xff\xff\xff"
+            + b"WAVE"
+            + b"fmt "
+            + b"\x10\x00\x00\x00"
+            + b"\x01\x00\x01\x00\x80\x3e\x00\x00\x00\x7d\x00\x00\x02\x00\x10\x00"
+            + b"data"
+            + b"\xff\xff\xff\xff"
+            + b"\x01\x02\x03\x04"
+        )
+
+        normalized = sidebar.normalize_wav_size_fields(wav_bytes)
+
+        self.assertEqual(normalized[:4], b"RIFF")
+        self.assertEqual(int.from_bytes(normalized[4:8], "little"), len(normalized) - 8)
+        data_offset = sidebar.find_wav_data_chunk_offset(normalized)
+        self.assertEqual(data_offset, 36)
+        self.assertEqual(int.from_bytes(normalized[data_offset + 4 : data_offset + 8], "little"), 4)
+
+    def test_create_tts_player_doubao_uses_external_config(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = pathlib.Path(tmpdir) / "doubao_tts.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "provider": "doubao",
+                        "appid": "appid-1",
+                        "access_token": "token-1",
+                        "resource_id": "seed-tts-2.0",
+                        "speaker": "zh_female_yingyujiaoxue_uranus_bigtts",
+                        "audio_format": "wav",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            player, runtime_text = sidebar.create_tts_player(
+                {
+                    "provider": "doubao",
+                    "config_path": str(config_path),
+                },
+                config_dir=tmpdir,
+            )
+
+        self.assertIsInstance(player, sidebar.DoubaoWebsocketTTS)
+        self.assertIn("backend=doubao", runtime_text)
+        self.assertIn("seed-tts-2.0", runtime_text)
+
+    def test_doubao_run_blocking_emits_failure_log(self):
+        settings = sidebar.DoubaoTTSSettings(
+            endpoint="wss://example.invalid/tts",
+            appid="appid-1",
+            access_token="token-1",
+            resource_id="seed-tts-2.0",
+            speaker="zh_female_yingyujiaoxue_uranus_bigtts",
+        )
+        player = sidebar.DoubaoWebsocketTTS(settings)
+        logs = []
+        player.set_logger(logs.append)
+
+        async def fake_synthesize(_payload):
+            raise RuntimeError("boom")
+
+        player._synthesize_audio = fake_synthesize
+
+        self.assertFalse(player._run_speak_blocking("Hello world"))
+        self.assertIn("boom", player._last_error)
+        self.assertTrue(any("tts failed backend=doubao" in line for line in logs))
+
+    def test_doubao_run_blocking_emits_success_log(self):
+        settings = sidebar.DoubaoTTSSettings(
+            endpoint="wss://example.invalid/tts",
+            appid="appid-1",
+            access_token="token-1",
+            resource_id="seed-tts-2.0",
+            speaker="zh_female_yingyujiaoxue_uranus_bigtts",
+        )
+        player = sidebar.DoubaoWebsocketTTS(settings)
+        logs = []
+        player.set_logger(logs.append)
+
+        async def fake_synthesize(_payload):
+            return b"RIFF....WAVEfmt "
+
+        player._synthesize_audio = fake_synthesize
+        player._play_wav_bytes = lambda _audio: True
+
+        self.assertTrue(player._run_speak_blocking("Hello world"))
+        self.assertEqual(player._last_error, "")
+        self.assertTrue(any("tts played backend=doubao" in line for line in logs))
+
     def test_is_filtered_placeholder_matches_media_placeholders(self):
         self.assertTrue(sidebar.is_filtered_placeholder("[图片]"))
+        self.assertTrue(sidebar.is_filtered_placeholder("[视频]"))
+        self.assertTrue(sidebar.is_filtered_placeholder("[Video]"))
         self.assertTrue(sidebar.is_filtered_placeholder("[动画表情]"))
         self.assertTrue(sidebar.is_filtered_placeholder('[语音] 2"'))
         self.assertTrue(sidebar.is_filtered_placeholder('[Voice Over] 3"'))
+        self.assertTrue(sidebar.is_filtered_placeholder("[系统提示]"))
         self.assertFalse(sidebar.is_filtered_placeholder("咳"))
+
+    def test_is_speakable_english_text(self):
+        self.assertTrue(sidebar.is_speakable_english_text("Ahem."))
+        self.assertFalse(sidebar.is_speakable_english_text("咳"))
+        self.assertFalse(sidebar.is_speakable_english_text("咳 (translate_failed: timeout)"))
+        self.assertFalse(sidebar.is_speakable_english_text("Loading..."))
+
+    def test_pick_preferred_tts_voice_prefers_zira_then_english(self):
+        voices = [
+            {"name": "Microsoft Huihui Desktop", "culture": "zh-CN"},
+            {"name": "Microsoft David Desktop", "culture": "en-US"},
+            {"name": "Microsoft Zira Desktop", "culture": "en-US"},
+        ]
+        self.assertEqual(sidebar.pick_preferred_tts_voice(voices), "Microsoft Zira Desktop")
+        self.assertEqual(
+            sidebar.pick_preferred_tts_voice(
+                [
+                    {"name": "Microsoft Huihui Desktop", "culture": "zh-CN"},
+                    {"name": "Some English Voice", "culture": "en-GB"},
+                ]
+            ),
+            "Some English Voice",
+        )
+
+    def test_windows_system_tts_create_default_is_lazy_on_windows(self):
+        original_os_name = sidebar.os.name
+        sidebar.os.name = "nt"
+        try:
+            player = sidebar.WindowsSystemTTS.create_default()
+        finally:
+            sidebar.os.name = original_os_name
+
+        self.assertIsNotNone(player)
+        self.assertEqual(player.voice_name, "")
 
     def test_exit_startup_error_prints_and_raises(self):
         original_dialog = sidebar.maybe_show_frozen_error_dialog
@@ -340,6 +559,46 @@ class SidebarHelpersTest(unittest.TestCase):
         self.assertEqual(calls, ["toggle"])
         self.assertEqual(result, "break")
 
+    def test_toggle_auto_read_syncs_runtime_flag_from_var(self):
+        class FakeVar:
+            def __init__(self, value):
+                self.value = value
+
+            def get(self):
+                return self.value
+
+        ui = object.__new__(sidebar.SidebarUI)
+        ui.tts_auto_read_var = FakeVar(False)
+        ui.tts_auto_read_active_chat = True
+
+        sidebar.SidebarUI.toggle_auto_read(ui)
+
+        self.assertFalse(ui.tts_auto_read_active_chat)
+
+    def test_chat_switch_shortcut_wraps_and_debounces(self):
+        ui = object.__new__(sidebar.SidebarUI)
+        ui.chat_order = ["g1", "g2", "g3"]
+        ui.active_chat = "g1"
+        ui._last_chat_switch_shortcut_at = 0.0
+        switched = []
+
+        def fake_switch_chat(name):
+            switched.append(name)
+            ui.active_chat = name
+
+        original_time = sidebar.time.time
+        times = iter([10.0, 10.05, 10.30])
+        sidebar.time.time = lambda: next(times)
+        ui.switch_chat = fake_switch_chat
+        try:
+            sidebar.SidebarUI._handle_chat_switch_shortcut(ui, -1)
+            sidebar.SidebarUI._handle_chat_switch_shortcut(ui, 1)
+            sidebar.SidebarUI._handle_chat_switch_shortcut(ui, 1)
+        finally:
+            sidebar.time.time = original_time
+
+        self.assertEqual(switched, ["g3", "g1"])
+
     def test_append_message_ignores_unknown_chat_when_targets_fixed(self):
         ui = object.__new__(sidebar.SidebarUI)
         ui.allowed_chat_names = {"g1"}
@@ -382,6 +641,7 @@ class SidebarHelpersTest(unittest.TestCase):
 
         ui = object.__new__(sidebar.SidebarUI)
         ui.show_original_var = FakeVar(True)
+        ui.tts_player = object()
         ui.text = FakeText()
 
         sidebar.SidebarUI._insert_message_content(
@@ -397,8 +657,354 @@ class SidebarHelpersTest(unittest.TestCase):
             ),
         )
 
-        self.assertEqual(ui.text.calls[1][1], "咳\n")
+        self.assertEqual(ui.text.calls[1][1], "咳")
         self.assertEqual(ui.text.calls[1][2], "msg_left")
+        self.assertEqual(ui.text.calls[2][1], "\n")
+        self.assertEqual(ui.text.calls[2][2], "msg_left")
+
+    def test_insert_message_content_appends_tts_symbol_for_english_message(self):
+        class FakeVar:
+            def __init__(self, value):
+                self.value = value
+
+            def get(self):
+                return self.value
+
+        class FakeText:
+            def __init__(self):
+                self.calls = []
+
+            def insert(self, *_args):
+                self.calls.append(_args)
+
+            def tag_configure(self, *_args, **_kwargs):
+                return None
+
+            def tag_bind(self, *_args, **_kwargs):
+                return None
+
+            def configure(self, *_args, **_kwargs):
+                return None
+
+        ui = object.__new__(sidebar.SidebarUI)
+        ui.show_original_var = FakeVar(False)
+        ui.tts_player = object()
+        ui.text = FakeText()
+        ui._tts_action_tags = {}
+        ui._tts_action_index = 0
+
+        sidebar.SidebarUI._insert_message_content(
+            ui,
+            sidebar.SidebarMessage(
+                chat_name="g1",
+                sender_name="高钰",
+                text_en="Ahem.",
+                text_cn="咳",
+                created_at="18:04:41",
+                is_self=False,
+                message_id="msg-1",
+            ),
+        )
+
+        self.assertEqual(ui.text.calls[1][1], "Ahem.")
+        self.assertEqual(ui.text.calls[3][1], sidebar.TTS_ACTION_SYMBOL)
+
+    def test_insert_message_content_keeps_tts_symbol_when_display_includes_cn(self):
+        class FakeVar:
+            def __init__(self, value):
+                self.value = value
+
+            def get(self):
+                return self.value
+
+        class FakeText:
+            def __init__(self):
+                self.calls = []
+
+            def insert(self, *_args):
+                self.calls.append(_args)
+
+            def tag_configure(self, *_args, **_kwargs):
+                return None
+
+            def tag_bind(self, *_args, **_kwargs):
+                return None
+
+            def configure(self, *_args, **_kwargs):
+                return None
+
+        ui = object.__new__(sidebar.SidebarUI)
+        ui.show_original_var = FakeVar(False)
+        ui.tts_player = object()
+        ui.text = FakeText()
+        ui._tts_action_tags = {}
+        ui._tts_action_index = 0
+
+        sidebar.SidebarUI._insert_message_content(
+            ui,
+            sidebar.SidebarMessage(
+                chat_name="g1",
+                sender_name="高钰",
+                text_en="Ahem.",
+                text_display="Ahem.\nCN: 咳",
+                text_cn="咳",
+                created_at="18:04:41",
+                is_self=False,
+                message_id="msg-1",
+            ),
+        )
+
+        self.assertEqual(ui.text.calls[1][1], "Ahem.\nCN: 咳")
+        self.assertEqual(ui.text.calls[3][1], sidebar.TTS_ACTION_SYMBOL)
+
+    def test_should_render_tts_action_hides_button_for_original_mode_or_non_english(self):
+        class FakeVar:
+            def __init__(self, value):
+                self.value = value
+
+            def get(self):
+                return self.value
+
+        ui = object.__new__(sidebar.SidebarUI)
+        ui.show_original_var = FakeVar(False)
+        ui.tts_player = object()
+
+        self.assertTrue(
+            sidebar.SidebarUI._should_render_tts_action(
+                ui,
+                sidebar.SidebarMessage(
+                    chat_name="g1",
+                    sender_name="高钰",
+                    text_en="Ahem.",
+                    text_cn="咳",
+                    created_at="18:04:41",
+                    is_self=False,
+                ),
+                "Ahem.",
+            )
+        )
+
+        ui.show_original_var = FakeVar(True)
+        self.assertFalse(
+            sidebar.SidebarUI._should_render_tts_action(
+                ui,
+                sidebar.SidebarMessage(
+                    chat_name="g1",
+                    sender_name="高钰",
+                    text_en="Ahem.",
+                    text_cn="咳",
+                    created_at="18:04:41",
+                    is_self=False,
+                ),
+                "Ahem.",
+            )
+        )
+
+        ui.show_original_var = FakeVar(False)
+        self.assertFalse(
+            sidebar.SidebarUI._should_render_tts_action(
+                ui,
+                sidebar.SidebarMessage(
+                    chat_name="g1",
+                    sender_name="高钰",
+                    text_en="咳",
+                    text_cn="咳",
+                    created_at="18:04:41",
+                    is_self=False,
+                ),
+                "咳",
+            )
+        )
+
+    def test_on_tts_action_reads_bound_english_text(self):
+        class FakePlayer:
+            def __init__(self):
+                self.calls = []
+
+            def speak_async(self, text):
+                self.calls.append(text)
+                return True
+
+        ui = object.__new__(sidebar.SidebarUI)
+        ui.tts_player = FakePlayer()
+        ui._tts_action_tags = {"tts_action_1": "Ahem."}
+
+        result = sidebar.SidebarUI._on_tts_action(ui, "tts_action_1")
+
+        self.assertEqual(ui.tts_player.calls, ["Ahem."])
+        self.assertEqual(result, "break")
+
+    def test_on_tts_action_logs_rejected_result(self):
+        class FakePlayer:
+            def speak_async(self, _text):
+                return False
+
+        ui = object.__new__(sidebar.SidebarUI)
+        ui.tts_player = FakePlayer()
+        logs = []
+        ui.runtime_logger = logs.append
+        ui._tts_action_tags = {"tts_action_1": "Ahem."}
+
+        result = sidebar.SidebarUI._on_tts_action(ui, "tts_action_1")
+
+        self.assertEqual(result, "break")
+        self.assertTrue(any("tts click rejected" in line for line in logs))
+
+    def test_maybe_auto_read_message_only_reads_active_chat_when_enabled(self):
+        class FakeVar:
+            def __init__(self, value):
+                self.value = value
+
+            def get(self):
+                return self.value
+
+        class FakePlayer:
+            def __init__(self):
+                self.calls = []
+
+            def speak_async(self, text):
+                self.calls.append(text)
+                return True
+
+        ui = object.__new__(sidebar.SidebarUI)
+        ui.show_original_var = FakeVar(False)
+        ui.tts_auto_read_var = FakeVar(True)
+        ui.tts_player = FakePlayer()
+        ui.tts_auto_read_active_chat = True
+        ui.active_chat = "g1"
+
+        self.assertTrue(
+            sidebar.SidebarUI.maybe_auto_read_message(
+                ui,
+                sidebar.SidebarMessage(
+                    chat_name="g1",
+                    sender_name="高钰",
+                    text_en="Ahem.",
+                    text_cn="咳",
+                    created_at="18:04:41",
+                    is_self=False,
+                ),
+            )
+        )
+        self.assertEqual(ui.tts_player.calls, ["Ahem."])
+
+        self.assertFalse(
+            sidebar.SidebarUI.maybe_auto_read_message(
+                ui,
+                sidebar.SidebarMessage(
+                    chat_name="g2",
+                    sender_name="高钰",
+                    text_en="You know.",
+                    text_cn="你知道。",
+                    created_at="18:04:42",
+                    is_self=False,
+                ),
+            )
+        )
+
+        ui.show_original_var = FakeVar(True)
+        self.assertFalse(
+            sidebar.SidebarUI.maybe_auto_read_message(
+                ui,
+                sidebar.SidebarMessage(
+                    chat_name="g1",
+                    sender_name="高钰",
+                    text_en="Ahem.",
+                    text_cn="咳",
+                    created_at="18:04:43",
+                    is_self=False,
+                ),
+            )
+        )
+
+        ui.show_original_var = FakeVar(False)
+        ui.tts_auto_read_var = FakeVar(False)
+        self.assertFalse(
+            sidebar.SidebarUI.maybe_auto_read_message(
+                ui,
+                sidebar.SidebarMessage(
+                    chat_name="g1",
+                    sender_name="高钰",
+                    text_en="Ahem.",
+                    text_cn="咳",
+                    created_at="18:04:44",
+                    is_self=False,
+                ),
+            )
+        )
+
+    def test_maybe_auto_read_message_reads_english_text_even_when_display_is_bilingual(self):
+        class FakeVar:
+            def __init__(self, value):
+                self.value = value
+
+            def get(self):
+                return self.value
+
+        class FakePlayer:
+            def __init__(self):
+                self.calls = []
+
+            def speak_async(self, text):
+                self.calls.append(text)
+                return True
+
+        ui = object.__new__(sidebar.SidebarUI)
+        ui.show_original_var = FakeVar(False)
+        ui.tts_player = FakePlayer()
+        ui.tts_auto_read_active_chat = True
+        ui.active_chat = "g1"
+
+        self.assertTrue(
+            sidebar.SidebarUI.maybe_auto_read_message(
+                ui,
+                sidebar.SidebarMessage(
+                    chat_name="g1",
+                    sender_name="高钰",
+                    text_en="Ahem.",
+                    text_display="Ahem.\nCN: 咳",
+                    text_cn="咳",
+                    created_at="18:04:41",
+                    is_self=False,
+                ),
+            )
+        )
+        self.assertEqual(ui.tts_player.calls, ["Ahem."])
+
+    def test_maybe_auto_read_message_logs_skip_reason_for_pending_translation(self):
+        class FakeVar:
+            def __init__(self, value):
+                self.value = value
+
+            def get(self):
+                return self.value
+
+        ui = object.__new__(sidebar.SidebarUI)
+        ui.show_original_var = FakeVar(False)
+        ui.tts_auto_read_var = FakeVar(True)
+        ui.tts_auto_read_active_chat = True
+        ui.active_chat = "g1"
+        ui.tts_player = object()
+        logs = []
+        ui.runtime_logger = logs.append
+
+        result = sidebar.SidebarUI.maybe_auto_read_message(
+            ui,
+            sidebar.SidebarMessage(
+                chat_name="g1",
+                sender_name="高钰",
+                text_en="Loading...",
+                text_cn="咳",
+                created_at="18:04:41",
+                is_self=False,
+                pending_translation=True,
+            ),
+        )
+
+        self.assertFalse(result)
+        self.assertTrue(
+            any("tts auto skipped chat=g1 reason=pending_translation" in line for line in logs)
+        )
 
 
 if __name__ == "__main__":

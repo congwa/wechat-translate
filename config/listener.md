@@ -2,7 +2,7 @@
 
 ## 启动参数约束
 - `listener_app/sidebar_translate_listener.py` 启动时仅保留 `--config`。
-- 当前监听主链路为 `session-only`，其余运行行为（监听、翻译、展示、日志、调试）统一从 `listener.json` 读取。
+- 当前监听主链路为 `session-only`，其余运行行为（监听、翻译、展示、日志、TTS provider 选择、调试）统一从 `listener.json` 读取。
 
 ## 完整配置示例
 ```json
@@ -27,9 +27,14 @@
   },
   "display": {
     "english_only": true,
+    "tts_auto_read_active_chat": true,
     "on_translate_fail": "show_cn_with_reason",
     "width": 420,
     "side": "right"
+  },
+  "tts": {
+    "provider": "doubao",
+    "config_path": "config/doubao_tts.json"
   },
   "logging": {
     "file": "logs/sidebar_listener.log"
@@ -78,22 +83,73 @@
   - `show_cn_with_reason`：显示中文并附失败原因。
   - `show_cn`：只显示中文。
   - `show_reason`：只显示失败原因。
+- `tts_auto_read_active_chat`：是否自动朗读“当前选中会话”的新英文消息，默认 `true`。
+  - 这是启动默认值；侧边栏头部“朗读”开关可以在运行时临时开关。
+  - 只在“原文”关闭时生效。
+  - 不依赖侧边栏窗口焦点；只要功能开着、消息属于当前选中会话且正文可判定为英文，就会朗读。
+  - 该开关只影响自动朗读，不影响手动点击 `▶`。
 - `width`：侧边栏宽度。
   - 必须 `>= 280`，否则启动阶段会直接报错退出。
 - `side`：侧边栏停靠位置，`left` 或 `right`。
 - 置顶仅通过侧边栏头部“置顶”按钮手动切换，不再提供启动配置项。
 - “原文”仅通过侧边栏头部开关手动切换，不提供启动配置项。
+- “朗读”通过侧边栏头部开关手动切换，配置项 `tts_auto_read_active_chat` 仅决定启动默认值。
+
+### `tts`
+- `provider`：TTS 后端选择。当前支持 `windows_system` / `doubao`，默认 `doubao`。
+  - `windows_system`：继续走本机 `System.Speech`，不依赖云接口。
+  - `doubao`：走豆包单向流式 WebSocket，大模型合成结果回到本机播放。
+- 若保持默认 `doubao`，启动前必须准备好 `config/doubao_tts.json` 对应凭证（推荐通过 `.env.local` 注入），否则启动阶段会直接报错退出。
+- `config_path`：provider 私有配置文件路径。
+  - 当前主要给 `doubao` 使用。
+  - 相对路径优先按当前 `listener.json` 所在目录解析；找不到时再按项目根目录解析。
+  - 推荐把 provider 私有配置拆到独立 JSON，别把不同供应商参数全堆回 `listener.json`。
 
 ### `logging`
 - `file`：运行日志输出文件路径。相对路径按项目根目录解析（例如 `logs/sidebar_listener.log`）。
 - 日志按大小自动轮转：默认单文件约 `10MB` 时切分，保留最近 `5` 个历史文件（`.1` ~ `.5`）。
 
+## `config/doubao_tts.json` 示例
+```json
+{
+  "provider": "doubao",
+  "endpoint": "wss://openspeech.bytedance.com/api/v3/tts/unidirectional/stream",
+  "appid_env": "VOLCENGINE_TTS_APPID",
+  "access_token_env": "VOLCENGINE_TTS_ACCESS_TOKEN",
+  "resource_id": "seed-tts-2.0",
+  "speaker": "en_female_dacey_uranus_bigtts",
+  "audio_format": "wav",
+  "sample_rate": 24000,
+  "uid": "wechat-pc-auto",
+  "connect_timeout_seconds": 10.0
+}
+```
+
+### `doubao_tts.json` 字段说明
+- `provider`：固定为 `doubao`，用于防止把错误 JSON 指给豆包后端。
+- `endpoint`：单向流式 WebSocket 地址。通常保持默认值即可。
+- `appid_env` / `access_token_env`：从环境变量读取凭证名。推荐把真实值放到 `.env.local`，不要硬写进仓库。
+- `appid` / `access_token`：也支持直接写死，但不推荐；只有当对应 `_env` 未提供或环境变量为空时才会使用字面值。
+- `resource_id`：豆包语音资源 ID，例如 `seed-tts-2.0`。
+- `speaker`：音色 ID，必须和 `resource_id` 匹配。
+- `audio_format`：当前必须是 `wav`。
+  - 这不是拍脑袋限制；当前播放链路走 Windows 原生 `winsound`，它不适合直接播 `mp3`。
+  - 如果你强行配 `mp3`，启动阶段会直接报错，而不是拖到运行时随机炸。
+- `sample_rate`：采样率，当前默认 `24000`。
+- `uid`：业务侧用户标识，用于请求体。
+- `connect_timeout_seconds`：建连超时秒数，必须 `> 0`。
+
 ## 当前消息渲染规则（代码行为）
-- 明显的媒体占位文本会被过滤，不显示到侧边栏，也不会送进 DeepLX：`[图片]` / `[image]` / `[images]` / `[photo]` / `[动画表情]` / `[animated emoticon]` / `[语音] 2"` / `[Voice Over] 3"` 等同类方括号占位文本。
+- 明显的媒体占位文本会被过滤，不显示到侧边栏，也不会送进 DeepLX：`[图片]` / `[image]` / `[images]` / `[photo]` / `[视频]` / `[video]` / `[动画表情]` / `[animated emoticon]` / `[语音] 2"` / `[Voice Over] 3"` 等同类方括号占位文本。
+- 额外兜底规则：只要整条消息被 ASCII 方括号完整包住（例如 `[系统提示]`），也会直接过滤。这条规则是故意偏激进的，会一并吞掉合法的方括号文本。
 - 若消息是 `发送人: 正文` 格式，仅翻译“正文”，发送人姓名保持原样。
 - 若消息不含发送人前缀，视为“自己消息”，在侧边栏右对齐显示。
 - 启用 `deeplx` 时，右侧会先插入一条 `Loading...` 占位；翻译返回后原位替换成英文结果，不再先展示中文。
 - 侧边栏头部“原文”开关打开后，右侧消息区会优先显示消息原文；关闭后恢复显示译文。
+- 关闭“原文”且消息正文可判定为英文时，消息尾部会显示一个 `▶`，点击后通过当前 `tts.provider` 朗读英文。
+- 当 `tts.provider=windows_system` 时，默认优先选用 `Microsoft Zira Desktop`，不存在时回退到其他英文 voice。
+- 当 `tts.provider=doubao` 时，会先请求豆包单向流式 WebSocket，再把返回的 `wav` 在本机顺序播放。
+- 当 `display.tts_auto_read_active_chat=true` 时，当前选中会话的新英文消息在翻译结果落地后会自动朗读；切到其他会话后，旧会话新消息不会补读。
 - UI 不显示 `source=session_preview`，该字段仅用于内部日志。
 - 当前侧边栏仅用于监听与展示，不提供消息发送输入框。
 - 多目标模式下只保留一个窗口：左侧 target 菜单 + 右侧消息区；未选中目标的新消息会累计未读计数。

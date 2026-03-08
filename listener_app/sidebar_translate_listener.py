@@ -1,4 +1,5 @@
 import argparse
+import asyncio
 import atexit
 import hashlib
 import json
@@ -7,18 +8,21 @@ import os
 import queue
 import re
 import shutil
+import struct
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import tkinter as tk
+import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from tkinter import font as tkfont
 from tkinter import scrolledtext, ttk
 from urllib import error, request
 from urllib.parse import urlparse
-from typing import Any, Dict
+from typing import Any, Callable, Dict
 
 # 侧边栏主进程：
 # - 读取 JSON 配置
@@ -50,8 +54,9 @@ WORKER_EXE_NAME = "group_listener_worker.exe"
 
 # 匹配 “发送人: 正文” / “发送人：正文”
 SENDER_PREFIX_RE = re.compile(r"^\s*([^:：]{1,40})[:：]\s*(.+?)\s*$")
-# 过滤图片占位文本（例如 [图片] / [Images]）
+# 过滤图片/媒体占位文本（例如 [图片] / [视频] / [Images]）
 IMAGE_PLACEHOLDER_RE = re.compile(r"^\[\s*(图片|image|images|photo)\s*\]$", re.IGNORECASE)
+VIDEO_PLACEHOLDER_RE = re.compile(r"^\[\s*(视频|video)\s*\]$", re.IGNORECASE)
 ANIMATED_EMOTICON_PLACEHOLDER_RE = re.compile(
     r"^\[\s*(动画表情|animated emoticon|emoticon|emoji|sticker)\s*\]$",
     re.IGNORECASE,
@@ -60,12 +65,16 @@ VOICE_PLACEHOLDER_RE = re.compile(
     r'^\[\s*(语音|voice(?:\s+over)?|audio)\s*\]\s*\d+\s*"*$',
     re.IGNORECASE,
 )
+GENERIC_BRACKET_PLACEHOLDER_RE = re.compile(r"^\[[^\r\n]+\]$")
 PREFERRED_UI_FONTS = ("Cascadia Code", "JetBrains Mono", "黑体")
+PREFERRED_ENGLISH_TTS_VOICES = ("Microsoft Zira Desktop", "Microsoft David Desktop")
 DEFAULT_SIDEBAR_HEIGHT = 550
 DEFAULT_META_FONT_SIZE = 10
 MESSAGE_FONT_EXTRA_PX = 2
 ZERO_WIDTH_RE = re.compile(r"[\u200b\u200c\u200d\ufeff]")
 MULTI_SPACE_RE = re.compile(r"\s+")
+ASCII_LETTER_RE = re.compile(r"[A-Za-z]")
+CJK_TEXT_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
 SESSION_PREVIEW_DEDUPE_WINDOW_SECONDS = 20.0
 DEDUPE_CACHE_TTL_SECONDS = 600.0
 DEDUPE_CACHE_MAX_KEYS = 5000
@@ -84,10 +93,28 @@ DEFAULT_LISTEN_INTERVAL_SECONDS = 0.6
 UI_DRAIN_INTERVAL_MS = 80
 TRANSLATE_PENDING_TEXT = "Loading..."
 META_TEXT_COLOR = "#555555"
+TTS_ACTION_SYMBOL = "▶"
+CHAT_SWITCH_SHORTCUT_DEBOUNCE_SECONDS = 0.15
 WORKER_RESTART_INITIAL_BACKOFF_SECONDS = 3.0
 WORKER_RESTART_MAX_BACKOFF_SECONDS = 30.0
 RUNTIME_LOCK_DIR = os.path.join(ROOT_DIR, "logs", ".runtime")
 SUPPORTED_TRANSLATE_PROVIDERS = ("deeplx", "passthrough")
+SUPPORTED_TTS_PROVIDERS = ("windows_system", "doubao")
+DEFAULT_TTS_PROVIDER = "doubao"
+DOUBAO_TTS_DEFAULT_CONFIG_PATH = os.path.join("config", "doubao_tts.json")
+DOUBAO_TTS_DEFAULT_ENDPOINT = "wss://openspeech.bytedance.com/api/v3/tts/unidirectional/stream"
+DOUBAO_HEADER_FIXED = bytes([0x11, 0x10, 0x10, 0x00])
+DOUBAO_MSG_TYPE_FULL_SERVER_RESPONSE = 0x9
+DOUBAO_MSG_TYPE_AUDIO_ONLY_SERVER = 0xB
+DOUBAO_MSG_TYPE_ERROR = 0xF
+DOUBAO_FLAG_POSITIVE_SEQ = 0x1
+DOUBAO_FLAG_NEGATIVE_SEQ = 0x3
+DOUBAO_FLAG_WITH_EVENT = 0x4
+DOUBAO_EVENT_CONNECTION_STARTED = 50
+DOUBAO_EVENT_CONNECTION_FAILED = 51
+DOUBAO_EVENT_CONNECTION_FINISHED = 52
+DOUBAO_EVENT_SESSION_FINISHED = 152
+DOUBAO_EVENT_SESSION_FAILED = 153
 _LOG_WRITE_LOCK = threading.Lock()
 _TARGET_LOCK_PATHS: list[str] = []
 
@@ -122,12 +149,15 @@ def ensure_runtime_layout(
 
     runtime_config_path = os.path.join(config_dir, "listener.json")
     bundled_config = str(bundled_config_path or "").strip()
-    if (
-        bundled_config
-        and os.path.isfile(bundled_config)
-        and not os.path.exists(runtime_config_path)
-    ):
-        shutil.copy2(bundled_config, runtime_config_path)
+    bundled_config_dir = os.path.dirname(bundled_config) if bundled_config else ""
+    if bundled_config_dir and os.path.isdir(bundled_config_dir):
+        for name in os.listdir(bundled_config_dir):
+            if not str(name).lower().endswith(".json"):
+                continue
+            source_path = os.path.join(bundled_config_dir, name)
+            target_path = os.path.join(config_dir, name)
+            if os.path.isfile(source_path) and not os.path.exists(target_path):
+                shutil.copy2(source_path, target_path)
     return runtime_config_path
 
 
@@ -142,6 +172,33 @@ def load_json_config(path: str) -> Dict[str, Any]:
     if not isinstance(raw, dict):
         raise RuntimeError(f"config root must be object: {path}")
     return raw
+
+
+def resolve_config_file_path(path: Any, *, base_dir: str = ROOT_DIR) -> str:
+    raw = str(path or "").strip()
+    if not raw:
+        return ""
+    if os.path.isabs(raw):
+        return os.path.normpath(raw)
+    candidates: list[str] = []
+    if base_dir:
+        candidates.append(os.path.join(base_dir, raw))
+    candidates.append(os.path.join(ROOT_DIR, raw))
+    for candidate in candidates:
+        normalized = os.path.normpath(candidate)
+        if os.path.exists(normalized):
+            return normalized
+    return os.path.normpath(candidates[0])
+
+
+def read_secret_config_value(cfg: dict[str, Any], key: str, env_key: str) -> str:
+    value = str(cfg.get(key) or "").strip()
+    if value:
+        return value
+    env_name = str(cfg.get(env_key) or "").strip()
+    if env_name:
+        return str(os.getenv(env_name, "")).strip()
+    return ""
 
 
 def as_bool(value: Any, default: bool = False) -> bool:
@@ -177,6 +234,16 @@ def as_int(value: Any, default: int) -> int:
         return int(value)
     except Exception:
         return default
+
+
+def normalize_tts_provider(value: Any) -> str:
+    provider = str(value or DEFAULT_TTS_PROVIDER).strip().lower()
+    provider = provider or DEFAULT_TTS_PROVIDER
+    if provider not in SUPPORTED_TTS_PROVIDERS:
+        raise RuntimeError(
+            f"tts.provider must be one of {', '.join(SUPPORTED_TTS_PROVIDERS)}, got {value!r}"
+        )
+    return provider
 
 
 def read_config_float(cfg: dict[str, Any], key: str, default: float) -> float:
@@ -264,8 +331,10 @@ def is_filtered_placeholder(text: str) -> bool:
         pattern.match(value)
         for pattern in (
             IMAGE_PLACEHOLDER_RE,
+            VIDEO_PLACEHOLDER_RE,
             ANIMATED_EMOTICON_PLACEHOLDER_RE,
             VOICE_PLACEHOLDER_RE,
+            GENERIC_BRACKET_PLACEHOLDER_RE,
         )
     )
 
@@ -274,6 +343,585 @@ def normalize_message_for_dedupe(text: str) -> str:
     cleaned = ZERO_WIDTH_RE.sub("", str(text or ""))
     cleaned = MULTI_SPACE_RE.sub(" ", cleaned).strip()
     return cleaned
+
+
+def normalize_tts_text(text: str) -> str:
+    return MULTI_SPACE_RE.sub(" ", str(text or "")).strip()
+
+
+def summarize_tts_text(text: str, max_chars: int = 48) -> str:
+    normalized = normalize_tts_text(text)
+    if not normalized:
+        return ""
+    if len(normalized) <= max_chars:
+        return normalized
+    return normalized[:max_chars] + "..."
+
+
+def is_speakable_english_text(text: str) -> bool:
+    value = normalize_tts_text(text)
+    if not value or value == TRANSLATE_PENDING_TEXT:
+        return False
+    if "translate_failed:" in value.lower():
+        return False
+    if CJK_TEXT_RE.search(value):
+        return False
+    return bool(ASCII_LETTER_RE.search(value))
+
+
+def pick_preferred_tts_voice(voices: list[dict[str, str]]) -> str:
+    if not voices:
+        return ""
+    by_name = {}
+    english_names = []
+    for item in voices:
+        name = str(item.get("name") or "").strip()
+        culture = str(item.get("culture") or "").strip().lower()
+        if not name:
+            continue
+        by_name[name.lower()] = name
+        if culture.startswith("en"):
+            english_names.append(name)
+    for preferred in PREFERRED_ENGLISH_TTS_VOICES:
+        chosen = by_name.get(preferred.lower())
+        if chosen:
+            return chosen
+    return english_names[0] if english_names else ""
+
+
+def list_windows_tts_voices() -> list[dict[str, str]]:
+    if os.name != "nt":
+        return []
+    command = (
+        "$ErrorActionPreference='Stop';"
+        "Add-Type -AssemblyName System.Speech;"
+        "$s=New-Object System.Speech.Synthesis.SpeechSynthesizer;"
+        "$s.GetInstalledVoices() | ForEach-Object {"
+        "$v=$_.VoiceInfo;"
+        "[Console]::Out.WriteLine(($v.Name)+'|'+($v.Culture.Name))"
+        "}"
+    )
+    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    try:
+        result = subprocess.run(
+            [
+                "powershell",
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                command,
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=5,
+            creationflags=creationflags,
+            check=False,
+        )
+    except Exception:
+        return []
+    if result.returncode != 0:
+        return []
+    voices = []
+    for raw in str(result.stdout or "").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        parts = line.split("|", 1)
+        name = parts[0].strip()
+        culture = parts[1].strip() if len(parts) > 1 else ""
+        if name:
+            voices.append({"name": name, "culture": culture})
+    return voices
+
+
+class WindowsSystemTTS:
+    def __init__(self, voice_name: str = ""):
+        self.voice_name = str(voice_name or "").strip()
+        self._lock = threading.Lock()
+        self._voice_probe_done = bool(self.voice_name)
+        self._queue: "queue.SimpleQueue[str | None]" = queue.SimpleQueue()
+        self._worker_started = False
+        self._last_error = ""
+        self._logger: Callable[[str], None] | None = None
+
+    @classmethod
+    def create_default(cls) -> "WindowsSystemTTS | None":
+        if os.name != "nt":
+            return None
+        return cls()
+
+    def _resolve_voice_name(self) -> str:
+        with self._lock:
+            if self._voice_probe_done:
+                return self.voice_name
+            self.voice_name = pick_preferred_tts_voice(list_windows_tts_voices())
+            self._voice_probe_done = True
+            if not self.voice_name:
+                self._last_error = "no english system voice detected"
+                self._emit_log("tts failed backend=windows_system reason=no english system voice detected")
+            return self.voice_name
+
+    def set_logger(self, logger: Callable[[str], None] | None):
+        with self._lock:
+            self._logger = logger
+
+    def _emit_log(self, line: str):
+        logger = self._logger
+        if not logger:
+            return
+        try:
+            logger(str(line or ""))
+        except Exception:
+            pass
+
+    def _run_speak_blocking(self, payload: str) -> bool:
+        voice_name = self._resolve_voice_name()
+        if not voice_name:
+            return False
+        preview = summarize_tts_text(payload)
+        self._emit_log(
+            f"tts synthesize start backend=windows_system voice={voice_name} chars={len(payload)} preview={preview}"
+        )
+        command = (
+            "$ErrorActionPreference='Stop';"
+            "Add-Type -AssemblyName System.Speech;"
+            "$text=[Console]::In.ReadToEnd();"
+            "if([string]::IsNullOrWhiteSpace($text)){exit 1};"
+            "$s=New-Object System.Speech.Synthesis.SpeechSynthesizer;"
+            "$s.SelectVoice($env:WX_SIDEBAR_TTS_VOICE);"
+            "$s.Volume=100;"
+            "$s.Rate=0;"
+            "$s.Speak($text);"
+        )
+        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        env = os.environ.copy()
+        env["WX_SIDEBAR_TTS_VOICE"] = voice_name
+        try:
+            result = subprocess.run(
+                [
+                    "powershell",
+                    "-NoLogo",
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-Command",
+                    command,
+                ],
+                input=payload,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                env=env,
+                creationflags=creationflags,
+                check=False,
+            )
+        except Exception as e:
+            self._last_error = str(e)
+            self._emit_log(f"tts failed backend=windows_system error={self._last_error}")
+            return False
+        if result.returncode != 0:
+            self._last_error = f"tts process exited code={result.returncode}"
+            self._emit_log(f"tts failed backend=windows_system error={self._last_error}")
+            return False
+        self._last_error = ""
+        self._emit_log(
+            f"tts played backend=windows_system voice={voice_name} chars={len(payload)} preview={preview}"
+        )
+        return True
+
+    def _ensure_worker_started(self):
+        with self._lock:
+            if self._worker_started:
+                return
+            self._worker_started = True
+        threading.Thread(target=self._worker_loop, daemon=True).start()
+
+    def _worker_loop(self):
+        while True:
+            payload = self._queue.get()
+            if payload is None:
+                return
+            self._run_speak_blocking(payload)
+
+    def speak_async(self, text: str) -> bool:
+        if os.name != "nt":
+            self._emit_log("tts rejected backend=windows_system reason=non_windows")
+            return False
+        payload = normalize_tts_text(text)
+        if not is_speakable_english_text(payload):
+            self._emit_log(
+                f"tts rejected backend=windows_system reason=non_speakable preview={summarize_tts_text(payload)}"
+            )
+            return False
+        self._ensure_worker_started()
+        self._queue.put(payload)
+        self._emit_log(
+            f"tts queued backend=windows_system chars={len(payload)} preview={summarize_tts_text(payload)}"
+        )
+        return True
+
+
+@dataclass(frozen=True)
+class DoubaoTTSSettings:
+    endpoint: str
+    appid: str
+    access_token: str
+    resource_id: str
+    speaker: str
+    audio_format: str = "wav"
+    sample_rate: int = 24000
+    uid: str = "wechat-pc-auto"
+    connect_timeout_seconds: float = 10.0
+
+
+@dataclass(frozen=True)
+class DoubaoWSMessage:
+    msg_type: int
+    flag: int
+    event: int = 0
+    error_code: int = 0
+    payload: bytes = b""
+
+
+def load_doubao_tts_settings(config_path: str, *, base_dir: str = ROOT_DIR) -> DoubaoTTSSettings:
+    resolved_path = resolve_config_file_path(config_path, base_dir=base_dir)
+    if not resolved_path or not os.path.isfile(resolved_path):
+        raise RuntimeError(f"tts config not found: {config_path!r}")
+    raw = load_json_config(resolved_path)
+    provider = str(raw.get("provider") or "doubao").strip().lower()
+    if provider and provider != "doubao":
+        raise RuntimeError(f"doubao config provider must be 'doubao', got {provider!r}")
+
+    endpoint = str(raw.get("endpoint") or DOUBAO_TTS_DEFAULT_ENDPOINT).strip()
+    appid = read_secret_config_value(raw, "appid", "appid_env")
+    access_token = read_secret_config_value(raw, "access_token", "access_token_env")
+    resource_id = str(raw.get("resource_id") or "").strip()
+    speaker = str(raw.get("speaker") or "").strip()
+    audio_format = str(raw.get("audio_format") or "wav").strip().lower()
+    sample_rate = read_config_int(raw, "sample_rate", 24000)
+    uid = str(raw.get("uid") or "wechat-pc-auto").strip() or "wechat-pc-auto"
+    connect_timeout_seconds = read_config_float(raw, "connect_timeout_seconds", 10.0)
+
+    if not endpoint:
+        raise RuntimeError("doubao endpoint is required")
+    if not appid:
+        raise RuntimeError("doubao appid/appid_env is required")
+    if not access_token:
+        raise RuntimeError("doubao access_token/access_token_env is required")
+    if not resource_id:
+        raise RuntimeError("doubao resource_id is required")
+    if not speaker:
+        raise RuntimeError("doubao speaker is required")
+    if audio_format != "wav":
+        raise RuntimeError(
+            f"doubao audio_format must be 'wav' for current Windows playback path, got {audio_format!r}"
+        )
+    sample_rate = validate_int_min("doubao.sample_rate", sample_rate, 8000)
+    connect_timeout_seconds = validate_positive_float(
+        "doubao.connect_timeout_seconds",
+        connect_timeout_seconds,
+    )
+    return DoubaoTTSSettings(
+        endpoint=endpoint,
+        appid=appid,
+        access_token=access_token,
+        resource_id=resource_id,
+        speaker=speaker,
+        audio_format=audio_format,
+        sample_rate=sample_rate,
+        uid=uid,
+        connect_timeout_seconds=connect_timeout_seconds,
+    )
+
+
+def build_doubao_ws_headers(settings: DoubaoTTSSettings, connect_id: str) -> dict[str, str]:
+    return {
+        "X-Api-App-Key": settings.appid,
+        "X-Api-Access-Key": settings.access_token,
+        "X-Api-Resource-Id": settings.resource_id,
+        "X-Api-Connect-Id": connect_id,
+    }
+
+
+def build_doubao_tts_request_payload(settings: DoubaoTTSSettings, text: str) -> dict[str, Any]:
+    return {
+        "user": {
+            "uid": settings.uid,
+        },
+        "req_params": {
+            "text": text,
+            "speaker": settings.speaker,
+            "audio_params": {
+                "format": settings.audio_format,
+                "sample_rate": settings.sample_rate,
+            },
+        },
+    }
+
+
+def build_doubao_full_client_request_frame(payload: bytes) -> bytes:
+    return DOUBAO_HEADER_FIXED + struct.pack(">I", len(payload)) + payload
+
+
+def find_wav_data_chunk_offset(audio_data: bytes) -> int:
+    offset = 12
+    total = len(audio_data)
+    while offset + 8 <= total:
+        chunk_id = audio_data[offset : offset + 4]
+        chunk_size = struct.unpack("<I", audio_data[offset + 4 : offset + 8])[0]
+        if chunk_id == b"data":
+            return offset
+        if chunk_size == 0xFFFFFFFF:
+            break
+        next_offset = offset + 8 + chunk_size + (chunk_size & 1)
+        if next_offset <= offset or next_offset > total:
+            break
+        offset = next_offset
+    return audio_data.find(b"data", 12)
+
+
+def normalize_wav_size_fields(audio_data: bytes) -> bytes:
+    if len(audio_data) < 12 or audio_data[:4] != b"RIFF" or audio_data[8:12] != b"WAVE":
+        return audio_data
+
+    normalized = bytearray(audio_data)
+    struct.pack_into("<I", normalized, 4, max(0, len(normalized) - 8))
+
+    data_offset = find_wav_data_chunk_offset(audio_data)
+    if data_offset < 0 or data_offset + 8 > len(normalized):
+        return bytes(normalized)
+
+    actual_data_size = max(0, len(normalized) - data_offset - 8)
+    struct.pack_into("<I", normalized, data_offset + 4, actual_data_size)
+    return bytes(normalized)
+
+
+def parse_doubao_ws_message(data: bytes) -> DoubaoWSMessage:
+    if len(data) < 8:
+        raise RuntimeError(f"doubao ws message too short: {len(data)}")
+    header_size = 4 * (data[0] & 0x0F)
+    if header_size < 4 or len(data) < header_size + 4:
+        raise RuntimeError(f"invalid doubao ws header size: {header_size}")
+
+    msg_type = data[1] >> 4
+    flag = data[1] & 0x0F
+    pos = header_size
+    event = 0
+    error_code = 0
+
+    if msg_type in (DOUBAO_MSG_TYPE_FULL_SERVER_RESPONSE, DOUBAO_MSG_TYPE_AUDIO_ONLY_SERVER):
+        if flag in (DOUBAO_FLAG_POSITIVE_SEQ, DOUBAO_FLAG_NEGATIVE_SEQ):
+            pos += 4
+    elif msg_type == DOUBAO_MSG_TYPE_ERROR:
+        error_code = struct.unpack(">I", data[pos : pos + 4])[0]
+        pos += 4
+
+    if flag == DOUBAO_FLAG_WITH_EVENT:
+        event = struct.unpack(">i", data[pos : pos + 4])[0]
+        pos += 4
+        if event not in (
+            DOUBAO_EVENT_CONNECTION_STARTED,
+            DOUBAO_EVENT_CONNECTION_FAILED,
+            DOUBAO_EVENT_CONNECTION_FINISHED,
+        ):
+            session_id_size = struct.unpack(">I", data[pos : pos + 4])[0]
+            pos += 4 + session_id_size
+        if event in (
+            DOUBAO_EVENT_CONNECTION_STARTED,
+            DOUBAO_EVENT_CONNECTION_FAILED,
+            DOUBAO_EVENT_CONNECTION_FINISHED,
+        ):
+            connect_id_size = struct.unpack(">I", data[pos : pos + 4])[0]
+            pos += 4 + connect_id_size
+
+    payload_size = struct.unpack(">I", data[pos : pos + 4])[0]
+    pos += 4
+    payload = data[pos : pos + payload_size]
+    return DoubaoWSMessage(
+        msg_type=msg_type,
+        flag=flag,
+        event=event,
+        error_code=error_code,
+        payload=payload,
+    )
+
+
+class DoubaoWebsocketTTS:
+    def __init__(self, settings: DoubaoTTSSettings):
+        self.settings = settings
+        self._lock = threading.Lock()
+        self._queue: "queue.SimpleQueue[str | None]" = queue.SimpleQueue()
+        self._worker_started = False
+        self._last_error = ""
+        self._logger: Callable[[str], None] | None = None
+
+    @classmethod
+    def create_from_config(cls, config_path: str, *, base_dir: str = ROOT_DIR) -> "DoubaoWebsocketTTS":
+        if os.name != "nt":
+            raise RuntimeError("doubao tts playback currently only supports Windows")
+        settings = load_doubao_tts_settings(config_path, base_dir=base_dir)
+        return cls(settings)
+
+    def _ensure_worker_started(self):
+        with self._lock:
+            if self._worker_started:
+                return
+            self._worker_started = True
+        threading.Thread(target=self._worker_loop, daemon=True).start()
+
+    def set_logger(self, logger: Callable[[str], None] | None):
+        with self._lock:
+            self._logger = logger
+
+    def _emit_log(self, line: str):
+        logger = self._logger
+        if not logger:
+            return
+        try:
+            logger(str(line or ""))
+        except Exception:
+            pass
+
+    def _worker_loop(self):
+        while True:
+            payload = self._queue.get()
+            if payload is None:
+                return
+            self._run_speak_blocking(payload)
+
+    async def _synthesize_audio(self, payload: str) -> bytes:
+        import websockets
+
+        connect_id = str(uuid.uuid4())
+        headers = build_doubao_ws_headers(self.settings, connect_id)
+        endpoint_host = urlparse(self.settings.endpoint).netloc or self.settings.endpoint
+        preview = summarize_tts_text(payload)
+        self._emit_log(
+            f"tts synthesize start backend=doubao endpoint={endpoint_host} chars={len(payload)} preview={preview}"
+        )
+        request_payload = build_doubao_tts_request_payload(self.settings, payload)
+        request_frame = build_doubao_full_client_request_frame(
+            json.dumps(request_payload, ensure_ascii=False).encode("utf-8")
+        )
+        websocket = await websockets.connect(
+            self.settings.endpoint,
+            additional_headers=headers,
+            max_size=10 * 1024 * 1024,
+            open_timeout=self.settings.connect_timeout_seconds,
+        )
+        try:
+            await websocket.send(request_frame)
+            audio_data = bytearray()
+            while True:
+                response = await websocket.recv()
+                if isinstance(response, str):
+                    raise RuntimeError(f"unexpected doubao text frame: {response}")
+                message = parse_doubao_ws_message(response)
+                if message.msg_type == DOUBAO_MSG_TYPE_AUDIO_ONLY_SERVER:
+                    audio_data.extend(message.payload)
+                    continue
+                if message.msg_type == DOUBAO_MSG_TYPE_FULL_SERVER_RESPONSE:
+                    if message.event == DOUBAO_EVENT_SESSION_FINISHED:
+                        break
+                    if message.event in (DOUBAO_EVENT_CONNECTION_FAILED, DOUBAO_EVENT_SESSION_FAILED):
+                        detail = message.payload.decode("utf-8", "ignore").strip()
+                        raise RuntimeError(detail or f"doubao session failed event={message.event}")
+                    continue
+                if message.msg_type == DOUBAO_MSG_TYPE_ERROR:
+                    detail = message.payload.decode("utf-8", "ignore").strip()
+                    raise RuntimeError(f"doubao error code={message.error_code}: {detail}")
+            if not audio_data:
+                raise RuntimeError("doubao returned empty audio")
+            normalized_audio = normalize_wav_size_fields(bytes(audio_data))
+            self._emit_log(
+                f"tts synthesize success backend=doubao bytes={len(normalized_audio)} chars={len(payload)} preview={preview}"
+            )
+            return normalized_audio
+        finally:
+            await websocket.close()
+
+    def _play_wav_bytes(self, audio_data: bytes) -> bool:
+        import winsound
+
+        temp_path = ""
+        try:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as f:
+                temp_path = f.name
+                f.write(audio_data)
+            winsound.PlaySound(temp_path, winsound.SND_FILENAME)
+        finally:
+            if temp_path:
+                try:
+                    os.remove(temp_path)
+                except OSError:
+                    pass
+        return True
+
+    def _run_speak_blocking(self, payload: str) -> bool:
+        preview = summarize_tts_text(payload)
+        try:
+            audio_data = asyncio.run(self._synthesize_audio(payload))
+            self._play_wav_bytes(audio_data)
+        except Exception as e:
+            self._last_error = str(e)
+            self._emit_log(
+                f"tts failed backend=doubao error={self._last_error} preview={preview}"
+            )
+            return False
+        self._last_error = ""
+        self._emit_log(
+            f"tts played backend=doubao bytes={len(audio_data)} chars={len(payload)} preview={preview}"
+        )
+        return True
+
+    def speak_async(self, text: str) -> bool:
+        if os.name != "nt":
+            self._emit_log("tts rejected backend=doubao reason=non_windows")
+            return False
+        payload = normalize_tts_text(text)
+        if not is_speakable_english_text(payload):
+            self._emit_log(
+                f"tts rejected backend=doubao reason=non_speakable preview={summarize_tts_text(payload)}"
+            )
+            return False
+        self._ensure_worker_started()
+        self._queue.put(payload)
+        self._emit_log(
+            f"tts queued backend=doubao chars={len(payload)} preview={summarize_tts_text(payload)}"
+        )
+        return True
+
+
+def create_tts_player(
+    tts_cfg: dict[str, Any],
+    *,
+    config_dir: str = ROOT_DIR,
+) -> tuple[Any | None, str]:
+    provider = normalize_tts_provider(tts_cfg.get("provider", DEFAULT_TTS_PROVIDER))
+    if provider == "windows_system":
+        player = WindowsSystemTTS.create_default()
+        if player:
+            return (
+                player,
+                "tts configured backend=windows_system voice_probe=lazy preferred=Microsoft Zira Desktop,Microsoft David Desktop",
+            )
+        return None, "tts unavailable: no english system voice detected"
+
+    config_path = str(tts_cfg.get("config_path") or DOUBAO_TTS_DEFAULT_CONFIG_PATH).strip()
+    player = DoubaoWebsocketTTS.create_from_config(config_path, base_dir=config_dir)
+    settings = player.settings
+    return (
+        player,
+        f"tts configured backend=doubao config={resolve_config_file_path(config_path, base_dir=config_dir)} resource_id={settings.resource_id} speaker={settings.speaker} format={settings.audio_format} sample_rate={settings.sample_rate}",
+    )
 
 
 def cleanup_dedupe_cache(cache: Dict[str, float], now_ts: float):
@@ -447,6 +1095,7 @@ class SidebarMessage:
     text_en: str
     created_at: str
     is_self: bool
+    text_display: str = ""
     text_cn: str = ""
     message_id: str = ""
     pending_translation: bool = False
@@ -902,6 +1551,8 @@ class SidebarUI:
         side: str,
         targets: list[str],
         message_limit: int,
+        tts_player: WindowsSystemTTS | None = None,
+        tts_auto_read_active_chat: bool = True,
     ):
         self.root = tk.Tk()
         self.root.title(title)
@@ -909,16 +1560,23 @@ class SidebarUI:
         self.root.option_add("*Font", (self.ui_font_family, DEFAULT_META_FONT_SIZE))
         self.topmost_var = tk.BooleanVar(value=False)
         self.show_original_var = tk.BooleanVar(value=False)
+        self.tts_auto_read_var = tk.BooleanVar(value=bool(tts_auto_read_active_chat))
         self.root.attributes("-topmost", self.topmost_var.get())
         self.status_var = tk.StringVar(value="starting...")
         self.target_panel_visible = False
         self.target_panel_toggle_text = tk.StringVar(value="菜单")
         self.message_limit = max(1, int(message_limit))
+        self.tts_player = tts_player
+        self.tts_auto_read_active_chat = bool(self.tts_auto_read_var.get())
+        self.runtime_logger: Callable[[str], None] | None = None
         self.allowed_chat_names = {str(item or "").strip() for item in targets if str(item or "").strip()}
         self.chat_order: list[str] = []
         self.chat_messages: dict[str, list[SidebarMessage]] = {}
         self.unread_counts: dict[str, int] = {}
         self.active_chat = ""
+        self._tts_action_tags: dict[str, str] = {}
+        self._tts_action_index = 0
+        self._last_chat_switch_shortcut_at = 0.0
 
         screen_w = self.root.winfo_screenwidth()
         screen_h = self.root.winfo_screenheight()
@@ -948,6 +1606,12 @@ class SidebarUI:
             text="原文",
             variable=self.show_original_var,
             command=self._render_active_chat,
+        ).pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Checkbutton(
+            controls,
+            text="朗读",
+            variable=self.tts_auto_read_var,
+            command=self.toggle_auto_read,
         ).pack(side=tk.LEFT, padx=(0, 6))
         ttk.Checkbutton(
             controls,
@@ -1025,12 +1689,17 @@ class SidebarUI:
         self._set_target_panel_visible(False)
         self.root.bind("<Control-b>", self.on_toggle_target_panel_shortcut)
         self.root.bind("<Control-B>", self.on_toggle_target_panel_shortcut)
+        self.root.bind("<Control-Up>", self.on_switch_prev_chat_shortcut)
+        self.root.bind("<Control-Down>", self.on_switch_next_chat_shortcut)
 
     def set_status(self, text: str):
         self.status_var.set(text)
 
     def toggle_topmost(self):
         self.root.attributes("-topmost", self.topmost_var.get())
+
+    def toggle_auto_read(self):
+        self.tts_auto_read_active_chat = self._is_auto_read_enabled()
 
     def toggle_target_panel(self):
         self._set_target_panel_visible(not self.target_panel_visible)
@@ -1046,6 +1715,23 @@ class SidebarUI:
     def on_switch_next_chat_shortcut(self, _event=None):
         self._handle_chat_switch_shortcut(1)
         return "break"
+
+    def _handle_chat_switch_shortcut(self, delta: int):
+        if not self.chat_order:
+            return
+        now_ts = time.time()
+        if (
+            self._last_chat_switch_shortcut_at
+            and now_ts - self._last_chat_switch_shortcut_at < CHAT_SWITCH_SHORTCUT_DEBOUNCE_SECONDS
+        ):
+            return
+        self._last_chat_switch_shortcut_at = now_ts
+        if self.active_chat not in self.chat_order:
+            self.switch_chat(self.chat_order[0])
+            return
+        current_index = self.chat_order.index(self.active_chat)
+        next_index = (current_index + int(delta)) % len(self.chat_order)
+        self.switch_chat(self.chat_order[next_index])
 
     def _set_target_panel_visible(self, visible: bool):
         if visible:
@@ -1110,7 +1796,7 @@ class SidebarUI:
 
     def _insert_message_content(self, msg: SidebarMessage):
         meta_tag = "meta_right" if msg.is_self else "meta_left"
-        display_text = msg.text_cn if self.show_original_var.get() and msg.text_cn else msg.text_en
+        display_text = msg.text_cn if self.show_original_var.get() and msg.text_cn else (msg.text_display or msg.text_en)
         if msg.pending_translation and not self.show_original_var.get():
             msg_tag = "msg_right_pending" if msg.is_self else "msg_left_pending"
         else:
@@ -1119,11 +1805,18 @@ class SidebarUI:
         if msg.sender_name:
             header += f" {msg.sender_name}"
         self.text.insert(tk.END, header + "\n", meta_tag)
-        self.text.insert(tk.END, f"{display_text}\n", msg_tag)
+        self.text.insert(tk.END, display_text, msg_tag)
+        if self._should_render_tts_action(msg, msg.text_en):
+            action_tag = self._register_tts_action_tag(msg)
+            self.text.insert(tk.END, " ", msg_tag)
+            self.text.insert(tk.END, TTS_ACTION_SYMBOL, (msg_tag, action_tag))
+        self.text.insert(tk.END, "\n", msg_tag)
 
     def _render_active_chat(self):
         self.text.configure(state=tk.NORMAL)
         self.text.delete("1.0", tk.END)
+        self._tts_action_tags = {}
+        self._tts_action_index = 0
         for msg in self.chat_messages.get(self.active_chat, []):
             self._insert_message_content(msg)
         self.text.configure(state=tk.DISABLED)
@@ -1153,6 +1846,87 @@ class SidebarUI:
 
     def append_log(self, line: str):
         self.status_var.set(str(line or ""))
+
+    def set_runtime_logger(self, logger: Callable[[str], None] | None):
+        self.runtime_logger = logger
+
+    def _emit_runtime_log(self, line: str):
+        logger = getattr(self, "runtime_logger", None)
+        if not logger:
+            return
+        try:
+            logger(str(line or ""))
+        except Exception:
+            pass
+
+    def _get_tts_action_block_reason(self, msg: SidebarMessage, display_text: str) -> str:
+        if self.show_original_var.get():
+            return "original_mode"
+        if msg.pending_translation:
+            return "pending_translation"
+        if not getattr(self, "tts_player", None):
+            return "no_player"
+        if not is_speakable_english_text(display_text):
+            return "non_english_or_invalid"
+        return ""
+
+    def _should_render_tts_action(self, msg: SidebarMessage, display_text: str) -> bool:
+        return not self._get_tts_action_block_reason(msg, display_text)
+
+    def _register_tts_action_tag(self, msg: SidebarMessage) -> str:
+        self._tts_action_index += 1
+        tag_name = f"tts_action_{self._tts_action_index}"
+        self._tts_action_tags[tag_name] = str(msg.text_en or "")
+        self.text.tag_configure(tag_name, foreground="#1f1f1f", underline=False)
+        self.text.tag_bind(tag_name, "<Button-1>", lambda _event, tag=tag_name: self._on_tts_action(tag))
+        self.text.tag_bind(tag_name, "<Enter>", lambda _event: self.text.configure(cursor="hand2"))
+        self.text.tag_bind(tag_name, "<Leave>", lambda _event: self.text.configure(cursor=""))
+        return tag_name
+
+    def _on_tts_action(self, tag_name: str):
+        text = self._tts_action_tags.get(str(tag_name or ""))
+        if not text:
+            self._emit_runtime_log("tts click ignored reason=missing_bound_text")
+            return "break"
+        tts_player = getattr(self, "tts_player", None)
+        if not tts_player:
+            self._emit_runtime_log("tts click ignored reason=no_player")
+            return "break"
+        result = tts_player.speak_async(text)
+        preview = summarize_tts_text(text)
+        action = "queued" if result else "rejected"
+        self._emit_runtime_log(f"tts click {action} preview={preview}")
+        return "break"
+
+    def maybe_auto_read_message(self, msg: SidebarMessage) -> bool:
+        if not self._is_auto_read_enabled():
+            return False
+        if str(msg.chat_name or "") != str(getattr(self, "active_chat", "")):
+            return False
+        reason = self._get_tts_action_block_reason(msg, msg.text_en)
+        if reason:
+            self._emit_runtime_log(
+                f"tts auto skipped chat={msg.chat_name} reason={reason} preview={summarize_tts_text(msg.text_en)}"
+            )
+            return False
+        tts_player = getattr(self, "tts_player", None)
+        if not tts_player:
+            return False
+        result = bool(tts_player.speak_async(msg.text_en))
+        action = "queued" if result else "rejected"
+        self._emit_runtime_log(
+            f"tts auto {action} chat={msg.chat_name} preview={summarize_tts_text(msg.text_en)}"
+        )
+        return result
+
+    def _is_auto_read_enabled(self) -> bool:
+        auto_read_var = getattr(self, "tts_auto_read_var", None)
+        if auto_read_var is not None:
+            try:
+                return bool(auto_read_var.get())
+            except Exception:
+                pass
+        return bool(getattr(self, "tts_auto_read_active_chat", True))
 
 
 def start_worker_process(
@@ -1227,11 +2001,13 @@ def main():
     except Exception as e:
         exit_startup_error(f"load config failed: {e}")
 
+    config_dir = os.path.dirname(config_path)
     listen_cfg = config.get("listen", {}) if isinstance(config.get("listen", {}), dict) else {}
     translate_cfg = (
         config.get("translate", {}) if isinstance(config.get("translate", {}), dict) else {}
     )
     display_cfg = config.get("display", {}) if isinstance(config.get("display", {}), dict) else {}
+    tts_cfg = config.get("tts", {}) if isinstance(config.get("tts", {}), dict) else {}
     logging_cfg = config.get("logging", {}) if isinstance(config.get("logging", {}), dict) else {}
 
     targets = normalize_targets(listen_cfg.get("targets"))
@@ -1264,6 +2040,7 @@ def main():
     target_lang = str(translate_cfg.get("target_lang", "EN"))
 
     english_only = as_bool(display_cfg.get("english_only"), True)
+    tts_auto_read_active_chat = as_bool(display_cfg.get("tts_auto_read_active_chat"), True)
     translate_fail_behavior = str(display_cfg.get("on_translate_fail", "show_cn_with_reason"))
     if translate_fail_behavior not in ("show_cn_with_reason", "show_cn", "show_reason"):
         translate_fail_behavior = "show_cn_with_reason"
@@ -1305,6 +2082,10 @@ def main():
             translate_enabled,
             translate_provider,
         )
+        tts_player, tts_runtime_text = create_tts_player(
+            tts_cfg,
+            config_dir=config_dir,
+        )
     except RuntimeError as e:
         exit_startup_error(f"invalid config: {e}")
 
@@ -1337,6 +2118,8 @@ def main():
         side=side,
         targets=running_targets,
         message_limit=CHAT_CACHE_LIMIT,
+        tts_player=tts_player,
+        tts_auto_read_active_chat=tts_auto_read_active_chat,
     )
     for target, reason in skipped_targets:
         append_log_file(log_file, f"skip target={target}: {reason}")
@@ -1345,10 +2128,16 @@ def main():
     append_log_file(log_file, f"requested targets={targets}")
     append_log_file(log_file, f"running targets={running_targets}")
     append_log_file(log_file, translator_runtime_text)
+    append_log_file(log_file, tts_runtime_text)
+    append_log_file(log_file, f"tts auto read active chat={tts_auto_read_active_chat}")
     append_log_file(log_file, f"load retry seconds={load_retry_seconds}")
     append_log_file(log_file, f"chat cache limit={CHAT_CACHE_LIMIT}")
     append_log_file(log_file, f"session preview dedupe window={session_preview_dedupe_window_seconds}s")
     event_queue: "queue.Queue[dict]" = queue.Queue()
+    runtime_log = lambda line: event_queue.put({"type": "log", "value": str(line or "")})
+    if tts_player and hasattr(tts_player, "set_logger"):
+        tts_player.set_logger(runtime_log)
+    ui.set_runtime_logger(runtime_log)
     translate_queue: "queue.Queue[dict | None]" = queue.Queue(maxsize=TRANSLATE_QUEUE_MAXSIZE)
     dedupe_cache: Dict[str, float] = {}
     last_dedupe_cleanup_at = 0.0
@@ -1415,6 +2204,7 @@ def main():
             chat_name=chat_name,
             sender_name=sender_name if not is_self else "",
             text_en=TRANSLATE_PENDING_TEXT,
+            text_display=TRANSLATE_PENDING_TEXT,
             text_cn=body_cn,
             created_at=created_at,
             is_self=is_self,
@@ -1422,7 +2212,12 @@ def main():
             pending_translation=True,
         )
 
-    def emit_translate_result(task: dict, rendered_text: str, pending_translation: bool = False):
+    def emit_translate_result(
+        task: dict,
+        text_en: str,
+        text_display: str,
+        pending_translation: bool = False,
+    ):
         event_queue.put(
             {
                 "type": "render_message",
@@ -1433,7 +2228,8 @@ def main():
                 "source": task["source"],
                 "created_at": task["created_at"],
                 "text_cn": str(task.get("body_cn", "")),
-                "text_en": rendered_text,
+                "text_en": text_en,
+                "text_display": text_display,
                 "pending_translation": pending_translation,
             }
         )
@@ -1447,7 +2243,7 @@ def main():
             RuntimeError("translate queue overflow"),
             translate_fail_behavior,
         )
-        emit_translate_result(task, fallback_text)
+        emit_translate_result(task, fallback_text, fallback_text)
 
     def enqueue_translate_task(task: dict):
         nonlocal translate_queue_drop_count, last_translate_queue_drop_log_at
@@ -1531,7 +2327,7 @@ def main():
             if not english_only and rendered_body != body_cn:
                 rendered_text = f"{rendered_text}\nCN: {body_cn}"
 
-            emit_translate_result(task, rendered_text)
+            emit_translate_result(task, rendered_body, rendered_text)
 
     t_translate = threading.Thread(target=translate_worker, daemon=True)
     t_translate.start()
@@ -1564,6 +2360,7 @@ def main():
             sender_name = str(event.get("sender_name", ""))
             raw_text = str(event.get("text_cn", ""))
             rendered_text = str(event.get("text_en", ""))
+            display_text = str(event.get("text_display", rendered_text))
             source = str(event.get("source", ""))
             is_self = bool(event.get("is_self", False))
             message_id = str(event.get("message_id", ""))
@@ -1572,6 +2369,7 @@ def main():
                 chat_name=chat_name,
                 sender_name=sender_name if not is_self else "",
                 text_en=rendered_text,
+                text_display=display_text,
                 text_cn=raw_text,
                 created_at=created_at,
                 is_self=is_self,
@@ -1580,6 +2378,7 @@ def main():
             )
             if not ui.replace_message(msg):
                 ui.append_message(msg)
+            ui.maybe_auto_read_message(msg)
             append_log_file(
                 log_file,
                 (
@@ -1605,7 +2404,7 @@ def main():
         sender_name, body_cn, is_self = split_sender_and_body(cn_text)
         if not body_cn:
             return
-        # 2) 明显的媒体占位消息直接过滤（例如 [图片] / [动画表情] / [语音]）。
+        # 2) 明显的媒体占位消息直接过滤（例如 [图片] / [视频] / [动画表情] / [语音]）。
         if is_filtered_placeholder(body_cn):
             append_log_file(log_file, f"skip filtered placeholder: {chat_name} {cn_text}")
             return
