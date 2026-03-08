@@ -1,6 +1,7 @@
 import argparse
 import asyncio
 import atexit
+import ctypes
 import hashlib
 import json
 import math
@@ -94,8 +95,7 @@ DEFAULT_LISTEN_INTERVAL_SECONDS = 0.6
 UI_DRAIN_INTERVAL_MS = 80
 TRANSLATE_PENDING_TEXT = "Loading..."
 META_TEXT_COLOR = "#555555"
-TTS_ACTION_SYMBOL = "▶"
-TTS_HOVER_TRIGGER_COOLDOWN_SECONDS = 1.2
+TTS_BODY_CLICK_MOVE_TOLERANCE_PX = 4
 CHAT_SWITCH_SHORTCUT_DEBOUNCE_SECONDS = 0.15
 WORKER_RESTART_INITIAL_BACKOFF_SECONDS = 3.0
 WORKER_RESTART_MAX_BACKOFF_SECONDS = 30.0
@@ -123,6 +123,19 @@ DOUBAO_EVENT_SESSION_FINISHED = 152
 DOUBAO_EVENT_SESSION_FAILED = 153
 _LOG_WRITE_LOCK = threading.Lock()
 _TARGET_LOCK_PATHS: list[str] = []
+
+
+def get_system_double_click_time_ms(default: int = 500) -> int:
+    if os.name != "nt":
+        return default
+    try:
+        value = int(ctypes.windll.user32.GetDoubleClickTime())
+    except Exception:
+        return default
+    return max(200, min(1000, value))
+
+
+TTS_BODY_CLICK_PLAY_DELAY_MS = get_system_double_click_time_ms()
 
 
 def load_local_env():
@@ -1693,7 +1706,9 @@ class SidebarUI:
         self._context_menu_target = ""
         self._tts_action_tags: dict[str, str] = {}
         self._tts_action_index = 0
-        self._tts_hover_last_trigger_at: dict[str, float] = {}
+        self._tts_body_click_press: dict[str, Any] | None = None
+        self._tts_body_click_pending_after_id = ""
+        self._tts_body_click_pending_tag = ""
         self._last_chat_switch_shortcut_at = 0.0
 
         screen_w = self.root.winfo_screenwidth()
@@ -2038,17 +2053,15 @@ class SidebarUI:
             self.text.insert(tk.END, display_text, (msg_tag, body_action_tag))
         else:
             self.text.insert(tk.END, display_text, msg_tag)
-        if clickable:
-            action_tag = self._register_tts_action_tag(msg)
-            self.text.insert(tk.END, " ", msg_tag)
-            self.text.insert(tk.END, TTS_ACTION_SYMBOL, (msg_tag, action_tag))
         self.text.insert(tk.END, "\n", msg_tag)
 
     def _render_active_chat(self):
+        self._cancel_pending_tts_body_click()
         self.text.configure(state=tk.NORMAL)
         self.text.delete("1.0", tk.END)
         self._tts_action_tags = {}
         self._tts_action_index = 0
+        self._tts_body_click_press = None
         for msg in self.chat_messages.get(self.active_chat, []):
             self._insert_message_content(msg)
         self.text.configure(state=tk.DISABLED)
@@ -2110,29 +2123,16 @@ class SidebarUI:
         tag_name: str,
         *,
         trigger_name: str,
-        cooldown_seconds: float = 0.0,
     ):
         text = self._tts_action_tags.get(str(tag_name or ""))
         if not text:
             self._emit_runtime_log(f"tts {trigger_name} ignored reason=missing_bound_text")
             return "break"
-        if cooldown_seconds > 0:
-            now_ts = time.time()
-            last_trigger_at = self._tts_hover_last_trigger_at.get(text, 0.0)
-            if last_trigger_at and now_ts - last_trigger_at < cooldown_seconds:
-                self._emit_runtime_log(
-                    f"tts {trigger_name} ignored reason=cooldown preview={summarize_tts_text(text)}"
-                )
-                return "break"
-        else:
-            now_ts = 0.0
         tts_player = getattr(self, "tts_player", None)
         if not tts_player:
             self._emit_runtime_log(f"tts {trigger_name} ignored reason=no_player")
             return "break"
         result = tts_player.speak_async(text)
-        if cooldown_seconds > 0:
-            self._tts_hover_last_trigger_at[text] = now_ts
         preview = summarize_tts_text(text)
         action = "queued" if result else "rejected"
         self._emit_runtime_log(f"tts {trigger_name} {action} preview={preview}")
@@ -2142,27 +2142,13 @@ class SidebarUI:
         self._tts_action_index += 1
         tag_name = f"tts_body_action_{self._tts_action_index}"
         self._tts_action_tags[tag_name] = str(msg.text_en or "")
-        self.text.tag_bind(tag_name, "<Button-1>", lambda _event, tag=tag_name: self._on_tts_body_click(tag))
-        self.text.tag_bind(tag_name, "<Enter>", lambda _event: self.text.configure(cursor="hand2"))
-        self.text.tag_bind(tag_name, "<Leave>", lambda _event: self.text.configure(cursor=""))
+        self.text.tag_bind(tag_name, "<ButtonPress-1>", lambda event, tag=tag_name: self._on_tts_body_press(tag, event))
+        self.text.tag_bind(tag_name, "<ButtonRelease-1>", lambda event, tag=tag_name: self._on_tts_body_release(tag, event))
+        self.text.tag_bind(tag_name, "<Double-Button-1>", self._on_tts_body_multi_click)
+        self.text.tag_bind(tag_name, "<Triple-Button-1>", self._on_tts_body_multi_click)
         return tag_name
 
-    def _register_tts_action_tag(self, msg: SidebarMessage) -> str:
-        self._tts_action_index += 1
-        tag_name = f"tts_action_{self._tts_action_index}"
-        self._tts_action_tags[tag_name] = str(msg.text_en or "")
-        self.text.tag_configure(tag_name, foreground="#1f1f1f", underline=False)
-        self.text.tag_bind(tag_name, "<Enter>", lambda event, tag=tag_name: self._on_tts_hover(tag, event))
-        self.text.tag_bind(tag_name, "<Leave>", lambda _event: self.text.configure(cursor=""))
-        return tag_name
-
-    def _on_tts_body_click(self, tag_name: str):
-        return self._play_bound_tts_text(
-            tag_name,
-            trigger_name="body click",
-        )
-
-    def _is_tts_hover_symbol_hit(self, tag_name: str, event=None) -> bool:
+    def _is_tts_body_tag_hit(self, tag_name: str, event=None) -> bool:
         if event is None:
             return True
         text_widget = getattr(self, "text", None)
@@ -2170,21 +2156,91 @@ class SidebarUI:
             return False
         try:
             index = text_widget.index(f"@{event.x},{event.y}")
-            if tag_name not in text_widget.tag_names(index):
-                return False
-            return text_widget.get(index, f"{index}+1c") == TTS_ACTION_SYMBOL
+            return tag_name in text_widget.tag_names(index)
         except Exception:
             return False
 
-    def _on_tts_hover(self, tag_name: str, event=None):
-        if not self._is_tts_hover_symbol_hit(tag_name, event):
+    def _has_text_selection(self) -> bool:
+        text_widget = getattr(self, "text", None)
+        if text_widget is None:
+            return False
+        try:
+            return bool(text_widget.tag_ranges(tk.SEL))
+        except Exception:
+            return False
+
+    def _cancel_pending_tts_body_click(self):
+        after_id = str(getattr(self, "_tts_body_click_pending_after_id", "") or "")
+        root = getattr(self, "root", None)
+        if after_id and root is not None:
+            try:
+                root.after_cancel(after_id)
+            except Exception:
+                pass
+        self._tts_body_click_pending_after_id = ""
+        self._tts_body_click_pending_tag = ""
+
+    def _schedule_tts_body_click_play(self, tag_name: str):
+        self._cancel_pending_tts_body_click()
+        root = getattr(self, "root", None)
+        if root is None:
+            self._execute_pending_tts_body_click(tag_name)
+            return
+
+        self._tts_body_click_pending_tag = str(tag_name or "")
+
+        def _callback(tag=tag_name):
+            self._execute_pending_tts_body_click(tag)
+
+        self._tts_body_click_pending_after_id = str(
+            root.after(TTS_BODY_CLICK_PLAY_DELAY_MS, _callback)
+        )
+
+    def _execute_pending_tts_body_click(self, tag_name: str):
+        pending_tag = str(getattr(self, "_tts_body_click_pending_tag", "") or "")
+        self._tts_body_click_pending_after_id = ""
+        self._tts_body_click_pending_tag = ""
+        if pending_tag and pending_tag != str(tag_name or ""):
             return "break"
-        self.text.configure(cursor="hand2")
+        if self._has_text_selection():
+            self._emit_runtime_log("tts body click ignored reason=selection")
+            return "break"
         return self._play_bound_tts_text(
             tag_name,
-            trigger_name="hover",
-            cooldown_seconds=TTS_HOVER_TRIGGER_COOLDOWN_SECONDS,
+            trigger_name="body click",
         )
+
+    def _on_tts_body_press(self, tag_name: str, event=None):
+        self._cancel_pending_tts_body_click()
+        if not self._is_tts_body_tag_hit(tag_name, event):
+            self._tts_body_click_press = None
+            return
+        self._tts_body_click_press = {
+            "tag": str(tag_name or ""),
+            "x": int(getattr(event, "x", 0)),
+            "y": int(getattr(event, "y", 0)),
+        }
+
+    def _on_tts_body_release(self, tag_name: str, event=None):
+        press = getattr(self, "_tts_body_click_press", None)
+        self._tts_body_click_press = None
+        if not isinstance(press, dict):
+            return
+        expected_tag = str(press.get("tag", "") or "")
+        if expected_tag != str(tag_name or ""):
+            return
+        if not self._is_tts_body_tag_hit(tag_name, event):
+            return
+        dx = int(getattr(event, "x", 0)) - int(press.get("x", 0))
+        dy = int(getattr(event, "y", 0)) - int(press.get("y", 0))
+        if dx * dx + dy * dy > TTS_BODY_CLICK_MOVE_TOLERANCE_PX * TTS_BODY_CLICK_MOVE_TOLERANCE_PX:
+            return
+        self._schedule_tts_body_click_play(tag_name)
+
+    def _on_tts_body_multi_click(self, _event=None):
+        self._tts_body_click_press = None
+        self._cancel_pending_tts_body_click()
+        return
 
     def maybe_auto_read_message(self, msg: SidebarMessage) -> bool:
         if not self._is_auto_read_enabled():
@@ -2896,6 +2952,10 @@ def main():
         nonlocal closing, worker_restart_deadline
         closing = True
         worker_restart_deadline = 0.0
+        try:
+            ui._cancel_pending_tts_body_click()
+        except Exception:
+            pass
         try:
             if worker is not None and worker.poll() is None:
                 worker.terminate()

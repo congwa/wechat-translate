@@ -750,7 +750,7 @@ class SidebarHelpersTest(unittest.TestCase):
         self.assertEqual(ui.text.calls[2][1], "\n")
         self.assertEqual(ui.text.calls[2][2], "msg_left")
 
-    def test_insert_message_content_appends_tts_symbol_for_english_message(self):
+    def test_insert_message_content_marks_body_clickable_for_english_message(self):
         class FakeVar:
             def __init__(self, value):
                 self.value = value
@@ -780,7 +780,9 @@ class SidebarHelpersTest(unittest.TestCase):
         ui.text = FakeText()
         ui._tts_action_tags = {}
         ui._tts_action_index = 0
-        ui._tts_hover_last_trigger_at = {}
+        ui._tts_body_click_press = None
+        ui._tts_body_click_pending_after_id = ""
+        ui._tts_body_click_pending_tag = ""
 
         sidebar.SidebarUI._insert_message_content(
             ui,
@@ -797,10 +799,10 @@ class SidebarHelpersTest(unittest.TestCase):
 
         self.assertEqual(ui.text.calls[1][1], "Ahem.")
         self.assertEqual(ui.text.calls[1][2], ("msg_left", "tts_body_action_1"))
-        self.assertEqual(ui.text.calls[3][1], sidebar.TTS_ACTION_SYMBOL)
-        self.assertEqual(ui.text.calls[3][2], ("msg_left", "tts_action_2"))
+        self.assertEqual(ui.text.calls[2][1], "\n")
+        self.assertEqual(ui.text.calls[2][2], "msg_left")
 
-    def test_insert_message_content_keeps_tts_symbol_when_display_includes_cn(self):
+    def test_insert_message_content_keeps_body_clickable_when_display_includes_cn(self):
         class FakeVar:
             def __init__(self, value):
                 self.value = value
@@ -830,7 +832,9 @@ class SidebarHelpersTest(unittest.TestCase):
         ui.text = FakeText()
         ui._tts_action_tags = {}
         ui._tts_action_index = 0
-        ui._tts_hover_last_trigger_at = {}
+        ui._tts_body_click_press = None
+        ui._tts_body_click_pending_after_id = ""
+        ui._tts_body_click_pending_tag = ""
 
         sidebar.SidebarUI._insert_message_content(
             ui,
@@ -848,8 +852,8 @@ class SidebarHelpersTest(unittest.TestCase):
 
         self.assertEqual(ui.text.calls[1][1], "Ahem.\nCN: 咳")
         self.assertEqual(ui.text.calls[1][2], ("msg_left", "tts_body_action_1"))
-        self.assertEqual(ui.text.calls[3][1], sidebar.TTS_ACTION_SYMBOL)
-        self.assertEqual(ui.text.calls[3][2], ("msg_left", "tts_action_2"))
+        self.assertEqual(ui.text.calls[2][1], "\n")
+        self.assertEqual(ui.text.calls[2][2], "msg_left")
 
     def test_should_render_tts_action_hides_button_for_original_mode_or_non_english(self):
         class FakeVar:
@@ -910,30 +914,6 @@ class SidebarHelpersTest(unittest.TestCase):
             )
         )
 
-    def test_on_tts_hover_reads_bound_english_text(self):
-        class FakePlayer:
-            def __init__(self):
-                self.calls = []
-
-            def speak_async(self, text):
-                self.calls.append(text)
-                return True
-
-        class FakeText:
-            def configure(self, **_kwargs):
-                return None
-
-        ui = object.__new__(sidebar.SidebarUI)
-        ui.tts_player = FakePlayer()
-        ui.text = FakeText()
-        ui._tts_action_tags = {"tts_action_1": "Ahem."}
-        ui._tts_hover_last_trigger_at = {}
-
-        result = sidebar.SidebarUI._on_tts_hover(ui, "tts_action_1")
-
-        self.assertEqual(ui.tts_player.calls, ["Ahem."])
-        self.assertEqual(result, "break")
-
     def test_on_tts_body_click_reads_bound_english_text(self):
         class FakePlayer:
             def __init__(self):
@@ -947,36 +927,38 @@ class SidebarHelpersTest(unittest.TestCase):
         ui.tts_player = FakePlayer()
         ui.runtime_logger = None
         ui._tts_action_tags = {"tts_body_action_1": "Ahem."}
-        ui._tts_hover_last_trigger_at = {}
+        ui._tts_body_click_pending_after_id = ""
+        ui._tts_body_click_pending_tag = ""
 
-        result = sidebar.SidebarUI._on_tts_body_click(ui, "tts_body_action_1")
+        result = sidebar.SidebarUI._execute_pending_tts_body_click(ui, "tts_body_action_1")
 
         self.assertEqual(ui.tts_player.calls, ["Ahem."])
         self.assertEqual(result, "break")
 
-    def test_on_tts_hover_logs_rejected_result(self):
+    def test_execute_pending_tts_body_click_logs_rejected_result(self):
         class FakePlayer:
             def speak_async(self, _text):
                 return False
 
         class FakeText:
-            def configure(self, **_kwargs):
-                return None
+            def tag_ranges(self, *_args):
+                return ()
 
         ui = object.__new__(sidebar.SidebarUI)
         ui.tts_player = FakePlayer()
         ui.text = FakeText()
         logs = []
         ui.runtime_logger = logs.append
-        ui._tts_action_tags = {"tts_action_1": "Ahem."}
-        ui._tts_hover_last_trigger_at = {}
+        ui._tts_action_tags = {"tts_body_action_1": "Ahem."}
+        ui._tts_body_click_pending_after_id = ""
+        ui._tts_body_click_pending_tag = ""
 
-        result = sidebar.SidebarUI._on_tts_hover(ui, "tts_action_1")
+        result = sidebar.SidebarUI._execute_pending_tts_body_click(ui, "tts_body_action_1")
 
         self.assertEqual(result, "break")
-        self.assertTrue(any("tts hover rejected" in line for line in logs))
+        self.assertTrue(any("tts body click rejected" in line for line in logs))
 
-    def test_on_tts_hover_ignores_non_symbol_hit(self):
+    def test_execute_pending_tts_body_click_ignores_selection(self):
         class FakePlayer:
             def __init__(self):
                 self.calls = []
@@ -986,33 +968,64 @@ class SidebarHelpersTest(unittest.TestCase):
                 return True
 
         class FakeText:
-            def configure(self, **_kwargs):
-                return None
-
-            def index(self, _index):
-                return "1.0"
-
-            def tag_names(self, _index):
-                return ("tts_action_1",)
-
-            def get(self, _start, _end):
-                return "A"
-
-        class FakeEvent:
-            x = 10
-            y = 12
+            def tag_ranges(self, *_args):
+                return ("1.0", "1.3")
 
         ui = object.__new__(sidebar.SidebarUI)
         ui.tts_player = FakePlayer()
         ui.text = FakeText()
-        ui.runtime_logger = None
-        ui._tts_action_tags = {"tts_action_1": "Ahem."}
-        ui._tts_hover_last_trigger_at = {}
+        logs = []
+        ui.runtime_logger = logs.append
+        ui._tts_action_tags = {"tts_body_action_1": "Ahem."}
+        ui._tts_body_click_pending_after_id = ""
+        ui._tts_body_click_pending_tag = ""
 
-        result = sidebar.SidebarUI._on_tts_hover(ui, "tts_action_1", FakeEvent())
+        result = sidebar.SidebarUI._execute_pending_tts_body_click(ui, "tts_body_action_1")
 
         self.assertEqual(result, "break")
         self.assertEqual(ui.tts_player.calls, [])
+        self.assertTrue(any("tts body click ignored reason=selection" in line for line in logs))
+
+    def test_on_tts_body_release_schedules_click_when_move_small(self):
+        class FakeEvent:
+            x = 13
+            y = 14
+
+        ui = object.__new__(sidebar.SidebarUI)
+        ui._tts_body_click_press = {"tag": "tts_body_action_1", "x": 10, "y": 12}
+        scheduled = []
+        ui._schedule_tts_body_click_play = scheduled.append
+        ui._is_tts_body_tag_hit = lambda tag, event=None: tag == "tts_body_action_1"
+
+        sidebar.SidebarUI._on_tts_body_release(ui, "tts_body_action_1", FakeEvent())
+
+        self.assertEqual(scheduled, ["tts_body_action_1"])
+
+    def test_on_tts_body_release_ignores_drag_selection_motion(self):
+        class FakeEvent:
+            x = 30
+            y = 12
+
+        ui = object.__new__(sidebar.SidebarUI)
+        ui._tts_body_click_press = {"tag": "tts_body_action_1", "x": 10, "y": 12}
+        scheduled = []
+        ui._schedule_tts_body_click_play = scheduled.append
+        ui._is_tts_body_tag_hit = lambda tag, event=None: tag == "tts_body_action_1"
+
+        sidebar.SidebarUI._on_tts_body_release(ui, "tts_body_action_1", FakeEvent())
+
+        self.assertEqual(scheduled, [])
+
+    def test_on_tts_body_multi_click_cancels_pending_click(self):
+        ui = object.__new__(sidebar.SidebarUI)
+        ui._tts_body_click_press = {"tag": "tts_body_action_1", "x": 10, "y": 12}
+        cancelled = []
+        ui._cancel_pending_tts_body_click = lambda: cancelled.append(True)
+
+        sidebar.SidebarUI._on_tts_body_multi_click(ui)
+
+        self.assertIsNone(ui._tts_body_click_press)
+        self.assertEqual(cancelled, [True])
 
     def test_maybe_auto_read_message_only_reads_active_chat_when_enabled(self):
         class FakeVar:
