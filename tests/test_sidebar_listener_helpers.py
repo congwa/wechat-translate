@@ -943,6 +943,44 @@ class SidebarHelpersTest(unittest.TestCase):
         self.assertEqual(result, "break")
         self.assertTrue(any("tts hover rejected" in line for line in logs))
 
+    def test_on_tts_hover_ignores_non_symbol_hit(self):
+        class FakePlayer:
+            def __init__(self):
+                self.calls = []
+
+            def speak_async(self, text):
+                self.calls.append(text)
+                return True
+
+        class FakeText:
+            def configure(self, **_kwargs):
+                return None
+
+            def index(self, _index):
+                return "1.0"
+
+            def tag_names(self, _index):
+                return ("tts_action_1",)
+
+            def get(self, _start, _end):
+                return "A"
+
+        class FakeEvent:
+            x = 10
+            y = 12
+
+        ui = object.__new__(sidebar.SidebarUI)
+        ui.tts_player = FakePlayer()
+        ui.text = FakeText()
+        ui.runtime_logger = None
+        ui._tts_action_tags = {"tts_action_1": "Ahem."}
+        ui._tts_hover_last_trigger_at = {}
+
+        result = sidebar.SidebarUI._on_tts_hover(ui, "tts_action_1", FakeEvent())
+
+        self.assertEqual(result, "break")
+        self.assertEqual(ui.tts_player.calls, [])
+
     def test_maybe_auto_read_message_only_reads_active_chat_when_enabled(self):
         class FakeVar:
             def __init__(self, value):

@@ -2097,11 +2097,27 @@ class SidebarUI:
         tag_name = f"tts_action_{self._tts_action_index}"
         self._tts_action_tags[tag_name] = str(msg.text_en or "")
         self.text.tag_configure(tag_name, foreground="#1f1f1f", underline=False)
-        self.text.tag_bind(tag_name, "<Enter>", lambda _event, tag=tag_name: self._on_tts_hover(tag))
+        self.text.tag_bind(tag_name, "<Enter>", lambda event, tag=tag_name: self._on_tts_hover(tag, event))
         self.text.tag_bind(tag_name, "<Leave>", lambda _event: self.text.configure(cursor=""))
         return tag_name
 
-    def _on_tts_hover(self, tag_name: str):
+    def _is_tts_hover_symbol_hit(self, tag_name: str, event=None) -> bool:
+        if event is None:
+            return True
+        text_widget = getattr(self, "text", None)
+        if text_widget is None:
+            return False
+        try:
+            index = text_widget.index(f"@{event.x},{event.y}")
+            if tag_name not in text_widget.tag_names(index):
+                return False
+            return text_widget.get(index, f"{index}+1c") == TTS_ACTION_SYMBOL
+        except Exception:
+            return False
+
+    def _on_tts_hover(self, tag_name: str, event=None):
+        if not self._is_tts_hover_symbol_hit(tag_name, event):
+            return "break"
         self.text.configure(cursor="hand2")
         text = self._tts_action_tags.get(str(tag_name or ""))
         if not text:
