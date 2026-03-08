@@ -276,8 +276,9 @@
 - 如果直接把右侧当前显示文本喂给 TTS，原文模式下会把中文读出来，翻译失败时还可能把 `translate_failed` 一起读掉。
 
 处理：
-- 当前 `▶` 朗读入口只在“原文关闭 + 正文可判定为英文 + 非 Loading/失败文本”时显示。
-- 当前 `▶` 改为“悬停即触发”，不再要求点击；但悬停入口带短冷却，避免鼠标抖动把同一段英文重复塞进 TTS 队列。
+- 当前手动朗读入口只在“原文关闭 + 正文可判定为英文 + 非 Loading/失败文本”时启用。
+- 当前正文支持直接点击朗读；消息尾部的 `▶` 也支持悬停即触发。
+- 正文点击范围只覆盖正文字符，不包括时间、发送人和空白区；`▶` 悬停入口带短冷却，避免鼠标抖动把同一段英文重复塞进 TTS 队列。
 - TTS provider 现在走独立配置：`listener.json` 只负责选择 `tts.provider`，豆包私有参数拆到 `config/doubao_tts.json`。
 - 当前默认 provider 已切到 `doubao`；这会让启动默认依赖豆包凭证，不再像旧版那样天然只依赖本机系统语音。
 - `tts.provider=windows_system` 时，仍走 Windows 系统 `System.Speech`，默认优先选 `Microsoft Zira Desktop`，不存在时再回退到其他英文 voice。
@@ -301,19 +302,20 @@
 
 ### 24) TTS 出问题但日志看不见
 现象：
-- 豆包或系统 TTS 明明“没响”，但日志文件里只有启动配置，没有悬停 `▶`、自动朗读、合成失败、播放失败的细节。
+- 豆包或系统 TTS 明明“没响”，但日志文件里只有启动配置，没有点击正文、悬停 `▶`、自动朗读、合成失败、播放失败的细节。
 - 用户只能猜是按钮没触发、条件被拦截、豆包鉴权失败，还是播放链路挂了。
 - 还有一种更误导人的情况：日志里已经出现 `tts synthesize success`，甚至业务代码已经走到 `tts played`，但耳朵里仍然没有实际语音。
 
 根因：
 - 旧逻辑只在启动时记录 `tts configured ...`。
 - 运行期失败原因只写进 TTS 对象内部 `_last_error`，UI 和日志文件都看不到。
-- `▶` 悬停与自动朗读的触发点原先也没有补充运行期日志。
+- 正文点击、`▶` 悬停与自动朗读的触发点原先也没有补充运行期日志。
 - 豆包单向流式返回的 WAV 可能把 `RIFF` / `data` chunk size 写成 `0xFFFFFFFF` 占位值；这种音频有时能被宽松播放器容忍，但 `winsound` 这类 Windows 播放路径兼容性更差，表现成“合成成功但不出声”。
 
 处理：
 - TTS runtime 日志统一回流到主进程事件队列，再写入状态栏与 `logging.file`。
 - 当前至少会记录这些关键节点：
+  - `tts body click queued/rejected`
   - `tts hover queued/rejected/ignored`
   - `tts auto queued/skipped/rejected`
   - `tts synthesize start/success`
@@ -343,8 +345,8 @@ python listener_app/sidebar_translate_listener.py ^
 3. 若无消息事件，临时设 `listen.worker_debug=true`，观察 `debug target=... session_preview=... unread=...` 是否变化。
 4. `session_preview` 不变化时，再设 `listen.focus_refresh=true` 验证是否恢复。
 5. 若怀疑 TTS 无效，直接搜 `tts ` 关键字：
-   - 只有 `tts configured ...`，没有 `tts hover/tts auto`：说明根本没触发朗读入口。
-   - 有 `tts hover/tts auto rejected|skipped|ignored`：看 `reason=...` 判断是原文模式、待翻译、冷却命中还是非英文。
+   - 只有 `tts configured ...`，没有 `tts body click/tts hover/tts auto`：说明根本没触发朗读入口。
+   - 有 `tts body click/tts hover/tts auto rejected|skipped|ignored`：看 `reason=...` 判断是原文模式、待翻译、冷却命中还是非英文。
    - 有 `tts synthesize start` 但没有 `tts played`：优先看后续 `tts failed`，通常就是豆包网络/鉴权/协议或本机播放失败。
    - 有 `tts synthesize success` 但实际没声：优先怀疑返回的是流式占位 WAV 头或 Windows 播放兼容性，不要先把锅甩给豆包鉴权或系统静音。
 

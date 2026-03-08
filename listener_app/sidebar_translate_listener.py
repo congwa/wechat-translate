@@ -2028,12 +2028,17 @@ class SidebarUI:
             msg_tag = "msg_right_pending" if msg.is_self else "msg_left_pending"
         else:
             msg_tag = "msg_right" if msg.is_self else "msg_left"
+        clickable = self._should_render_tts_action(msg, msg.text_en)
         header = f"[{msg.created_at}]"
         if msg.sender_name:
             header += f" {msg.sender_name}"
         self.text.insert(tk.END, header + "\n", meta_tag)
-        self.text.insert(tk.END, display_text, msg_tag)
-        if self._should_render_tts_action(msg, msg.text_en):
+        if clickable:
+            body_action_tag = self._register_tts_body_action_tag(msg)
+            self.text.insert(tk.END, display_text, (msg_tag, body_action_tag))
+        else:
+            self.text.insert(tk.END, display_text, msg_tag)
+        if clickable:
             action_tag = self._register_tts_action_tag(msg)
             self.text.insert(tk.END, " ", msg_tag)
             self.text.insert(tk.END, TTS_ACTION_SYMBOL, (msg_tag, action_tag))
@@ -2100,6 +2105,48 @@ class SidebarUI:
     def _should_render_tts_action(self, msg: SidebarMessage, display_text: str) -> bool:
         return not self._get_tts_action_block_reason(msg, display_text)
 
+    def _play_bound_tts_text(
+        self,
+        tag_name: str,
+        *,
+        trigger_name: str,
+        cooldown_seconds: float = 0.0,
+    ):
+        text = self._tts_action_tags.get(str(tag_name or ""))
+        if not text:
+            self._emit_runtime_log(f"tts {trigger_name} ignored reason=missing_bound_text")
+            return "break"
+        if cooldown_seconds > 0:
+            now_ts = time.time()
+            last_trigger_at = self._tts_hover_last_trigger_at.get(text, 0.0)
+            if last_trigger_at and now_ts - last_trigger_at < cooldown_seconds:
+                self._emit_runtime_log(
+                    f"tts {trigger_name} ignored reason=cooldown preview={summarize_tts_text(text)}"
+                )
+                return "break"
+        else:
+            now_ts = 0.0
+        tts_player = getattr(self, "tts_player", None)
+        if not tts_player:
+            self._emit_runtime_log(f"tts {trigger_name} ignored reason=no_player")
+            return "break"
+        result = tts_player.speak_async(text)
+        if cooldown_seconds > 0:
+            self._tts_hover_last_trigger_at[text] = now_ts
+        preview = summarize_tts_text(text)
+        action = "queued" if result else "rejected"
+        self._emit_runtime_log(f"tts {trigger_name} {action} preview={preview}")
+        return "break"
+
+    def _register_tts_body_action_tag(self, msg: SidebarMessage) -> str:
+        self._tts_action_index += 1
+        tag_name = f"tts_body_action_{self._tts_action_index}"
+        self._tts_action_tags[tag_name] = str(msg.text_en or "")
+        self.text.tag_bind(tag_name, "<Button-1>", lambda _event, tag=tag_name: self._on_tts_body_click(tag))
+        self.text.tag_bind(tag_name, "<Enter>", lambda _event: self.text.configure(cursor="hand2"))
+        self.text.tag_bind(tag_name, "<Leave>", lambda _event: self.text.configure(cursor=""))
+        return tag_name
+
     def _register_tts_action_tag(self, msg: SidebarMessage) -> str:
         self._tts_action_index += 1
         tag_name = f"tts_action_{self._tts_action_index}"
@@ -2108,6 +2155,12 @@ class SidebarUI:
         self.text.tag_bind(tag_name, "<Enter>", lambda event, tag=tag_name: self._on_tts_hover(tag, event))
         self.text.tag_bind(tag_name, "<Leave>", lambda _event: self.text.configure(cursor=""))
         return tag_name
+
+    def _on_tts_body_click(self, tag_name: str):
+        return self._play_bound_tts_text(
+            tag_name,
+            trigger_name="body click",
+        )
 
     def _is_tts_hover_symbol_hit(self, tag_name: str, event=None) -> bool:
         if event is None:
@@ -2127,27 +2180,11 @@ class SidebarUI:
         if not self._is_tts_hover_symbol_hit(tag_name, event):
             return "break"
         self.text.configure(cursor="hand2")
-        text = self._tts_action_tags.get(str(tag_name or ""))
-        if not text:
-            self._emit_runtime_log("tts hover ignored reason=missing_bound_text")
-            return "break"
-        now_ts = time.time()
-        last_trigger_at = self._tts_hover_last_trigger_at.get(text, 0.0)
-        if last_trigger_at and now_ts - last_trigger_at < TTS_HOVER_TRIGGER_COOLDOWN_SECONDS:
-            self._emit_runtime_log(
-                f"tts hover ignored reason=cooldown preview={summarize_tts_text(text)}"
-            )
-            return "break"
-        tts_player = getattr(self, "tts_player", None)
-        if not tts_player:
-            self._emit_runtime_log("tts hover ignored reason=no_player")
-            return "break"
-        result = tts_player.speak_async(text)
-        self._tts_hover_last_trigger_at[text] = now_ts
-        preview = summarize_tts_text(text)
-        action = "queued" if result else "rejected"
-        self._emit_runtime_log(f"tts hover {action} preview={preview}")
-        return "break"
+        return self._play_bound_tts_text(
+            tag_name,
+            trigger_name="hover",
+            cooldown_seconds=TTS_HOVER_TRIGGER_COOLDOWN_SECONDS,
+        )
 
     def maybe_auto_read_message(self, msg: SidebarMessage) -> bool:
         if not self._is_auto_read_enabled():
