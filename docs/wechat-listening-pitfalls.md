@@ -9,13 +9,13 @@
 
 目标：在不改微信客户端的前提下，稳定监听指定会话的预览消息并在侧边栏展示（可接 DeepLX 翻译）。
 
-启动时监听目标来源于配置文件：`config/listener.json` 的 `listen.targets`；运行中若用户在侧边栏显式添加/删除 target，也会回写该配置并重启 worker 生效。
+启动时监听目标来源于配置文件：`config/listener.json` 的 `listen.targets`；运行中若用户在侧边栏显式添加/删除 target，也会回写该配置，并按“先停旧 worker、确认退出后再启动新 worker”的顺序生效。
 
 ## 架构结论
 - 监听与 UI 必须分离：`group_listener_worker.py` 负责抓消息，`sidebar_translate_listener.py` 负责展示与翻译。
 - 当前监听主链路已收敛为 `session-only`。
 - 当前 worker 为单进程多目标：一次扫描微信主窗口左侧会话列表，覆盖全部 `listen.targets`。
-- 运行时 target 变更不走 IPC 热更新；当前实现是“UI 显式增删 -> 回写 `listener.json` -> 平滑重启同一个 worker”。
+- 运行时 target 变更不走 IPC 热更新；当前实现是“UI 显式增删 -> 回写 `listener.json` -> 先停旧 worker -> 确认退出后再启动新 worker”。
 - 当前主路径不再维护 `chat` / `mixed` 监听模式；相关复杂度已从主链路删除。
 - 当前分支不再维护任何主动操作微信的能力（发送消息、发送文件、自动回复、写输入框）。
 - 默认行为必须低干扰：
@@ -79,6 +79,7 @@
   - worker 异常退出后进入 `worker_backoff`
   - 按退避梯度自动重启：`3s -> 6s -> 12s -> 24s -> 30s(cap)`
   - 重新进入 `running` 后退避次数清零
+  - 运行时变更 target 时，不会先启动新 worker 再回头清旧 worker；当前实现会先请求旧 worker 退出，超时后再强杀，只有确认旧 worker 已退出后才拉起新 worker。
 
 ### 6) Worker 日志与事件混流
 现象：

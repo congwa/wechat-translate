@@ -99,6 +99,8 @@ TTS_BODY_CLICK_MOVE_TOLERANCE_PX = 4
 CHAT_SWITCH_SHORTCUT_DEBOUNCE_SECONDS = 0.15
 WORKER_RESTART_INITIAL_BACKOFF_SECONDS = 3.0
 WORKER_RESTART_MAX_BACKOFF_SECONDS = 30.0
+WORKER_STOP_TIMEOUT_SECONDS = 3.0
+WORKER_FORCE_KILL_TIMEOUT_SECONDS = 1.0
 RUNTIME_LOCK_DIR = os.path.join(ROOT_DIR, "logs", ".runtime")
 SUPPORTED_TRANSLATE_PROVIDERS = ("deeplx", "passthrough")
 SUPPORTED_TTS_PROVIDERS = ("windows_system", "doubao")
@@ -2492,6 +2494,8 @@ def main():
     worker_last_handled_exit_pid = 0
     worker_restart_attempt = 0
     worker_restart_deadline = 0.0
+    worker_stop_deadline = 0.0
+    worker_force_kill_requested = False
     worker_state = "starting"
     worker_detail = "starting worker"
     pending_worker_launch_reason = ""
@@ -2513,9 +2517,12 @@ def main():
 
     def schedule_worker_restart(reason: str, attempt: int):
         nonlocal worker_restart_attempt, worker_restart_deadline, worker_state, worker_detail
+        nonlocal worker_stop_deadline, worker_force_kill_requested
         delay = compute_worker_restart_delay(attempt)
         worker_restart_attempt = attempt
         worker_restart_deadline = time.time() + delay
+        worker_stop_deadline = 0.0
+        worker_force_kill_requested = False
         worker_state = "worker_backoff"
         worker_detail = f"{reason}, retry in {delay:.1f}s"
         backoff_line = f"worker backoff attempt={attempt} delay={delay:.1f}s reason={reason}"
@@ -2524,6 +2531,7 @@ def main():
 
     def launch_worker(reason: str) -> bool:
         nonlocal worker, worker_last_handled_exit_pid, worker_restart_deadline, worker_state, worker_detail
+        nonlocal worker_stop_deadline, worker_force_kill_requested
         try:
             worker = start_worker_process(
                 running_targets,
@@ -2539,6 +2547,8 @@ def main():
 
         worker_last_handled_exit_pid = 0
         worker_restart_deadline = 0.0
+        worker_stop_deadline = 0.0
+        worker_force_kill_requested = False
         worker_state = "starting"
         worker_detail = reason
         append_log_file(log_file, f"worker start pid={worker.pid} reason={reason}")
@@ -2551,6 +2561,7 @@ def main():
     def request_worker_restart(reason: str):
         nonlocal worker, worker_restart_attempt, worker_restart_deadline
         nonlocal worker_state, worker_detail, pending_worker_launch_reason
+        nonlocal worker_stop_deadline, worker_force_kill_requested
         restart_reason = str(reason or "targets changed").strip() or "targets changed"
         pending_worker_launch_reason = restart_reason
         worker_restart_attempt = 0
@@ -2559,23 +2570,44 @@ def main():
         worker_detail = restart_reason
         append_log_file(log_file, f"worker restarting: {restart_reason}")
         if worker is None:
+            worker_stop_deadline = 0.0
+            worker_force_kill_requested = False
             launch_reason = pending_worker_launch_reason
             pending_worker_launch_reason = ""
             launch_worker(launch_reason)
             return
         if worker.poll() is not None:
             worker = None
+            worker_stop_deadline = 0.0
+            worker_force_kill_requested = False
             launch_reason = pending_worker_launch_reason
             pending_worker_launch_reason = ""
             launch_worker(launch_reason)
             return
+        if worker_stop_deadline:
+            worker_detail = f"{restart_reason}, waiting previous worker exit"
+            return
         try:
             worker.terminate()
+            worker_stop_deadline = time.time() + WORKER_STOP_TIMEOUT_SECONDS
+            worker_force_kill_requested = False
+            append_log_file(
+                log_file,
+                f"worker terminate requested pid={worker.pid} reason={restart_reason}",
+            )
         except Exception:
             try:
                 worker.kill()
+                worker_stop_deadline = time.time() + WORKER_FORCE_KILL_TIMEOUT_SECONDS
+                worker_force_kill_requested = True
+                append_log_file(
+                    log_file,
+                    f"worker kill requested pid={worker.pid} reason={restart_reason}",
+                )
             except Exception as e:
                 pending_worker_launch_reason = ""
+                worker_stop_deadline = 0.0
+                worker_force_kill_requested = False
                 raise RuntimeError(f"stop worker failed: {e}")
 
     def handle_add_target_request(raw_target: str):
@@ -2914,6 +2946,7 @@ def main():
     def drain_queue():
         nonlocal worker, worker_last_handled_exit_pid, worker_state, worker_detail
         nonlocal pending_worker_launch_reason
+        nonlocal worker_stop_deadline, worker_force_kill_requested
         try:
             while True:
                 event = event_queue.get_nowait()
@@ -2927,6 +2960,8 @@ def main():
             if return_code is not None and worker_last_handled_exit_pid != worker.pid:
                 worker_last_handled_exit_pid = worker.pid
                 worker = None
+                worker_stop_deadline = 0.0
+                worker_force_kill_requested = False
                 exit_line = f"worker exited code={return_code}"
                 ui.append_log(exit_line)
                 append_log_file(log_file, exit_line)
@@ -2940,6 +2975,27 @@ def main():
                 else:
                     attempt = worker_restart_attempt + 1
                     schedule_worker_restart(f"code={return_code}", attempt)
+            elif not closing and pending_worker_launch_reason and worker_stop_deadline and now_ts >= worker_stop_deadline:
+                restart_reason = pending_worker_launch_reason
+                if not worker_force_kill_requested:
+                    try:
+                        worker.kill()
+                        worker_force_kill_requested = True
+                        worker_stop_deadline = now_ts + WORKER_FORCE_KILL_TIMEOUT_SECONDS
+                        worker_state = "restarting"
+                        worker_detail = f"{restart_reason}, forcing previous worker exit"
+                        kill_line = f"worker kill requested pid={worker.pid} reason={restart_reason}"
+                        ui.append_log(kill_line)
+                        append_log_file(log_file, kill_line)
+                    except Exception as e:
+                        worker_stop_deadline = now_ts + WORKER_FORCE_KILL_TIMEOUT_SECONDS
+                        fail_line = f"worker kill request failed pid={worker.pid} reason={restart_reason} error={e}"
+                        ui.append_log(fail_line)
+                        append_log_file(log_file, fail_line)
+                else:
+                    worker_stop_deadline = now_ts + WORKER_FORCE_KILL_TIMEOUT_SECONDS
+                    worker_state = "restarting"
+                    worker_detail = f"{restart_reason}, waiting previous worker exit"
 
         if not closing and worker_restart_deadline and now_ts >= worker_restart_deadline:
             launch_worker(f"restarting worker attempt={worker_restart_attempt}")
