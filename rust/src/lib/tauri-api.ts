@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { ApiResponse, AppSettings, AppStateSnapshot } from "./types";
+import type { ApiResponse, AppSettings, AppStateSnapshot, SidebarSnapshot } from "./types";
 
 export async function appStateGet(): Promise<ApiResponse<AppStateSnapshot>> {
   return invoke("app_state_get");
@@ -65,6 +65,13 @@ export async function sidebarWindowOpen(width?: number, windowMode?: string): Pr
 
 export async function sidebarWindowClose(): Promise<ApiResponse> {
   return invoke("sidebar_window_close");
+}
+
+export async function sidebarSnapshotGet(params?: {
+  chatName?: string;
+  limit?: number;
+}): Promise<ApiResponse<SidebarSnapshot>> {
+  return invoke("sidebar_snapshot_get", params ?? {});
 }
 
 export async function getTaskStatus(): Promise<ApiResponse> {

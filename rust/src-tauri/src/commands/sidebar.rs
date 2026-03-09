@@ -1,4 +1,5 @@
 use crate::config::{load_app_config, ConfigDir};
+use crate::db::MessageDb;
 use crate::sidebar_window::{SidebarWindowState, WindowMode};
 use crate::task_manager::TaskManager;
 use crate::translator::DeepLXTranslator;
@@ -35,8 +36,7 @@ pub async fn sidebar_start(
             target_lang.unwrap_or_else(|| config.translate.target_lang.clone()),
             timeout_seconds.unwrap_or(config.translate.timeout_seconds),
             max_concurrency.unwrap_or(config.translate.max_concurrency),
-            max_requests_per_second
-                .unwrap_or(config.translate.max_requests_per_second),
+            max_requests_per_second.unwrap_or(config.translate.max_requests_per_second),
             image_capture.unwrap_or(false),
         )
         .await
@@ -100,8 +100,7 @@ pub async fn live_start(
             target_lang.unwrap_or_else(|| config.translate.target_lang.clone()),
             timeout_seconds.unwrap_or(config.translate.timeout_seconds),
             max_concurrency.unwrap_or(config.translate.max_concurrency),
-            max_requests_per_second
-                .unwrap_or(config.translate.max_requests_per_second),
+            max_requests_per_second.unwrap_or(config.translate.max_requests_per_second),
             image_capture.unwrap_or(false),
         )
         .await
@@ -138,6 +137,35 @@ pub async fn sidebar_window_close(
 ) -> Result<serde_json::Value, String> {
     state.close(&app).await.map_err(|e| e.to_string())?;
     Ok(serde_json::json!({ "ok": true, "message": "sidebar window closed" }))
+}
+
+#[tauri::command]
+pub async fn sidebar_snapshot_get(
+    db: tauri::State<'_, Arc<MessageDb>>,
+    manager: tauri::State<'_, TaskManager>,
+    chat_name: Option<String>,
+    limit: Option<i64>,
+) -> Result<serde_json::Value, String> {
+    let selected_chat = match chat_name.as_deref().map(str::trim).filter(|name| !name.is_empty()) {
+        Some(name) => Some(name.to_string()),
+        None => db.latest_chat_name().map_err(|e| e.to_string())?,
+    };
+
+    let messages = if let Some(chat) = selected_chat.as_deref() {
+        db.query_messages(Some(chat), None, None, limit.unwrap_or(50), 0)
+            .map_err(|e| e.to_string())?
+    } else {
+        Vec::new()
+    };
+
+    Ok(serde_json::json!({
+        "ok": true,
+        "data": {
+            "current_chat": selected_chat,
+            "messages": messages,
+            "translator": manager.get_translator_status(),
+        }
+    }))
 }
 
 #[tauri::command]

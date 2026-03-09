@@ -1,6 +1,6 @@
-use crate::app_state;
 use crate::adapter::ax_reader::{self, ChatMessage};
 use crate::adapter::MacOSAdapter;
+use crate::app_state;
 use crate::config::AppConfig;
 use crate::db::MessageDb;
 use crate::events::{EventStore, EventType};
@@ -608,7 +608,6 @@ impl TaskManager {
                                     "low",
                                 );
                             }
-
                         }
 
                         if !snapshot.preview_body.is_empty() {
@@ -824,14 +823,20 @@ impl TaskManager {
                                 }
 
                                 if sidebar_enabled.load(Ordering::Relaxed)
-                                    && should_forward_sidebar_chat(&active_chat_name, &chat_name)
+                                    && should_forward_sidebar_chat(&chat_name)
                                 {
+                                    events.publish(
+                                        &app_handle,
+                                        EventType::Status,
+                                        "monitor",
+                                        serde_json::json!({
+                                            "type": "chat_switched",
+                                            "chat_name": chat_name,
+                                        }),
+                                    );
                                     let (translator, limiter) = {
                                         let config = sidebar_config.lock().await;
-                                        (
-                                            config.translator.clone(),
-                                            config.limiter.clone(),
-                                        )
+                                        (config.translator.clone(), config.limiter.clone())
                                     };
 
                                     let sidebar_event = publish_sidebar_append(
@@ -848,8 +853,7 @@ impl TaskManager {
                                         found_image_path.as_deref(),
                                     );
 
-                                    if let (Some(translator), Some(limiter)) =
-                                        (translator, limiter)
+                                    if let (Some(translator), Some(limiter)) = (translator, limiter)
                                     {
                                         spawn_sidebar_translation_update(
                                             manager.clone(),
@@ -1414,8 +1418,8 @@ fn should_forward_session_preview(
     !use_right_panel_details || snapshot_chat_name != active_chat_name
 }
 
-fn should_forward_sidebar_chat(active_chat_name: &str, event_chat_name: &str) -> bool {
-    !active_chat_name.is_empty() && active_chat_name == event_chat_name
+fn should_forward_sidebar_chat(event_chat_name: &str) -> bool {
+    !event_chat_name.is_empty()
 }
 
 fn publish_sidebar_append(
@@ -1470,15 +1474,13 @@ fn spawn_sidebar_translation_update(
         let target_lang = translator.target_lang().to_string();
 
         if let Ok(Some(cached)) = db.get_cached_translation(&content, &source_lang, &target_lang) {
-            if target_lang == "EN" {
-                let _ = db.update_message_translation(
-                    &chat_name,
-                    &sender,
-                    &content,
-                    &detected_at,
-                    &cached.translated_text,
-                );
-            }
+            let _ = db.update_message_translation(
+                &chat_name,
+                &sender,
+                &content,
+                &detected_at,
+                &cached.translated_text,
+            );
             events.publish(
                 &app_handle,
                 EventType::Message,
@@ -1499,15 +1501,13 @@ fn spawn_sidebar_translation_update(
             Ok(translated) => {
                 let _ =
                     db.upsert_cached_translation(&content, &source_lang, &target_lang, &translated);
-                if target_lang == "EN" {
-                    let _ = db.update_message_translation(
-                        &chat_name,
-                        &sender,
-                        &content,
-                        &detected_at,
-                        &translated,
-                    );
-                }
+                let _ = db.update_message_translation(
+                    &chat_name,
+                    &sender,
+                    &content,
+                    &detected_at,
+                    &translated,
+                );
                 manager
                     .set_translator_status_if_current(
                         translator_generation,
@@ -1655,9 +1655,9 @@ mod tests {
     }
 
     #[test]
-    fn sidebar_forwarding_only_allows_active_chat_messages() {
-        assert!(should_forward_sidebar_chat("项目群", "项目群"));
-        assert!(!should_forward_sidebar_chat("项目群", "另一个群"));
-        assert!(!should_forward_sidebar_chat("", "项目群"));
+    fn sidebar_forwarding_requires_non_empty_chat_name() {
+        assert!(should_forward_sidebar_chat("项目群"));
+        assert!(should_forward_sidebar_chat("另一个群"));
+        assert!(!should_forward_sidebar_chat(""));
     }
 }

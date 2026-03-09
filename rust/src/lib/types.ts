@@ -113,3 +113,9 @@ export interface StoredMessage {
   source?: string;
   quality?: string;
 }
+
+export interface SidebarSnapshot {
+  current_chat?: string | null;
+  messages: StoredMessage[];
+  translator: TranslatorServiceStatus;
+}

@@ -1,11 +1,11 @@
-import { useRef, useEffect, useState, useMemo, useCallback } from "react";
+import { useRef, useEffect, useState, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { listen } from "@tauri-apps/api/event";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import { X, MessageCircle, Languages, AlertCircle, ChevronUp, ChevronDown } from "lucide-react";
 import { useSidebarStore } from "@/stores/sidebarStore";
-import type { SidebarMessage, StoredMessage } from "@/lib/types";
+import type { SidebarMessage } from "@/lib/types";
 import { useFormStore, type DisplayMode } from "@/stores/formStore";
 import { useRuntimeStore } from "@/stores/runtimeStore";
 import { useSettingsStore } from "@/stores/settingsStore";
@@ -31,7 +31,7 @@ function getWindowMode(): WindowMode {
 const DISPLAY_MODES: { value: DisplayMode; label: string; title: string }[] = [
   { value: "translated", label: "译", title: "纯翻译" },
   { value: "original", label: "中", title: "纯中文" },
-  { value: "bilingual", label: "双", title: "中英混排" },
+  { value: "bilingual", label: "双", title: "双语混排" },
 ];
 
 const containerVariants = {
@@ -199,53 +199,45 @@ export function SidebarView() {
 
   const items = useSidebarStore((s) => s.items);
   const currentChat = useSidebarStore((s) => s.currentChat);
-  const loadHistory = useSidebarStore((s) => s.loadHistory);
+  const refreshVersion = useSidebarStore((s) => s.refreshVersion);
+  const hydrateSnapshot = useSidebarStore((s) => s.hydrateSnapshot);
   const displayMode = useFormStore((s) => s.displayMode);
   const setSettings = useFormStore((s) => s.setSettings);
   const settings = useSettingsStore((s) => s.settings);
   const translatorStatus = useRuntimeStore((s) => s.runtime.translator);
+  const setTranslatorStatus = useRuntimeStore((s) => s.setTranslatorStatus);
   const collapsedCount = parseInt(useFormStore((s) => s.collapsedDisplayCount) || "0", 10);
   const bottomRef = useRef<HTMLDivElement>(null);
   const [visible, setVisible] = useState(true);
   const [collapsed, setCollapsed] = useState(false);
+  const [snapshotLoading, setSnapshotLoading] = useState(false);
   const expandedSizeRef = useRef({ w: 380, h: 600 });
   const translateEnabled = settings?.translate.enabled ?? false;
   const deeplxUrl = settings?.translate.deeplx_url ?? "";
   const canSwitchDisplayMode = !settings || (translateEnabled && deeplxUrl.trim() !== "");
   const effectiveDisplayMode: DisplayMode = canSwitchDisplayMode ? displayMode : "original";
 
-  const fetchHistory = useCallback(
-    async (chatName: string) => {
-      if (!chatName) return;
-      try {
-        const resp = (await api.dbQueryMessages({
-          chatName,
-          limit: 50,
-        })) as unknown as { data?: StoredMessage[] };
-        if (resp.data && resp.data.length > 0) {
-          loadHistory(resp.data, chatName);
-        }
-      } catch {
-        /* ignore */
+  const fetchSnapshot = useCallback(async () => {
+    setSnapshotLoading(true);
+    try {
+      const resp = await api.sidebarSnapshotGet({
+        chatName: currentChat || undefined,
+        limit: 50,
+      });
+      if (resp.data) {
+        hydrateSnapshot(resp.data.current_chat ?? "", resp.data.messages ?? []);
+        setTranslatorStatus(resp.data.translator);
       }
-    },
-    [loadHistory],
-  );
-
-  const latestError = useMemo(() => {
-    for (let i = items.length - 1; i >= 0; i--) {
-      if (items[i].translateError) {
-        return items[i].translateError;
-      }
+    } catch {
+      /* ignore */
+    } finally {
+      setSnapshotLoading(false);
     }
-    return "";
-  }, [items]);
+  }, [currentChat, hydrateSnapshot, setTranslatorStatus]);
 
   useEffect(() => {
-    if (currentChat) {
-      fetchHistory(currentChat);
-    }
-  }, [currentChat, fetchHistory]);
+    fetchSnapshot();
+  }, [fetchSnapshot, refreshVersion]);
 
   useEffect(() => {
     if (isIndependent) return;
@@ -366,20 +358,13 @@ export function SidebarView() {
                 <MessageCircle className="w-6 h-6 text-emerald-500/60 dark:text-emerald-400/50" />
               </div>
               <div className="text-center">
-                <p className="text-xs text-gray-500 dark:text-gray-400 font-medium">等待新消息...</p>
+                <p className="text-xs text-gray-500 dark:text-gray-400 font-medium">
+                  {snapshotLoading ? "加载消息中..." : "等待新消息..."}
+                </p>
                 <p className="text-[10px] text-gray-400/70 dark:text-gray-500/60 mt-1">
-                  切换微信聊天窗口即可开始
+                  {snapshotLoading ? "正在从数据库同步当前聊天" : "切换微信聊天窗口即可开始"}
                 </p>
               </div>
-            </div>
-          )}
-
-          {latestError && (
-            <div className="flex items-center gap-1.5 px-3 py-1.5 mb-2 rounded-lg bg-amber-500/5 dark:bg-amber-500/5">
-              <AlertCircle className="w-3 h-3 text-gray-400 dark:text-gray-500 shrink-0" />
-              <span className="text-[10px] text-gray-400 dark:text-gray-500 italic truncate">
-                {latestError}
-              </span>
             </div>
           )}
 

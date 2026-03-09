@@ -393,9 +393,7 @@ mod tests {
             Some("")
         );
         assert_eq!(
-            translate
-                .get("max_concurrency")
-                .and_then(|v| v.as_u64()),
+            translate.get("max_concurrency").and_then(|v| v.as_u64()),
             Some(3)
         );
         assert_eq!(
@@ -442,9 +440,7 @@ mod tests {
             Some("https://api.deeplx.org/Pte_wVKtHoepysL2Q94Mq2LEZHE2Vnnl02tG-IogwGM/translate")
         );
         assert_eq!(
-            translate
-                .get("max_concurrency")
-                .and_then(|v| v.as_u64()),
+            translate.get("max_concurrency").and_then(|v| v.as_u64()),
             Some(4)
         );
         assert_eq!(

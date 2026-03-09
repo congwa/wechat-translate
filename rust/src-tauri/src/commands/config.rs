@@ -29,7 +29,10 @@ pub async fn config_put(
     manager.apply_runtime_config(&app_config).await;
     app_state::emit_settings_updated(&app, &app_config);
     app_state::emit_runtime_updated(&app, &manager);
-    let _ = app.emit("config-updated", serde_json::to_value(&app_config).unwrap_or_default());
+    let _ = app.emit(
+        "config-updated",
+        serde_json::to_value(&app_config).unwrap_or_default(),
+    );
 
     Ok(serde_json::json!({ "ok": true, "message": "config saved", "path": path }))
 }

@@ -336,3 +336,18 @@ python examples/sidebar_translate_listener.py ^
 - 右侧聊天区 AX 仅用于读取消息内容，不再作为群聊 `sender/is_self` 的主判定依据；
 - 轮询时先缓存上一轮 `unread_count`，再更新会话状态，确保预览推断使用旧基线；
 - 仅当左侧预览正文与最新消息正文匹配时，才允许覆盖当前消息的 `sender/is_self`。
+
+### 23) macOS 顶部菜单翻译开关与设置状态不一致
+现象：
+- 用户从 macOS 顶部菜单切换“翻译 > 启用翻译”后，主窗口设置页、侧边栏翻译状态、tray 文案可能出现短暂不一致；
+- 未配置 `DeepLX` 地址时，若仍允许菜单直接开启，会进入“配置态启用但运行态未配置”的歧义状态。
+
+处理：
+- 顶部菜单的“启用翻译”勾选态必须以 `settings.translate.enabled` 为准，不能只看运行态；
+- 菜单点击后不单独维护一套状态，而是复用现有 `settings_update -> apply_runtime_config -> settings-updated/runtime-updated` 链路；
+- 若用户尝试开启翻译但 `settings.translate.deeplx_url` 为空，必须拒绝本次切换，并弹系统提示“请先在设置页配置 DeepLX 地址”；
+- 菜单勾选态统一在 `settings-updated` 发射前按最新配置回写，确保设置页、顶部菜单、tray、侧边栏共用同一配置源。
+
+约束：
+- 顶部菜单只负责“启用/关闭翻译”，不承担翻译健康状态展示；
+- 翻译服务是否“未配置 / 检测中 / 可用 / 异常”仍由 `translator_status` 决定，并继续显示在主窗口顶部与 tray 文案中。

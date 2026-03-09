@@ -478,9 +478,16 @@ export function MessageHistory() {
                           </div>
                         </div>
                       ) : (
-                        <p className="text-xs text-muted-foreground leading-relaxed mt-0.5 break-all">
-                          {msg.content}
-                        </p>
+                        <div className="mt-0.5 space-y-1">
+                          <p className="text-xs text-muted-foreground leading-relaxed break-all">
+                            {msg.content}
+                          </p>
+                          {msg.content_en && msg.content_en !== msg.content && (
+                            <p className="text-xs text-sky-700/70 dark:text-sky-300/60 leading-relaxed break-all">
+                              {msg.content_en}
+                            </p>
+                          )}
+                        </div>
                       )}
                     </div>
                   </div>

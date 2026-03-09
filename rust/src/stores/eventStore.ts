@@ -53,13 +53,16 @@ export const useEventStore = create<EventStoreState>((set) => ({
       }
 
       if (event.type === "message" && event.source === "sidebar") {
-        useSidebarStore.getState().addMessage(event);
+        const payload = event.payload as Record<string, unknown>;
+        const chatName =
+          typeof payload.chat_name === "string" ? payload.chat_name : undefined;
+        useSidebarStore.getState().requestRefresh(chatName);
       }
 
       if (event.type === "status" && (event.source === "monitor" || event.source === "sidebar")) {
         const p = event.payload as Record<string, unknown>;
         if (p.type === "chat_switched" && typeof p.chat_name === "string") {
-          useSidebarStore.getState().setChatSwitched(p.chat_name, event.timestamp);
+          useSidebarStore.getState().setCurrentChat(p.chat_name);
         }
       }
     });

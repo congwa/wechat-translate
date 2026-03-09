@@ -47,6 +47,11 @@ pub fn load_snapshot(
 }
 
 pub fn emit_settings_updated(app: &AppHandle, settings: &AppConfig) {
+    if let Some(menu_state) = app.try_state::<crate::TrayMenuState>() {
+        if let Some(toggle) = &menu_state.translate_enabled_check {
+            let _ = toggle.set_checked(settings.translate.enabled);
+        }
+    }
     let _ = app.emit("settings-updated", settings);
 }
 

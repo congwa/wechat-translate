@@ -450,6 +450,21 @@ impl MessageDb {
         Ok(messages)
     }
 
+    pub fn latest_chat_name(&self) -> Result<Option<String>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT chat_name
+             FROM messages
+             ORDER BY detected_at DESC, id DESC
+             LIMIT 1",
+        )?;
+        let mut rows = stmt.query([])?;
+        if let Some(row) = rows.next()? {
+            return Ok(Some(row.get(0)?));
+        }
+        Ok(None)
+    }
+
     /// Return a bag (hash → count) of recent content_hashes for a given chat,
     /// used by reconcile_with_db to detect messages not yet persisted.
     pub fn query_recent_hashes(

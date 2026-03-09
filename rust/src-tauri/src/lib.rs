@@ -25,6 +25,7 @@ use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 pub struct CloseToTray(pub Arc<AtomicBool>);
 
 pub struct TrayMenuState {
+    pub translate_enabled_check: Option<tauri::menu::CheckMenuItem<tauri::Wry>>,
     pub sidebar_status: tauri::menu::MenuItem<tauri::Wry>,
     pub listen_status: tauri::menu::MenuItem<tauri::Wry>,
     pub translate_status: tauri::menu::MenuItem<tauri::Wry>,
@@ -33,13 +34,161 @@ pub struct TrayMenuState {
     pub close_to_tray_check: tauri::menu::CheckMenuItem<tauri::Wry>,
 }
 
-fn build_macos_app_menu<R: tauri::Runtime>(app: &tauri::App<R>) -> tauri::Result<Menu<R>> {
+#[cfg(debug_assertions)]
+fn open_main_window_devtools<M: Manager<tauri::Wry>>(manager: &M) {
+    if let Some(window) = manager.get_webview_window("main") {
+        if !window.is_devtools_open() {
+            window.open_devtools();
+        }
+    }
+}
+
+fn sync_translate_enabled_menu(app: &tauri::AppHandle, enabled: bool) {
+    if let Some(menu_state) = app.try_state::<TrayMenuState>() {
+        if let Some(toggle) = &menu_state.translate_enabled_check {
+            let _ = toggle.set_checked(enabled);
+        }
+    }
+}
+
+fn show_app_message(
+    app: &tauri::AppHandle,
+    title: &str,
+    message: impl Into<String>,
+    kind: MessageDialogKind,
+) {
+    let mut dialog = app
+        .dialog()
+        .message(message.into())
+        .title(title)
+        .kind(kind)
+        .buttons(MessageDialogButtons::Ok);
+
+    if let Some(window) = app.get_webview_window("main") {
+        dialog = dialog.parent(&window);
+    }
+
+    dialog.show(|_| {});
+}
+
+fn handle_toggle_translate_enabled_menu(app: &tauri::AppHandle) {
+    let desired_enabled = app
+        .try_state::<TrayMenuState>()
+        .and_then(|menu_state| {
+            menu_state
+                .translate_enabled_check
+                .as_ref()
+                .and_then(|toggle| toggle.is_checked().ok())
+        })
+        .unwrap_or(false);
+    let app_handle = app.clone();
+
+    tauri::async_runtime::spawn(async move {
+        let config_dir = ConfigDir(app_handle.state::<ConfigDir>().0.clone());
+        let manager = app_handle.state::<TaskManager>().inner().clone();
+        let close_to_tray = CloseToTray(app_handle.state::<CloseToTray>().0.clone());
+
+        let snapshot = match app_state::load_snapshot(&config_dir, &manager, &close_to_tray) {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                sync_translate_enabled_menu(&app_handle, false);
+                show_app_message(
+                    &app_handle,
+                    "更新翻译设置失败",
+                    format!("读取当前配置失败：{error}"),
+                    MessageDialogKind::Error,
+                );
+                return;
+            }
+        };
+
+        let previous_enabled = snapshot.settings.translate.enabled;
+        if desired_enabled && snapshot.settings.translate.deeplx_url.trim().is_empty() {
+            sync_translate_enabled_menu(&app_handle, previous_enabled);
+            show_app_message(
+                &app_handle,
+                "翻译未配置",
+                "请先在设置页配置 DeepLX 地址",
+                MessageDialogKind::Warning,
+            );
+            return;
+        }
+
+        let mut settings = snapshot.settings;
+        settings.translate.enabled = desired_enabled;
+        let settings_value = match serde_json::to_value(&settings) {
+            Ok(value) => value,
+            Err(error) => {
+                sync_translate_enabled_menu(&app_handle, previous_enabled);
+                show_app_message(
+                    &app_handle,
+                    "更新翻译设置失败",
+                    format!("序列化设置失败：{error}"),
+                    MessageDialogKind::Error,
+                );
+                return;
+            }
+        };
+
+        match commands::app_state::save_settings(
+            &app_handle,
+            &config_dir,
+            &manager,
+            &close_to_tray,
+            settings_value,
+        )
+        .await
+        {
+            Ok(result) => {
+                if !result
+                    .get("ok")
+                    .and_then(|value| value.as_bool())
+                    .unwrap_or(false)
+                {
+                    sync_translate_enabled_menu(&app_handle, previous_enabled);
+                    let detail = result
+                        .get("errors")
+                        .cloned()
+                        .unwrap_or_else(|| serde_json::json!(["未知错误"]));
+                    show_app_message(
+                        &app_handle,
+                        "更新翻译设置失败",
+                        format!("保存设置失败：{detail}"),
+                        MessageDialogKind::Warning,
+                    );
+                }
+            }
+            Err(error) => {
+                sync_translate_enabled_menu(&app_handle, previous_enabled);
+                show_app_message(
+                    &app_handle,
+                    "更新翻译设置失败",
+                    format!("保存设置失败：{error}"),
+                    MessageDialogKind::Error,
+                );
+            }
+        }
+    });
+}
+
+fn build_macos_app_menu(
+    app: &tauri::App<tauri::Wry>,
+    translate_enabled: bool,
+) -> tauri::Result<(Menu<tauri::Wry>, tauri::menu::CheckMenuItem<tauri::Wry>)> {
     let menu = Menu::default(app.handle())?;
+    let translate_enabled_check =
+        CheckMenuItemBuilder::with_id("toggle_translate_enabled", "启用翻译")
+            .checked(translate_enabled)
+            .build(app)?;
+    let translate_menu = SubmenuBuilder::with_id(app, "translate_menu", "翻译")
+        .item(&translate_enabled_check)
+        .build()?;
     let data_menu = SubmenuBuilder::with_id(app, "data_menu", "数据")
         .text("clear_db_restart", "清空数据库并重启")
         .build()?;
+    menu.append(&translate_menu)?;
     menu.append(&data_menu)?;
-    Ok(menu)
+    Ok((menu, translate_enabled_check))
 }
 
 fn handle_clear_db_restart_menu(app: &tauri::AppHandle) {
@@ -99,15 +248,27 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
-            #[cfg(target_os = "macos")]
-            {
-                let app_menu = build_macos_app_menu(app)?;
-                let _ = app.set_menu(app_menu)?;
-            }
-
             let data_dir = app.path().app_data_dir().unwrap_or_else(|_| {
                 std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
             });
+            let startup_config = load_app_config(&data_dir).ok();
+
+            #[cfg(target_os = "macos")]
+            let translate_enabled_check = {
+                let (app_menu, toggle) = build_macos_app_menu(
+                    app,
+                    startup_config
+                        .as_ref()
+                        .map(|config| config.translate.enabled)
+                        .unwrap_or_default(),
+                )?;
+                let _ = app.set_menu(app_menu)?;
+                Some(toggle)
+            };
+
+            #[cfg(not(target_os = "macos"))]
+            let translate_enabled_check = None;
+
             let db_path = data_dir.join("messages.db");
             let message_db =
                 Arc::new(MessageDb::new(&db_path).expect("failed to open message database"));
@@ -122,22 +283,27 @@ pub fn run() {
             );
             let sidebar_state = sidebar_window::create_state();
 
-            let config_base = data_dir.clone();
             app.manage(ConfigDir(data_dir));
             app.manage(message_db);
             app.manage(image_cache);
             app.manage(manager.clone());
             app.manage(sidebar_state);
 
+            #[cfg(debug_assertions)]
+            open_main_window_devtools(app);
+
             let handle = app.handle().clone();
+            let startup_config_for_runtime = startup_config.clone();
             tauri::async_runtime::spawn(async move {
                 manager.set_app_handle(handle).await;
-                if let Ok(config) = load_app_config(&config_base) {
+                if let Some(config) = startup_config_for_runtime {
                     manager
                         .set_use_right_panel_details(config.listen.use_right_panel_details)
                         .await;
                     manager.apply_runtime_config(&config).await;
-                    let _ = manager.start_monitoring(config.listen.interval_seconds).await;
+                    let _ = manager
+                        .start_monitoring(config.listen.interval_seconds)
+                        .await;
                 } else {
                     let _ = manager.start_monitoring(1.0).await;
                 }
@@ -186,6 +352,7 @@ pub fn run() {
                 .build()?;
 
             app.manage(TrayMenuState {
+                translate_enabled_check,
                 sidebar_status,
                 listen_status,
                 translate_status,
@@ -204,6 +371,8 @@ pub fn run() {
                             let _ = window.show();
                             let _ = window.set_focus();
                         }
+                        #[cfg(debug_assertions)]
+                        open_main_window_devtools(app);
                     }
                     "quit" => {
                         app.exit(0);
@@ -222,7 +391,9 @@ pub fn run() {
                                 let config_dir = app.state::<ConfigDir>();
                                 let config = load_app_config(&config_dir.0).unwrap_or_default();
                                 if !state.monitoring {
-                                    let _ = manager.start_monitoring(config.listen.interval_seconds).await;
+                                    let _ = manager
+                                        .start_monitoring(config.listen.interval_seconds)
+                                        .await;
                                 }
                                 let _ = manager
                                     .enable_sidebar(
@@ -259,9 +430,14 @@ pub fn run() {
                             } else {
                                 let config_dir = app.state::<ConfigDir>();
                                 let config = load_app_config(&config_dir.0).unwrap_or_default();
-                                let _ = manager.start_monitoring(config.listen.interval_seconds).await;
+                                let _ = manager
+                                    .start_monitoring(config.listen.interval_seconds)
+                                    .await;
                             }
                         });
+                    }
+                    "toggle_translate_enabled" => {
+                        handle_toggle_translate_enabled_menu(app);
                     }
                     "toggle_close_to_tray" => {
                         let close = app.state::<CloseToTray>();
@@ -282,6 +458,8 @@ pub fn run() {
                             let _ = window.show();
                             let _ = window.set_focus();
                         }
+                        #[cfg(debug_assertions)]
+                        open_main_window_devtools(tray.app_handle());
                     }
                 })
                 .build(app)?;
@@ -312,6 +490,7 @@ pub fn run() {
             commands::sidebar::live_start,
             commands::sidebar::sidebar_window_open,
             commands::sidebar::sidebar_window_close,
+            commands::sidebar::sidebar_snapshot_get,
             commands::sidebar::translate_test,
             commands::config::config_get,
             commands::config::config_put,
