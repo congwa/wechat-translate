@@ -125,7 +125,9 @@ unsafe fn ax_attr_names(el: core_foundation_sys::base::CFTypeRef) -> Vec<String>
     for i in 0..arr.len() {
         let item = arr.get(i).unwrap();
         let ptr = item.as_CFTypeRef();
-        if core_foundation_sys::base::CFGetTypeID(ptr) == core_foundation_sys::string::CFStringGetTypeID() {
+        if core_foundation_sys::base::CFGetTypeID(ptr)
+            == core_foundation_sys::string::CFStringGetTypeID()
+        {
             let s = CFString::wrap_under_get_rule(ptr as _);
             out.push(s.to_string());
         }
@@ -146,7 +148,9 @@ unsafe fn ax_action_names(el: core_foundation_sys::base::CFTypeRef) -> Vec<Strin
     for i in 0..arr.len() {
         let item = arr.get(i).unwrap();
         let ptr = item.as_CFTypeRef();
-        if core_foundation_sys::base::CFGetTypeID(ptr) == core_foundation_sys::string::CFStringGetTypeID() {
+        if core_foundation_sys::base::CFGetTypeID(ptr)
+            == core_foundation_sys::string::CFStringGetTypeID()
+        {
             let s = CFString::wrap_under_get_rule(ptr as _);
             out.push(s.to_string());
         }
@@ -154,12 +158,15 @@ unsafe fn ax_action_names(el: core_foundation_sys::base::CFTypeRef) -> Vec<Strin
     out
 }
 
-unsafe fn ax_children(el: core_foundation_sys::base::CFTypeRef) -> Vec<core_foundation_sys::base::CFTypeRef> {
+unsafe fn ax_children(
+    el: core_foundation_sys::base::CFTypeRef,
+) -> Vec<core_foundation_sys::base::CFTypeRef> {
     let Ok(val) = copy_attr_value(el, "AXChildren") else {
         return vec![];
     };
     let mut out = Vec::new();
-    if core_foundation_sys::base::CFGetTypeID(val) == core_foundation_sys::array::CFArrayGetTypeID() {
+    if core_foundation_sys::base::CFGetTypeID(val) == core_foundation_sys::array::CFArrayGetTypeID()
+    {
         let arr = CFArray::<CFType>::wrap_under_get_rule(val as _);
         for i in 0..arr.len() {
             let item = arr.get(i).unwrap();
@@ -180,7 +187,8 @@ unsafe fn ax_elements_array_attr(
         return vec![];
     };
     let mut out = Vec::new();
-    if core_foundation_sys::base::CFGetTypeID(val) == core_foundation_sys::array::CFArrayGetTypeID() {
+    if core_foundation_sys::base::CFGetTypeID(val) == core_foundation_sys::array::CFArrayGetTypeID()
+    {
         let arr = CFArray::<CFType>::wrap_under_get_rule(val as _);
         for i in 0..arr.len() {
             let item = arr.get(i).unwrap();

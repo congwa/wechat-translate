@@ -7,7 +7,9 @@ use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, WebviewUr
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
-use crate::adapter::applescript::{get_wechat_window_frame, is_wechat_frontmost, query_wechat_window};
+use crate::adapter::applescript::{
+    get_wechat_window_frame, is_wechat_frontmost, query_wechat_window,
+};
 
 const DEFAULT_WIDTH: f64 = 380.0;
 const DEFAULT_INDEPENDENT_HEIGHT: f64 = 600.0;

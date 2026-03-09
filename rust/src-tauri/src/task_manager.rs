@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager};
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
@@ -157,6 +158,7 @@ impl TaskManager {
             let mut session_state: HashMap<String, SessionListenState> = HashMap::new();
             let mut chat_baselines: HashMap<String, Vec<ChatMessage>> = HashMap::new();
             let mut chat_kinds: HashMap<String, ChatKind> = HashMap::new();
+            let mut preview_sender_hints: HashMap<String, PreviewSenderHint> = HashMap::new();
             let mut active_chat_name = String::new();
             let mut pending_chat_name: Option<String> = None;
             let mut pending_count: u32 = 0;
@@ -192,7 +194,13 @@ impl TaskManager {
                 .await;
 
                 if let Ok(Ok((chat_name, snapshots, mut messages, member_count))) = poll_result {
+                    let now_instant = Instant::now();
+                    cleanup_preview_sender_hints(&mut preview_sender_hints, now_instant);
                     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+                    let prev_unread_counts: HashMap<String, u32> = session_state
+                        .iter()
+                        .map(|(name, state)| (name.clone(), state.last_unread))
+                        .collect();
                     let snapshot_map: HashMap<String, ax_reader::SessionItemSnapshot> = snapshots
                         .iter()
                         .cloned()
@@ -216,9 +224,18 @@ impl TaskManager {
                                 chat_kind = ChatKind::Private;
                             }
                             chat_kinds.insert(snapshot.chat_name.clone(), chat_kind);
+                            remember_preview_sender_hint(
+                                &mut preview_sender_hints,
+                                snapshot,
+                                now_instant,
+                            );
 
                             let mut sender = snapshot.sender_hint.clone().unwrap_or_default();
-                            let unread_increased = snapshot.unread_count > state.last_unread;
+                            let prev_unread = prev_unread_counts
+                                .get(&snapshot.chat_name)
+                                .copied()
+                                .unwrap_or(0);
+                            let unread_increased = snapshot.unread_count > prev_unread;
                             let is_self = if snapshot.has_sender_prefix {
                                 false // group chat with sender prefix → other person
                             } else if unread_increased {
@@ -320,10 +337,7 @@ impl TaskManager {
                         }
 
                         if let Some(snapshot) = snapshot_map.get(&chat_name) {
-                            let prev_unread = session_state
-                                .get(&chat_name)
-                                .map(|s| s.last_unread)
-                                .unwrap_or(0);
+                            let prev_unread = prev_unread_counts.get(&chat_name).copied().unwrap_or(0);
                             let unread_increased = snapshot.unread_count > prev_unread;
                             apply_session_preview_sender_hint(
                                 &mut messages,
@@ -336,7 +350,7 @@ impl TaskManager {
                         }
                         apply_sender_defaults(&mut messages, &chat_name, chat_kind);
                         chat_kinds.insert(chat_name.clone(), chat_kind);
-                        let chat_type_label = chat_kind.as_str().to_string();
+                        let mut chat_type_label = chat_kind.as_str().to_string();
 
                         if let Some(last) = messages.last() {
                             debug!(
@@ -370,7 +384,17 @@ impl TaskManager {
                                     }),
                                 );
                             }
-                            let new_msgs = diff_result.new_messages;
+                            let mut new_msgs = diff_result.new_messages;
+                            if apply_cached_preview_sender_hint(
+                                &chat_name,
+                                &mut new_msgs,
+                                &mut chat_kind,
+                                &mut preview_sender_hints,
+                                now_instant,
+                            ) {
+                                chat_type_label = chat_kind.as_str().to_string();
+                                chat_kinds.insert(chat_name.clone(), chat_kind);
+                            }
                             for msg in &new_msgs {
                                 let mut content_en = String::new();
                                 let mut found_image_path: Option<String> = None;
@@ -426,7 +450,8 @@ impl TaskManager {
                                             as i64;
                                         let cn = chat_name.clone();
                                         if let Ok(mut cache) = image_cache.lock() {
-                                            if let Some(path) = cache.find_image_for_message(&cn, now_ts)
+                                            if let Some(path) =
+                                                cache.find_image_for_message(&cn, now_ts)
                                             {
                                                 found_image_path =
                                                     Some(path.to_string_lossy().to_string());
@@ -446,21 +471,24 @@ impl TaskManager {
                                             if let Some(avatar_pos) = msg.avatar_position {
                                                 let ac = avatar_cache.clone();
                                                 let sender = msg.sender.clone();
-                                                let result = tokio::task::spawn_blocking(move || {
-                                                    let frame = ax_reader::get_wechat_window_frame()?;
-                                                    avatar_capture::capture_and_cache_avatar(
-                                                        &mut ac.lock().unwrap(),
-                                                        &sender,
-                                                        avatar_pos,
-                                                        (frame.0, frame.1),
-                                                        (frame.2, frame.3),
-                                                    )
-                                                })
-                                                .await;
+                                                let result =
+                                                    tokio::task::spawn_blocking(move || {
+                                                        let frame =
+                                                            ax_reader::get_wechat_window_frame()?;
+                                                        avatar_capture::capture_and_cache_avatar(
+                                                            &mut ac.lock().unwrap(),
+                                                            &sender,
+                                                            avatar_pos,
+                                                            (frame.0, frame.1),
+                                                            (frame.2, frame.3),
+                                                        )
+                                                    })
+                                                    .await;
                                                 match result {
                                                     Ok(Ok(path)) => {
-                                                        found_avatar_path =
-                                                            Some(path.to_string_lossy().to_string());
+                                                        found_avatar_path = Some(
+                                                            path.to_string_lossy().to_string(),
+                                                        );
                                                     }
                                                     Ok(Err(e)) => {
                                                         warn!(
@@ -469,7 +497,10 @@ impl TaskManager {
                                                         );
                                                     }
                                                     Err(e) => {
-                                                        warn!("avatar capture task panicked: {}", e);
+                                                        warn!(
+                                                            "avatar capture task panicked: {}",
+                                                            e
+                                                        );
                                                     }
                                                 }
                                             }
@@ -491,10 +522,13 @@ impl TaskManager {
                                                     .join();
                                                     match result {
                                                         Ok(Ok(translated)) => text_en = translated,
-                                                        Ok(Err(e)) => translate_error = e.to_string(),
+                                                        Ok(Err(e)) => {
+                                                            translate_error = e.to_string()
+                                                        }
                                                         Err(_) => {
                                                             translate_error =
-                                                                "translate thread panicked".to_string()
+                                                                "translate thread panicked"
+                                                                    .to_string()
                                                         }
                                                     }
                                                 }
@@ -768,11 +802,23 @@ struct DiffResult {
     anchor_failed: bool,
 }
 
+#[derive(Debug, Clone)]
+struct PreviewSenderHint {
+    sender: String,
+    preview_body: String,
+    preview_body_key: String,
+    unread_count: u32,
+    updated_at: Instant,
+    consumed: bool,
+}
+
 #[derive(Debug, Clone, Default)]
 struct SessionListenState {
     last_preview_body: String,
     last_unread: u32,
 }
+
+const PREVIEW_SENDER_HINT_TTL: Duration = Duration::from_secs(12);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ChatKind {
@@ -848,6 +894,31 @@ fn trim_for_log(text: &str, max_chars: usize) -> String {
     out
 }
 
+fn preview_body_matches_message(
+    preview_body: &str,
+    message_content: &str,
+    preview_body_key: Option<&str>,
+) -> bool {
+    let normalized_preview = ax_reader::normalize_for_match(preview_body);
+    let normalized_message = ax_reader::normalize_for_match(message_content);
+    if normalized_preview.is_empty() || normalized_message.is_empty() {
+        return false;
+    }
+
+    if let Some(key) = preview_body_key {
+        if !key.is_empty() && key == ax_reader::prefix8_key(&normalized_message) {
+            return true;
+        }
+    } else if ax_reader::is_same_message_prefix8(&normalized_preview, &normalized_message) {
+        return true;
+    }
+
+    let preview_len = normalized_preview.chars().count();
+    let message_len = normalized_message.chars().count();
+    (preview_len < 8 && normalized_message.starts_with(&normalized_preview))
+        || (message_len < 8 && normalized_preview.starts_with(&normalized_message))
+}
+
 fn apply_session_preview_sender_hint(
     messages: &mut [ChatMessage],
     preview_text: &str,
@@ -862,7 +933,7 @@ fn apply_session_preview_sender_hint(
         return;
     };
     if let Some(last) = messages.last_mut() {
-        let text_matched = ax_reader::is_same_message_prefix8(&preview_body, &last.content);
+        let text_matched = preview_body_matches_message(&preview_body, &last.content, None);
         let image_equivalent =
             is_image_placeholder_like(&preview_body) && is_image_placeholder_like(&last.content);
         let matched = text_matched || image_equivalent;
@@ -870,9 +941,10 @@ fn apply_session_preview_sender_hint(
         match sender {
             Some(sender) if !sender.is_empty() => {
                 *chat_kind = ChatKind::Group;
-                if matched && last.side_hint.is_none() {
+                if matched {
                     last.sender = sender;
                     last.is_self = false;
+                    last.side_hint = None;
                     debug!(
                         "preview_hint matched(group) body='{}' latest='{}' -> sender='{}'",
                         trim_for_log(&preview_body, 24),
@@ -885,7 +957,7 @@ fn apply_session_preview_sender_hint(
                 if *chat_kind != ChatKind::Group {
                     *chat_kind = ChatKind::Private;
                 }
-                if !preview_body.is_empty() && last.side_hint.is_none() {
+                if matched {
                     // For private chats (no sender prefix), use unread signal:
                     // unread grew → other person; unread stable → likely self
                     let is_self_hint = if matches!(*chat_kind, ChatKind::Group) {
@@ -897,6 +969,7 @@ fn apply_session_preview_sender_hint(
                     };
                     last.sender.clear();
                     last.is_self = is_self_hint;
+                    last.side_hint = None;
                     debug!(
                         "preview_hint no_sender kind={} matched={} unread_inc={} body='{}' latest='{}' -> is_self={}",
                         chat_kind.as_str(),
@@ -910,6 +983,94 @@ fn apply_session_preview_sender_hint(
             }
         }
     }
+}
+
+fn cleanup_preview_sender_hints(cache: &mut HashMap<String, PreviewSenderHint>, now: Instant) {
+    cache.retain(|_, hint| {
+        !hint.consumed && now.duration_since(hint.updated_at) <= PREVIEW_SENDER_HINT_TTL
+    });
+}
+
+fn remember_preview_sender_hint(
+    cache: &mut HashMap<String, PreviewSenderHint>,
+    snapshot: &ax_reader::SessionItemSnapshot,
+    now: Instant,
+) {
+    if !snapshot.has_sender_prefix {
+        return;
+    }
+
+    let Some(sender) = snapshot
+        .sender_hint
+        .as_ref()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+    else {
+        return;
+    };
+
+    let preview_body = snapshot.preview_body.trim();
+    if preview_body.is_empty() {
+        return;
+    }
+
+    cache.insert(
+        snapshot.chat_name.clone(),
+        PreviewSenderHint {
+            sender: sender.to_string(),
+            preview_body: preview_body.to_string(),
+            preview_body_key: ax_reader::prefix8_key(preview_body),
+            unread_count: snapshot.unread_count,
+            updated_at: now,
+            consumed: false,
+        },
+    );
+}
+
+fn apply_cached_preview_sender_hint(
+    chat_name: &str,
+    new_messages: &mut [ChatMessage],
+    chat_kind: &mut ChatKind,
+    cache: &mut HashMap<String, PreviewSenderHint>,
+    now: Instant,
+) -> bool {
+    let Some(hint) = cache.get_mut(chat_name) else {
+        return false;
+    };
+
+    if hint.consumed || now.duration_since(hint.updated_at) > PREVIEW_SENDER_HINT_TTL {
+        return false;
+    }
+
+    for msg in new_messages.iter_mut().rev() {
+        let text_matched = preview_body_matches_message(
+            &hint.preview_body,
+            &msg.content,
+            Some(&hint.preview_body_key),
+        );
+        let image_equivalent = is_image_placeholder_like(&hint.preview_body)
+            && is_image_placeholder_like(&msg.content);
+        if !text_matched && !image_equivalent {
+            continue;
+        }
+
+        *chat_kind = ChatKind::Group;
+        msg.sender = hint.sender.clone();
+        msg.is_self = false;
+        msg.side_hint = None;
+        hint.consumed = true;
+        debug!(
+            "preview_hint cache matched chat='{}' unread={} body='{}' latest='{}' -> sender='{}'",
+            chat_name,
+            hint.unread_count,
+            trim_for_log(&hint.preview_body, 24),
+            trim_for_log(&msg.content, 24),
+            msg.sender,
+        );
+        return true;
+    }
+
+    false
 }
 
 fn is_image_placeholder_like(text: &str) -> bool {
@@ -1277,14 +1438,17 @@ fn auto_reply_rules(content: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_position_self_hints, apply_sender_defaults, apply_session_preview_sender_hint,
-        diff_messages, inherit_sender_from_reference, reconcile_with_db,
-        should_emit_session_snapshot, ChatKind, SessionListenState,
+        apply_cached_preview_sender_hint, apply_position_self_hints, apply_sender_defaults,
+        apply_session_preview_sender_hint, cleanup_preview_sender_hints, diff_messages,
+        inherit_sender_from_reference, reconcile_with_db, remember_preview_sender_hint,
+        should_emit_session_snapshot, ChatKind, PreviewSenderHint, SessionListenState,
+        PREVIEW_SENDER_HINT_TTL,
     };
     use crate::adapter::ax_reader::{ChatMessage, SessionItemSnapshot};
     use crate::db::MessageDb;
+    use std::collections::HashMap;
     use std::path::PathBuf;
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
     fn msg(sender: &str, content: &str) -> ChatMessage {
         ChatMessage {
@@ -1306,7 +1470,11 @@ mod tests {
         }
     }
 
-    fn session_snapshot(chat_name: &str, preview_body: &str, unread_count: u32) -> SessionItemSnapshot {
+    fn session_snapshot(
+        chat_name: &str,
+        preview_body: &str,
+        unread_count: u32,
+    ) -> SessionItemSnapshot {
         SessionItemSnapshot {
             chat_name: chat_name.to_string(),
             raw_preview: format!("{chat_name}\n{preview_body}"),
@@ -1375,6 +1543,28 @@ mod tests {
     }
 
     #[test]
+    fn apply_session_preview_sender_hint_should_override_position_when_sender_prefix_matches() {
+        let mut current = vec![
+            msg("", "旧消息"),
+            msg_with_side(
+                "",
+                "还说自己没学引用 五（挂壁）的消息：不敢劝 自己了搞了一大堆东西 都不咋加钱",
+                Some(true),
+            ),
+        ];
+        current[1].is_self = true;
+        let preview = "某群聊\n雨后第一—郑爱民-区哥: 还说自己没学\n11:44";
+        let mut chat_kind = ChatKind::Private;
+
+        apply_session_preview_sender_hint(&mut current, preview, &mut chat_kind, true);
+
+        assert_eq!(chat_kind, ChatKind::Group);
+        assert_eq!(current[1].sender, "雨后第一—郑爱民-区哥");
+        assert!(!current[1].is_self);
+        assert_eq!(current[1].side_hint, None);
+    }
+
+    #[test]
     fn apply_session_preview_sender_hint_should_mark_self_in_group_without_sender_prefix() {
         let mut current = vec![msg("", "旧消息"), msg("", "真好啊")];
         let preview = "某群聊\n真好啊\n22:27";
@@ -1388,7 +1578,7 @@ mod tests {
     #[test]
     fn apply_session_preview_sender_hint_should_mark_self_in_private_when_unread_stable() {
         let mut current = vec![msg("", "旧消息"), msg("", "最新一条")];
-        let preview = "某群聊\n我发的是另一句\n22:27";
+        let preview = "某群聊\n最新一条\n22:27";
         let mut chat_kind = ChatKind::Private;
         current[1].is_self = false;
 
@@ -1431,17 +1621,139 @@ mod tests {
         apply_session_preview_sender_hint(&mut current, preview, &mut chat_kind, false);
         assert_eq!(chat_kind, ChatKind::Group);
         assert!(current[1].is_self);
+        assert_eq!(current[1].side_hint, None);
     }
 
     #[test]
-    fn apply_session_preview_sender_hint_should_keep_position_priority() {
+    fn apply_session_preview_sender_hint_should_override_position_for_group_self_without_prefix() {
         let mut current = vec![msg("", "旧消息"), msg_with_side("", "真好啊", Some(false))];
         let preview = "某群聊\n真好啊\n22:29";
         let mut chat_kind = ChatKind::Group;
         current[1].is_self = false;
 
         apply_session_preview_sender_hint(&mut current, preview, &mut chat_kind, false);
+        assert!(current[1].is_self);
+        assert_eq!(current[1].sender, "");
+        assert_eq!(current[1].side_hint, None);
+    }
+
+    #[test]
+    fn apply_session_preview_sender_hint_should_not_override_when_preview_body_does_not_match() {
+        let mut current = vec![msg("", "旧消息"), msg_with_side("", "真好啊", Some(false))];
+        let preview = "某群聊\n另一句\n22:29";
+        let mut chat_kind = ChatKind::Group;
+        current[1].is_self = false;
+
+        apply_session_preview_sender_hint(&mut current, preview, &mut chat_kind, false);
+
         assert!(!current[1].is_self);
+        assert_eq!(current[1].sender, "");
+        assert_eq!(current[1].side_hint, Some(false));
+    }
+
+    #[test]
+    fn remember_preview_sender_hint_should_store_group_sender_preview() {
+        let snapshot = SessionItemSnapshot {
+            chat_name: "工作群".to_string(),
+            raw_preview: "工作群\n花姐: 开会了".to_string(),
+            preview_body: "开会了".to_string(),
+            unread_count: 3,
+            sender_hint: Some("花姐".to_string()),
+            has_sender_prefix: true,
+            is_group: true,
+        };
+        let mut cache = HashMap::new();
+
+        remember_preview_sender_hint(&mut cache, &snapshot, Instant::now());
+
+        let hint = cache.get("工作群").expect("hint should exist");
+        assert_eq!(hint.sender, "花姐");
+        assert_eq!(hint.preview_body, "开会了");
+        assert_eq!(hint.preview_body_key, "开会了");
+        assert_eq!(hint.unread_count, 3);
+        assert!(!hint.consumed);
+    }
+
+    #[test]
+    fn apply_cached_preview_sender_hint_should_fill_matching_new_message() {
+        let mut cache = HashMap::from([(
+            "工作群".to_string(),
+            PreviewSenderHint {
+                sender: "花姐".to_string(),
+                preview_body: "因为rust的代码简直不是人类读的".to_string(),
+                preview_body_key: "因为rust的代".to_string(),
+                unread_count: 2,
+                updated_at: Instant::now(),
+                consumed: false,
+            },
+        )]);
+        let mut current = vec![
+            msg("", "旧消息"),
+            msg_with_side("", "因为rust的代码简直不是人类读的!!!", Some(true)),
+        ];
+        current[1].is_self = true;
+        let mut chat_kind = ChatKind::Private;
+
+        let matched = apply_cached_preview_sender_hint(
+            "工作群",
+            &mut current,
+            &mut chat_kind,
+            &mut cache,
+            Instant::now(),
+        );
+
+        assert!(matched);
+        assert_eq!(chat_kind, ChatKind::Group);
+        assert_eq!(current[1].sender, "花姐");
+        assert!(!current[1].is_self);
+        assert_eq!(current[1].side_hint, None);
+        assert!(cache.get("工作群").expect("hint should exist").consumed);
+    }
+
+    #[test]
+    fn cleanup_preview_sender_hints_should_drop_consumed_and_expired_items() {
+        let now = Instant::now();
+        let mut cache = HashMap::from([
+            (
+                "fresh".to_string(),
+                PreviewSenderHint {
+                    sender: "花姐".to_string(),
+                    preview_body: "开会了".to_string(),
+                    preview_body_key: "开会了".to_string(),
+                    unread_count: 1,
+                    updated_at: now,
+                    consumed: false,
+                },
+            ),
+            (
+                "expired".to_string(),
+                PreviewSenderHint {
+                    sender: "阿强".to_string(),
+                    preview_body: "收到".to_string(),
+                    preview_body_key: "收到".to_string(),
+                    unread_count: 2,
+                    updated_at: now - PREVIEW_SENDER_HINT_TTL - Duration::from_secs(1),
+                    consumed: false,
+                },
+            ),
+            (
+                "consumed".to_string(),
+                PreviewSenderHint {
+                    sender: "豆子".to_string(),
+                    preview_body: "OK".to_string(),
+                    preview_body_key: "OK".to_string(),
+                    unread_count: 3,
+                    updated_at: now,
+                    consumed: true,
+                },
+            ),
+        ]);
+
+        cleanup_preview_sender_hints(&mut cache, now);
+
+        assert!(cache.contains_key("fresh"));
+        assert!(!cache.contains_key("expired"));
+        assert!(!cache.contains_key("consumed"));
     }
 
     #[test]

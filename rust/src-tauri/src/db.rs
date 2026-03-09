@@ -438,15 +438,11 @@ impl MessageDb {
     pub fn get_stats(&self) -> Result<DbStats> {
         let conn = self.conn.lock().unwrap();
         let total_messages: i64 =
-            conn.query_row("SELECT COUNT(*) FROM messages", [], |r| {
+            conn.query_row("SELECT COUNT(*) FROM messages", [], |r| r.get(0))?;
+        let total_chats: i64 =
+            conn.query_row("SELECT COUNT(DISTINCT chat_name) FROM messages", [], |r| {
                 r.get(0)
             })?;
-        let total_chats: i64 =
-            conn.query_row(
-                "SELECT COUNT(DISTINCT chat_name) FROM messages",
-                [],
-                |r| r.get(0),
-            )?;
         let earliest: String = conn
             .query_row(
                 "SELECT COALESCE(MIN(detected_at), '') FROM messages",

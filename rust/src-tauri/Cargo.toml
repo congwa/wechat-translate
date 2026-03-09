@@ -1,6 +1,6 @@
 [package]
 name = "wechat-pc-auto"
-version = "0.1.0"
+version = "0.1.1"
 description = "WeChat PC Auto - macOS automation tool"
 authors = ["wang"]
 edition = "2021"

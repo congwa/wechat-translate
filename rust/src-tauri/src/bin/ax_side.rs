@@ -122,7 +122,11 @@ unsafe fn ax_pos(el: core_foundation_sys::base::CFTypeRef) -> Option<CGPoint> {
     let mut pt: CGPoint = std::mem::zeroed();
     let ok = AXValueGetValue(val, 1, &mut pt as *mut _ as *mut _);
     core_foundation_sys::base::CFRelease(val);
-    if ok { Some(pt) } else { None }
+    if ok {
+        Some(pt)
+    } else {
+        None
+    }
 }
 
 unsafe fn ax_size(el: core_foundation_sys::base::CFTypeRef) -> Option<CGSize> {
@@ -137,7 +141,11 @@ unsafe fn ax_size(el: core_foundation_sys::base::CFTypeRef) -> Option<CGSize> {
     let mut sz: CGSize = std::mem::zeroed();
     let ok = AXValueGetValue(val, 2, &mut sz as *mut _ as *mut _);
     core_foundation_sys::base::CFRelease(val);
-    if ok { Some(sz) } else { None }
+    if ok {
+        Some(sz)
+    } else {
+        None
+    }
 }
 
 fn pos_size_str(el: core_foundation_sys::base::CFTypeRef) -> String {
@@ -338,7 +346,11 @@ fn main() -> Result<()> {
             })
             .collect();
 
-        println!("Total children: {}, Bubbles: {}\n", total, bubble_indices.len());
+        println!(
+            "Total children: {}, Bubbles: {}\n",
+            total,
+            bubble_indices.len()
+        );
 
         let skip_attrs = [
             "AXTitle",
@@ -435,7 +447,10 @@ fn main() -> Result<()> {
                 print!("  ── Hit-test LEFT ({:.0},{:.0}): ", left_x, mid_y);
                 let mut hit_el: accessibility_sys::AXUIElementRef = std::ptr::null_mut();
                 let hit_err = accessibility_sys::AXUIElementCopyElementAtPosition(
-                    app, left_x, mid_y, &mut hit_el,
+                    app,
+                    left_x,
+                    mid_y,
+                    &mut hit_el,
                 );
                 if hit_err == 0 && !hit_el.is_null() {
                     let role = ax_attr(hit_el as _, "AXRole").unwrap_or_default();
@@ -451,7 +466,10 @@ fn main() -> Result<()> {
                 print!("  ── Hit-test RIGHT ({:.0},{:.0}): ", right_x, mid_y);
                 let mut hit_el2: accessibility_sys::AXUIElementRef = std::ptr::null_mut();
                 let hit_err2 = accessibility_sys::AXUIElementCopyElementAtPosition(
-                    app, right_x, mid_y, &mut hit_el2,
+                    app,
+                    right_x,
+                    mid_y,
+                    &mut hit_el2,
                 );
                 if hit_err2 == 0 && !hit_el2.is_null() {
                     let role = ax_attr(hit_el2 as _, "AXRole").unwrap_or_default();

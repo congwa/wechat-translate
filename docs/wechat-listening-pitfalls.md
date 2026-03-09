@@ -301,3 +301,20 @@ python examples/sidebar_translate_listener.py ^
 - 默认行为必须是低干扰：
   - 不抢焦点（除非 `listen.focus_refresh=true`）
   - 不置顶（除非用户手动开启“置顶”开关）
+
+### 22) macOS 群聊里“我发送的消息”被右侧气泡误判
+现象：
+- 在 macOS Rust/Tauri 监听链路里，群聊中自己发送的消息有时会在侧边栏里缺少“我”的身份，或被误当成别人发送。
+
+根因：
+- 右侧聊天区 `chat_bubble_item_view` 的 AX 树只有消息正文，没有稳定的人名信息；
+- 旧逻辑仍会让右侧气泡方位 `side_hint` 参与最终身份判定，覆盖左侧会话预览的结论；
+- 活跃聊天路径里若先更新 `last_unread` 再做比较，`unread_increased` 也会失真。
+
+处理：
+- macOS Rust 端对群聊身份判定改为“左侧会话预览优先”：
+  - 预览有 `sender: body` 前缀 → 判为他人；
+  - 预览只有 `body` 且与最新消息正文匹配 → 判为自己；
+- 右侧聊天区 AX 仅用于读取消息内容，不再作为群聊 `sender/is_self` 的主判定依据；
+- 轮询时先缓存上一轮 `unread_count`，再更新会话状态，确保预览推断使用旧基线；
+- 仅当左侧预览正文与最新消息正文匹配时，才允许覆盖当前消息的 `sender/is_self`。

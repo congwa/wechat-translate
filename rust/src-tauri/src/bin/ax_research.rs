@@ -172,7 +172,11 @@ unsafe fn ax_pos(el: core_foundation_sys::base::CFTypeRef) -> Option<CGPoint> {
     let mut pt: CGPoint = std::mem::zeroed();
     let ok = AXValueGetValue(val, 1, &mut pt as *mut _ as *mut c_void);
     core_foundation_sys::base::CFRelease(val);
-    if ok { Some(pt) } else { None }
+    if ok {
+        Some(pt)
+    } else {
+        None
+    }
 }
 
 unsafe fn ax_size(el: core_foundation_sys::base::CFTypeRef) -> Option<CGSize> {
@@ -187,7 +191,11 @@ unsafe fn ax_size(el: core_foundation_sys::base::CFTypeRef) -> Option<CGSize> {
     let mut sz: CGSize = std::mem::zeroed();
     let ok = AXValueGetValue(val, 2, &mut sz as *mut _ as *mut c_void);
     core_foundation_sys::base::CFRelease(val);
-    if ok { Some(sz) } else { None }
+    if ok {
+        Some(sz)
+    } else {
+        None
+    }
 }
 
 fn pos_size_str(el: core_foundation_sys::base::CFTypeRef) -> String {
@@ -196,7 +204,10 @@ fn pos_size_str(el: core_foundation_sys::base::CFTypeRef) -> String {
         let s = ax_size(el);
         match (p, s) {
             (Some(p), Some(s)) => {
-                format!("pos=({:.0},{:.0}) size=({:.0}x{:.0})", p.x, p.y, s.width, s.height)
+                format!(
+                    "pos=({:.0},{:.0}) size=({:.0}x{:.0})",
+                    p.x, p.y, s.width, s.height
+                )
             }
             (Some(p), None) => format!("pos=({:.0},{:.0}) size=?", p.x, p.y),
             _ => "pos=? size=?".to_string(),
@@ -469,10 +480,7 @@ fn main() -> Result<()> {
                     continue;
                 }
 
-                let chat_name = id
-                    .strip_prefix("session_item_")
-                    .unwrap_or("")
-                    .to_string();
+                let chat_name = id.strip_prefix("session_item_").unwrap_or("").to_string();
                 let raw_title = ax_attr(*child, "AXTitle").unwrap_or_default();
                 let raw_value = ax_attr(*child, "AXValue").unwrap_or_default();
                 let raw_preview = if !raw_title.is_empty() {
@@ -503,16 +511,27 @@ fn main() -> Result<()> {
                 let mut extra_attrs = Vec::new();
                 for attr_name in &all_attrs {
                     match attr_name.as_str() {
-                        "AXTitle" | "AXValue" | "AXIdentifier" | "AXPosition" | "AXSize"
-                        | "AXFrame" | "AXChildren" | "AXParent" | "AXWindow"
-                        | "AXTopLevelUIElement" | "AXRole" | "AXSubrole" | "AXRoleDescription" => {
-                            continue
-                        }
+                        "AXTitle"
+                        | "AXValue"
+                        | "AXIdentifier"
+                        | "AXPosition"
+                        | "AXSize"
+                        | "AXFrame"
+                        | "AXChildren"
+                        | "AXParent"
+                        | "AXWindow"
+                        | "AXTopLevelUIElement"
+                        | "AXRole"
+                        | "AXSubrole"
+                        | "AXRoleDescription" => continue,
                         _ => {
                             if let Some(v) = ax_attr(*child, attr_name) {
                                 if !v.is_empty() {
-                                    extra_attrs
-                                        .push(format!("{}=\"{}\"", attr_name, truncate_str(&v, 30)));
+                                    extra_attrs.push(format!(
+                                        "{}=\"{}\"",
+                                        attr_name,
+                                        truncate_str(&v, 30)
+                                    ));
                                 }
                             }
                         }
@@ -542,7 +561,10 @@ fn main() -> Result<()> {
                 (Some(p), Some(s)) => p.x + s.width * 0.5,
                 _ => 0.0,
             };
-            println!("chat_message_list {} midpoint_x={:.0}\n", list_geo, midpoint_x);
+            println!(
+                "chat_message_list {} midpoint_x={:.0}\n",
+                list_geo, midpoint_x
+            );
 
             let children = ax_children(list);
             let total = children.len();
@@ -579,8 +601,7 @@ fn main() -> Result<()> {
             println!("\n--- 消息气泡详情 (最后 10 条) ---");
             let bubble_indices: Vec<usize> = (0..total)
                 .filter(|&i| {
-                    ax_attr(children[i], "AXIdentifier").as_deref()
-                        == Some("chat_bubble_item_view")
+                    ax_attr(children[i], "AXIdentifier").as_deref() == Some("chat_bubble_item_view")
                 })
                 .collect();
             let start = bubble_indices.len().saturating_sub(10);
@@ -629,8 +650,14 @@ fn main() -> Result<()> {
                 let mut extra = Vec::new();
                 for attr_name in &all_attrs {
                     match attr_name.as_str() {
-                        "AXTitle" | "AXPosition" | "AXSize" | "AXFrame" | "AXChildren"
-                        | "AXParent" | "AXWindow" | "AXTopLevelUIElement" => continue,
+                        "AXTitle"
+                        | "AXPosition"
+                        | "AXSize"
+                        | "AXFrame"
+                        | "AXChildren"
+                        | "AXParent"
+                        | "AXWindow"
+                        | "AXTopLevelUIElement" => continue,
                         _ => {
                             if let Some(v) = ax_attr(bubble, attr_name) {
                                 if !v.is_empty() {
@@ -699,7 +726,8 @@ fn parse_preview_sender(raw_preview: &str) -> (Option<String>, Option<String>) {
         return (None, None);
     }
 
-    let time_re = regex::Regex::new(r"^(?:昨天|今天|星期[一二三四五六日天])?\s*\d{1,2}:\d{2}$").unwrap();
+    let time_re =
+        regex::Regex::new(r"^(?:昨天|今天|星期[一二三四五六日天])?\s*\d{1,2}:\d{2}$").unwrap();
     let unread_prefix_re = regex::Regex::new(r"^\[\d+条\]\s*").unwrap();
     let sender_re = regex::Regex::new(r"^\s*([^:：]{1,40})[:：]\s*(.+?)\s*$").unwrap();
 
@@ -717,8 +745,14 @@ fn parse_preview_sender(raw_preview: &str) -> (Option<String>, Option<String>) {
             return (None, Some(candidate));
         }
         if let Some(caps) = sender_re.captures(&candidate) {
-            let sender = caps.get(1).map(|m| m.as_str().trim().to_string()).unwrap_or_default();
-            let body = caps.get(2).map(|m| m.as_str().trim().to_string()).unwrap_or_default();
+            let sender = caps
+                .get(1)
+                .map(|m| m.as_str().trim().to_string())
+                .unwrap_or_default();
+            let body = caps
+                .get(2)
+                .map(|m| m.as_str().trim().to_string())
+                .unwrap_or_default();
             if !sender.is_empty()
                 && !body.is_empty()
                 && !sender.chars().all(|c| c.is_ascii_digit())

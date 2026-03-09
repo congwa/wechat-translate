@@ -406,7 +406,8 @@ fn is_avatar_probe(probe: &HitProbe) -> bool {
 }
 
 fn is_probe_text_match(probe: &HitProbe, message_content: &str) -> bool {
-    !probe.title.is_empty() && normalize_for_match(&probe.title) == normalize_for_match(message_content)
+    !probe.title.is_empty()
+        && normalize_for_match(&probe.title) == normalize_for_match(message_content)
 }
 
 fn side_hint_from_hit_probes(
@@ -769,11 +770,10 @@ pub fn read_active_chat_member_count() -> Result<Option<u32>> {
 
     unsafe {
         let result = if let Some(label) = find_element_by_id(win, "current_chat_count_label", 0) {
-            let count = ax_element_attribute(label, "AXValue")
-                .and_then(|v| {
-                    let digits: String = v.chars().filter(|c| c.is_ascii_digit()).collect();
-                    digits.parse::<u32>().ok()
-                });
+            let count = ax_element_attribute(label, "AXValue").and_then(|v| {
+                let digits: String = v.chars().filter(|c| c.is_ascii_digit()).collect();
+                digits.parse::<u32>().ok()
+            });
             core_foundation_sys::base::CFRelease(label);
             count
         } else {
@@ -1326,6 +1326,9 @@ mod tests {
             identifier: "".to_string(),
             title: "".to_string(),
         };
-        assert_eq!(side_hint_from_hit_probes("任意内容", &left, &right), Some(false));
+        assert_eq!(
+            side_hint_from_hit_probes("任意内容", &left, &right),
+            Some(false)
+        );
     }
 }
