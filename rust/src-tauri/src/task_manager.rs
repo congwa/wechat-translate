@@ -597,65 +597,6 @@ impl TaskManager {
                                 );
                             }
 
-                            if sidebar_enabled.load(Ordering::Relaxed)
-                                && should_forward_session_preview(
-                                    use_right_panel_details,
-                                    &snapshot.chat_name,
-                                    &chat_name,
-                                )
-                            {
-                                let (translator, limiter, target_set) = {
-                                    let config = sidebar_config.lock().await;
-                                    (
-                                        config.translator.clone(),
-                                        config.limiter.clone(),
-                                        config.target_set.clone(),
-                                    )
-                                };
-
-                                if target_set.is_empty() || target_set.contains(&snapshot.chat_name)
-                                {
-                                    let sidebar_event = publish_sidebar_append(
-                                        &events,
-                                        &app_handle,
-                                        &snapshot.chat_name,
-                                        chat_kind.as_str(),
-                                        if snapshot.has_sender_prefix {
-                                            "prefix"
-                                        } else if unread_increased {
-                                            "unread"
-                                        } else if matches!(chat_kind, ChatKind::Group) {
-                                            "group_no_prefix"
-                                        } else {
-                                            "unread_stable"
-                                        },
-                                        "session_preview",
-                                        "low",
-                                        &sender,
-                                        &snapshot.preview_body,
-                                        is_self,
-                                        None,
-                                    );
-
-                                    if let (Some(translator), Some(limiter)) =
-                                        (translator, limiter)
-                                    {
-                                        spawn_sidebar_translation_update(
-                                            manager.clone(),
-                                            events.clone(),
-                                            app_handle.clone(),
-                                            db.clone(),
-                                            translator,
-                                            limiter,
-                                            sidebar_event.id,
-                                            snapshot.chat_name.clone(),
-                                            sender.clone(),
-                                            snapshot.preview_body.clone(),
-                                            now.clone(),
-                                        );
-                                    }
-                                }
-                            }
                         }
 
                         if !snapshot.preview_body.is_empty() {
@@ -870,48 +811,47 @@ impl TaskManager {
                                     );
                                 }
 
-                                if sidebar_enabled.load(Ordering::Relaxed) {
-                                    let (translator, limiter, target_set) = {
+                                if sidebar_enabled.load(Ordering::Relaxed)
+                                    && should_forward_sidebar_chat(&active_chat_name, &chat_name)
+                                {
+                                    let (translator, limiter) = {
                                         let config = sidebar_config.lock().await;
                                         (
                                             config.translator.clone(),
                                             config.limiter.clone(),
-                                            config.target_set.clone(),
                                         )
                                     };
 
-                                    if target_set.is_empty() || target_set.contains(&chat_name) {
-                                        let sidebar_event = publish_sidebar_append(
-                                            &events,
-                                            &app_handle,
-                                            &chat_name,
-                                            &chat_type_label,
-                                            self_source_label(msg),
-                                            "chat",
-                                            "high",
-                                            &msg.sender,
-                                            &msg.content,
-                                            msg.is_self,
-                                            found_image_path.as_deref(),
-                                        );
+                                    let sidebar_event = publish_sidebar_append(
+                                        &events,
+                                        &app_handle,
+                                        &chat_name,
+                                        &chat_type_label,
+                                        self_source_label(msg),
+                                        "chat",
+                                        "high",
+                                        &msg.sender,
+                                        &msg.content,
+                                        msg.is_self,
+                                        found_image_path.as_deref(),
+                                    );
 
-                                        if let (Some(translator), Some(limiter)) =
-                                            (translator, limiter)
-                                        {
-                                            spawn_sidebar_translation_update(
-                                                manager.clone(),
-                                                events.clone(),
-                                                app_handle.clone(),
-                                                db.clone(),
-                                                translator,
-                                                limiter,
-                                                sidebar_event.id,
-                                                chat_name.clone(),
-                                                msg.sender.clone(),
-                                                msg.content.clone(),
-                                                now.clone(),
-                                            );
-                                        }
+                                    if let (Some(translator), Some(limiter)) =
+                                        (translator, limiter)
+                                    {
+                                        spawn_sidebar_translation_update(
+                                            manager.clone(),
+                                            events.clone(),
+                                            app_handle.clone(),
+                                            db.clone(),
+                                            translator,
+                                            limiter,
+                                            sidebar_event.id,
+                                            chat_name.clone(),
+                                            msg.sender.clone(),
+                                            msg.content.clone(),
+                                            now.clone(),
+                                        );
                                     }
                                 }
                             }
@@ -1478,6 +1418,10 @@ fn should_forward_session_preview(
     !use_right_panel_details || snapshot_chat_name != active_chat_name
 }
 
+fn should_forward_sidebar_chat(active_chat_name: &str, event_chat_name: &str) -> bool {
+    !active_chat_name.is_empty() && active_chat_name == event_chat_name
+}
+
 fn publish_sidebar_append(
     events: &EventStore,
     app_handle: &AppHandle,
@@ -1657,7 +1601,10 @@ fn update_tray_menu(
 
 #[cfg(test)]
 mod tests {
-    use super::{short_error_text, should_forward_session_preview, TranslatorServiceStatus};
+    use super::{
+        short_error_text, should_forward_session_preview, should_forward_sidebar_chat,
+        TranslatorServiceStatus,
+    };
 
     #[test]
     fn translator_status_menu_text_matches_state() {
@@ -1709,5 +1656,12 @@ mod tests {
         assert!(should_forward_session_preview(false, "项目群", "项目群"));
         assert!(should_forward_session_preview(true, "另一个群", "项目群"));
         assert!(!should_forward_session_preview(true, "项目群", "项目群"));
+    }
+
+    #[test]
+    fn sidebar_forwarding_only_allows_active_chat_messages() {
+        assert!(should_forward_sidebar_chat("项目群", "项目群"));
+        assert!(!should_forward_sidebar_chat("项目群", "另一个群"));
+        assert!(!should_forward_sidebar_chat("", "项目群"));
     }
 }

@@ -48,6 +48,11 @@ function parseSidebarMessage(event: ServiceEvent): SidebarMessage {
   };
 }
 
+function shouldAcceptAppend(currentChat: string, msgChat: string): boolean {
+  if (!msgChat) return false;
+  return !currentChat || currentChat === msgChat;
+}
+
 export const useSidebarStore = create<SidebarStoreState>((set) => ({
   items: [],
   currentChat: "",
@@ -85,27 +90,39 @@ export const useSidebarStore = create<SidebarStoreState>((set) => ({
     const msg = parseSidebarMessage(event);
 
     set((state) => {
+      if (!shouldAcceptAppend(state.currentChat, msg.chatName)) {
+        return state;
+      }
       const next = [...state.items, msg];
       return {
         items: next.length > MAX_MESSAGES ? next.slice(next.length - TRIM_TO) : next,
-        currentChat: msg.chatName || state.currentChat,
+        currentChat: state.currentChat || msg.chatName,
       };
     });
   },
 
-  setChatSwitched: (chatName) => {
-    set({ items: [], currentChat: chatName });
-  },
+  setChatSwitched: (chatName) =>
+    set((state) => {
+      if (!chatName || state.currentChat === chatName) {
+        return state;
+      }
+      return { items: [], currentChat: chatName };
+    }),
 
   loadHistory: (dbMessages, chatName) => {
-    if (dbMessages.length === 0) return;
+    if (dbMessages.length === 0 || !chatName) return;
 
     const historyItems: SidebarMessage[] = dbMessages
       .slice()
       .reverse()
+      .filter((m) => m.chat_name === chatName)
       .map(storedToSidebar);
 
     set((state) => {
+      if (!shouldAcceptAppend(state.currentChat, chatName)) {
+        return state;
+      }
+
       const existingFingerprints = new Set(
         state.items.map(msgFingerprint),
       );
@@ -119,7 +136,7 @@ export const useSidebarStore = create<SidebarStoreState>((set) => ({
       const merged = [...newHistory, ...state.items];
       return {
         items: merged.length > MAX_MESSAGES ? merged.slice(merged.length - TRIM_TO) : merged,
-        currentChat: chatName || state.currentChat,
+        currentChat: state.currentChat || chatName,
       };
     });
   },
