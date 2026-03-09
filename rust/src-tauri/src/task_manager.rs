@@ -273,6 +273,28 @@ impl TaskManager {
         })
     }
 
+    async fn publish_task_state_event(
+        &self,
+        task: &str,
+        running: bool,
+        state: &TaskState,
+        translator_status: &TranslatorServiceStatus,
+    ) {
+        if let Ok(app) = self.get_app_handle().await {
+            self.events.publish(
+                &app,
+                EventType::TaskState,
+                "task_manager",
+                serde_json::json!({
+                    "task": task,
+                    "running": running,
+                    "state": state,
+                    "translator": translator_status.as_json(),
+                }),
+            );
+        }
+    }
+
     fn next_translator_generation(&self) -> u64 {
         self.translator_generation.fetch_add(1, Ordering::Relaxed) + 1
     }
@@ -374,8 +396,11 @@ impl TaskManager {
             *current = status.clone();
         }
 
+        let task_state = self.get_task_state();
+        self.publish_task_state_event("translator", status.enabled, &task_state, &status)
+            .await;
+
         if let Ok(app) = self.get_app_handle().await {
-            let task_state = self.get_task_state();
             update_tray_menu(&app, &task_state, &status);
         }
     }
@@ -401,11 +426,14 @@ impl TaskManager {
             return;
         }
 
+        let task_state = self.get_task_state();
+        self.publish_task_state_event("translator", status.enabled, &task_state, &status)
+            .await;
+
         if let Ok(app) = self.get_app_handle().await {
             if self.translator_generation.load(Ordering::Relaxed) != generation {
                 return;
             }
-            let task_state = self.get_task_state();
             update_tray_menu(&app, &task_state, &status);
         }
     }
@@ -425,16 +453,8 @@ impl TaskManager {
         let app = self.get_app_handle().await?;
         let state = self.get_task_state();
         let translator_status = self.get_translator_status();
-        self.events.publish(
-            &app,
-            EventType::TaskState,
-            "task_manager",
-            serde_json::json!({
-                "task": "monitoring",
-                "running": true,
-                "state": &state,
-            }),
-        );
+        self.publish_task_state_event("monitoring", true, &state, &translator_status)
+            .await;
         update_tray_menu(&app, &state, &translator_status);
 
         let adapter = self.adapter.clone();
@@ -876,16 +896,14 @@ impl TaskManager {
                 .await;
 
             let stopped_state = TaskState::empty();
-            events.publish(
-                &app_handle,
-                EventType::TaskState,
-                "task_manager",
-                serde_json::json!({
-                    "task": "monitoring",
-                    "running": false,
-                    "state": &stopped_state,
-                }),
-            );
+            manager
+                .publish_task_state_event(
+                    "monitoring",
+                    false,
+                    &stopped_state,
+                    &TranslatorServiceStatus::disabled(),
+                )
+                .await;
             update_tray_menu(
                 &app_handle,
                 &stopped_state,
@@ -944,16 +962,8 @@ impl TaskManager {
 
         let app = self.get_app_handle().await?;
         let state = self.get_task_state();
-        self.events.publish(
-            &app,
-            EventType::TaskState,
-            "task_manager",
-            serde_json::json!({
-                "task": "sidebar",
-                "running": true,
-                "state": &state,
-            }),
-        );
+        self.publish_task_state_event("sidebar", true, &state, &translator_status)
+            .await;
         update_tray_menu(&app, &state, &translator_status);
 
         self.spawn_translator_health_check(translator_generation, translator_for_check);
@@ -978,17 +988,9 @@ impl TaskManager {
 
         let app = self.get_app_handle().await?;
         let state = self.get_task_state();
-        self.events.publish(
-            &app,
-            EventType::TaskState,
-            "task_manager",
-            serde_json::json!({
-                "task": "sidebar",
-                "running": false,
-                "state": &state,
-            }),
-        );
         let translator_status = self.get_translator_status();
+        self.publish_task_state_event("sidebar", false, &state, &translator_status)
+            .await;
         update_tray_menu(&app, &state, &translator_status);
 
         Ok(())

@@ -18,7 +18,7 @@ import { useEventStore } from "@/stores/eventStore";
 import { useToastStore } from "@/stores/toastStore";
 import { useFormStore } from "@/stores/formStore";
 import * as api from "@/lib/tauri-api";
-import type { TaskState } from "@/lib/types";
+import type { ServiceStatus, TaskState, TranslatorServiceStatus } from "@/lib/types";
 
 const isSidebarView =
   new URLSearchParams(window.location.search).get("view") === "sidebar";
@@ -46,12 +46,49 @@ const NAV_ITEMS: NavItem[] = [
   { key: "logs", label: "日志", icon: <Radio className="w-[18px] h-[18px]" /> },
 ];
 
+function getTranslatorChip(status: TranslatorServiceStatus) {
+  if (!status.enabled) {
+    return {
+      label: "翻译未启用",
+      className: "bg-muted text-muted-foreground",
+      dotClass: "bg-muted-foreground/30",
+    };
+  }
+  if (!status.configured) {
+    return {
+      label: "翻译未配置",
+      className: "bg-amber-500/10 text-amber-700",
+      dotClass: "bg-amber-500",
+    };
+  }
+  if (status.checking) {
+    return {
+      label: "翻译检测中",
+      className: "bg-sky-500/10 text-sky-700",
+      dotClass: "bg-sky-500 animate-pulse",
+    };
+  }
+  if (status.healthy === true) {
+    return {
+      label: "翻译可用",
+      className: "bg-primary/10 text-primary",
+      dotClass: "bg-primary animate-pulse",
+    };
+  }
+  return {
+    label: "翻译异常",
+    className: "bg-red-500/10 text-red-600",
+    dotClass: "bg-red-500",
+  };
+}
+
 function MainApp() {
   const [page, setPage] = useState<PageKey>("settings");
   const [liveBusy, setLiveBusy] = useState(false);
   const toast = useToastStore((s) => s.toast);
   const showToast = useToastStore((s) => s.showToast);
   const taskState = useEventStore((s) => s.taskState);
+  const translatorStatus = useEventStore((s) => s.translatorStatus);
   const closeToTray = useFormStore((s) => s.closeToTray);
 
   useEffect(() => {
@@ -61,9 +98,12 @@ function MainApp() {
       .getTaskStatus()
       .then((resp) => {
         const r = resp as unknown as Record<string, unknown>;
-        const data = r.data as { tasks: TaskState } | undefined;
+        const data = r.data as ServiceStatus | undefined;
         if (data?.tasks) {
           useEventStore.getState().setTaskState(data.tasks);
+        }
+        if (data?.translator) {
+          useEventStore.getState().setTranslatorStatus(data.translator);
         }
       })
       .catch(() => {});
@@ -134,6 +174,7 @@ function MainApp() {
   }
 
   const sidebarRunning = taskState.sidebar;
+  const translatorChip = getTranslatorChip(translatorStatus);
 
   return (
     <div className="h-screen flex overflow-hidden bg-background">
@@ -256,6 +297,12 @@ function MainApp() {
                 {key === "sidebar" ? "浮窗" : "监听"}
               </span>
             ))}
+            <span
+              className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium transition-colors ${translatorChip.className}`}
+            >
+              <span className={`w-1.5 h-1.5 rounded-full ${translatorChip.dotClass}`} />
+              {translatorChip.label}
+            </span>
           </div>
         </div>
 

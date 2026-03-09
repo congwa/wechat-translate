@@ -13,6 +13,14 @@ export interface TaskState {
   sidebar: boolean;
 }
 
+export interface TranslatorServiceStatus {
+  enabled: boolean;
+  configured: boolean;
+  checking: boolean;
+  healthy: boolean | null;
+  last_error: string | null;
+}
+
 export interface ServiceStatus {
   adapter: {
     platform: string;
@@ -20,6 +28,7 @@ export interface ServiceStatus {
     reason: string;
   };
   tasks: TaskState;
+  translator: TranslatorServiceStatus;
 }
 
 export interface ApiResponse<T = unknown> {
