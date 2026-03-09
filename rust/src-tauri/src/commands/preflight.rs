@@ -1,3 +1,4 @@
+use crate::adapter::ax_reader;
 use core_foundation::base::{CFType, TCFType};
 use core_foundation::boolean::CFBoolean;
 use core_foundation::dictionary::CFDictionary;
@@ -6,7 +7,6 @@ use serde::Serialize;
 use serde_json::Value;
 use std::time::Duration;
 
-const WECHAT_BUNDLE_ID: &str = "com.tencent.xinWeChat";
 const ACCESSIBILITY_SETTINGS_URL: &str =
     "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
 
@@ -19,28 +19,11 @@ pub struct AccessibilityRequestResult {
 }
 
 fn check_wechat_pid() -> Option<i32> {
-    let output = std::process::Command::new("osascript")
-        .args([
-            "-e",
-            &format!(
-                "tell application \"System Events\" to get unix id of (first process whose bundle identifier is \"{}\")",
-                WECHAT_BUNDLE_ID
-            ),
-        ])
-        .output()
-        .ok()?;
-
-    if !output.status.success() {
-        return None;
-    }
-
-    String::from_utf8_lossy(&output.stdout)
-        .trim()
-        .parse::<i32>()
-        .ok()
+    ax_reader::resolve_wechat_pid().ok()
 }
 
-fn check_accessibility(pid: i32) -> bool {
+
+fn check_wechat_accessibility(pid: i32) -> bool {
     unsafe {
         let app = accessibility_sys::AXUIElementCreateApplication(pid);
         if app.is_null() {
@@ -139,24 +122,47 @@ fn check_has_window(pid: i32) -> bool {
     }
 }
 
-#[tauri::command]
-pub fn preflight_check() -> Value {
-    let pid = check_wechat_pid();
-
-    let wechat_running = pid.is_some();
-    let accessibility_ok = pid.map_or(false, check_accessibility);
-    let wechat_has_window = pid.map_or(false, check_has_window);
-    debug!(
-        "preflight_check wechat_running={} accessibility_ok={} wechat_has_window={}",
-        wechat_running, accessibility_ok, wechat_has_window
-    );
-
+fn build_preflight_result(
+    wechat_running: bool,
+    accessibility_ok: bool,
+    wechat_accessible: bool,
+    wechat_has_window: bool,
+) -> Value {
     serde_json::json!({
         "wechat_running": wechat_running,
         "accessibility_ok": accessibility_ok,
+        "wechat_accessible": wechat_accessible,
         "wechat_has_window": wechat_has_window,
-        "can_prompt_accessibility": wechat_running,
+        "can_prompt_accessibility": !accessibility_ok,
     })
+}
+
+#[tauri::command]
+pub fn preflight_check() -> Value {
+    let pid = check_wechat_pid();
+    let accessibility_ok = is_process_trusted();
+    let wechat_running = pid.is_some();
+    let wechat_accessible = if accessibility_ok {
+        pid.is_some_and(check_wechat_accessibility)
+    } else {
+        false
+    };
+    let wechat_has_window = if accessibility_ok {
+        pid.is_some_and(check_has_window)
+    } else {
+        false
+    };
+    debug!(
+        "preflight_check wechat_running={} accessibility_ok={} wechat_accessible={} wechat_has_window={}",
+        wechat_running, accessibility_ok, wechat_accessible, wechat_has_window
+    );
+
+    build_preflight_result(
+        wechat_running,
+        accessibility_ok,
+        wechat_accessible,
+        wechat_has_window,
+    )
 }
 
 #[tauri::command]
@@ -221,7 +227,7 @@ pub fn accessibility_open_settings() -> Value {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_accessibility_request_result, preflight_check};
+    use super::{build_accessibility_request_result, build_preflight_result, preflight_check};
 
     #[test]
     fn preflight_check_keeps_compatible_fields() {
@@ -231,8 +237,31 @@ mod tests {
             .expect("preflight_check should return json object");
         assert!(obj.contains_key("wechat_running"));
         assert!(obj.contains_key("accessibility_ok"));
+        assert!(obj.contains_key("wechat_accessible"));
         assert!(obj.contains_key("wechat_has_window"));
         assert!(obj.contains_key("can_prompt_accessibility"));
+    }
+
+    #[test]
+    fn preflight_result_should_treat_accessibility_as_process_trust() {
+        let value = build_preflight_result(true, true, false, false);
+        let obj = value
+            .as_object()
+            .expect("preflight result should return json object");
+        assert_eq!(obj.get("accessibility_ok").and_then(|v| v.as_bool()), Some(true));
+        assert_eq!(obj.get("wechat_accessible").and_then(|v| v.as_bool()), Some(false));
+        assert_eq!(obj.get("wechat_has_window").and_then(|v| v.as_bool()), Some(false));
+        assert_eq!(obj.get("can_prompt_accessibility").and_then(|v| v.as_bool()), Some(false));
+    }
+
+    #[test]
+    fn preflight_result_should_prompt_only_when_untrusted() {
+        let value = build_preflight_result(true, false, false, false);
+        let obj = value
+            .as_object()
+            .expect("preflight result should return json object");
+        assert_eq!(obj.get("accessibility_ok").and_then(|v| v.as_bool()), Some(false));
+        assert_eq!(obj.get("can_prompt_accessibility").and_then(|v| v.as_bool()), Some(true));
     }
 
     #[test]

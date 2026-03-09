@@ -127,6 +127,7 @@ export async function setCloseToTray(enabled: boolean): Promise<void> {
 export interface PreflightResult {
   wechat_running: boolean;
   accessibility_ok: boolean;
+  wechat_accessible?: boolean;
   wechat_has_window: boolean;
   can_prompt_accessibility?: boolean;
 }

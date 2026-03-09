@@ -7,6 +7,22 @@ use std::collections::HashSet;
 use std::sync::LazyLock;
 
 pub const WECHAT_BUNDLE_ID: &str = "com.tencent.xinWeChat";
+const WECHAT_PROCESS_NAMES: &[&str] = &["WeChat", "微信", "Weixin"];
+
+extern "C" {
+    fn proc_listallpids(buffer: *mut std::ffi::c_void, buffersize: i32) -> i32;
+    fn proc_name(pid: i32, buffer: *mut std::ffi::c_void, buffersize: u32) -> i32;
+    fn CGWindowListCopyWindowInfo(
+        option: u32,
+        relative_to_window: u32,
+    ) -> core_foundation_sys::array::CFArrayRef;
+}
+
+const CG_WINDOW_LIST_ON_SCREEN_ONLY: u32 = 1 << 0;
+const CG_WINDOW_LIST_EXCLUDE_DESKTOP: u32 = 1 << 4;
+const CG_NULL_WINDOW_ID: u32 = 0;
+const MIN_MAIN_WINDOW_SIZE: f64 = 200.0;
+
 
 static TIME_HINT_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^(?:昨天|今天|星期[一二三四五六日天])?\s*\d{1,2}:\d{2}$").unwrap()
@@ -26,23 +42,163 @@ static NOISE_TEXTS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
         .collect()
 });
 
-fn get_wechat_pid() -> Result<i32> {
+unsafe fn cg_dict_get_f64(
+    dict: core_foundation_sys::dictionary::CFDictionaryRef,
+    key: &str,
+) -> Option<f64> {
+    let cf_key = CFString::new(key);
+    let ptr = core_foundation_sys::dictionary::CFDictionaryGetValue(
+        dict,
+        cf_key.as_concrete_TypeRef() as *const std::ffi::c_void,
+    );
+    if ptr.is_null() {
+        return None;
+    }
+    let mut value: f64 = 0.0;
+    let ok = core_foundation_sys::number::CFNumberGetValue(
+        ptr as core_foundation_sys::number::CFNumberRef,
+        core_foundation_sys::number::kCFNumberFloat64Type,
+        &mut value as *mut f64 as *mut std::ffi::c_void,
+    );
+    if ok { Some(value) } else { None }
+}
+
+unsafe fn cg_dict_get_i32(
+    dict: core_foundation_sys::dictionary::CFDictionaryRef,
+    key: &str,
+) -> Option<i32> {
+    let cf_key = CFString::new(key);
+    let ptr = core_foundation_sys::dictionary::CFDictionaryGetValue(
+        dict,
+        cf_key.as_concrete_TypeRef() as *const std::ffi::c_void,
+    );
+    if ptr.is_null() {
+        return None;
+    }
+    let mut value: i32 = 0;
+    let ok = core_foundation_sys::number::CFNumberGetValue(
+        ptr as core_foundation_sys::number::CFNumberRef,
+        core_foundation_sys::number::kCFNumberSInt32Type,
+        &mut value as *mut i32 as *mut std::ffi::c_void,
+    );
+    if ok { Some(value) } else { None }
+}
+
+fn get_wechat_pid_from_process_list() -> Option<i32> {
+    unsafe {
+        let pid_count = proc_listallpids(std::ptr::null_mut(), 0);
+        if pid_count <= 0 {
+            return None;
+        }
+
+        let mut pids = vec![0i32; pid_count as usize + 32];
+        let copied = proc_listallpids(
+            pids.as_mut_ptr() as *mut std::ffi::c_void,
+            (pids.len() * std::mem::size_of::<i32>()) as i32,
+        );
+        if copied <= 0 {
+            return None;
+        }
+
+        let mut buf = vec![0u8; 1024];
+        for pid in pids.into_iter().take(copied as usize) {
+            if pid <= 0 {
+                continue;
+            }
+            let len = proc_name(pid, buf.as_mut_ptr() as *mut std::ffi::c_void, buf.len() as u32);
+            if len <= 0 {
+                continue;
+            }
+            let name = String::from_utf8_lossy(&buf[..len as usize]).trim().to_string();
+            if WECHAT_PROCESS_NAMES.contains(&name.as_str()) {
+                return Some(pid);
+            }
+        }
+    }
+
+    None
+}
+
+fn get_wechat_pid_from_cg_window_list() -> Option<i32> {
+    unsafe {
+        let options = CG_WINDOW_LIST_ON_SCREEN_ONLY | CG_WINDOW_LIST_EXCLUDE_DESKTOP;
+        let window_list = CGWindowListCopyWindowInfo(options, CG_NULL_WINDOW_ID);
+        if window_list.is_null() {
+            return None;
+        }
+
+        let count = core_foundation_sys::array::CFArrayGetCount(window_list);
+        let owner_key = CFString::new("kCGWindowOwnerName");
+        let bounds_key = CFString::new("kCGWindowBounds");
+
+        let mut best: Option<(i32, f64)> = None;
+
+        for i in 0..count {
+            let dict = core_foundation_sys::array::CFArrayGetValueAtIndex(window_list, i)
+                as core_foundation_sys::dictionary::CFDictionaryRef;
+
+            let name_ptr = core_foundation_sys::dictionary::CFDictionaryGetValue(
+                dict,
+                owner_key.as_concrete_TypeRef() as *const std::ffi::c_void,
+            );
+            if name_ptr.is_null() {
+                continue;
+            }
+            let name_cf = CFString::wrap_under_get_rule(
+                name_ptr as core_foundation_sys::string::CFStringRef,
+            );
+            let name = name_cf.to_string();
+            if !WECHAT_PROCESS_NAMES.contains(&name.as_str()) {
+                continue;
+            }
+
+            if let Some(layer) = cg_dict_get_i32(dict, "kCGWindowLayer") {
+                if layer != 0 {
+                    continue;
+                }
+            }
+
+            let bounds_ptr = core_foundation_sys::dictionary::CFDictionaryGetValue(
+                dict,
+                bounds_key.as_concrete_TypeRef() as *const std::ffi::c_void,
+            );
+            if bounds_ptr.is_null() {
+                continue;
+            }
+            let bounds_dict = bounds_ptr as core_foundation_sys::dictionary::CFDictionaryRef;
+            let (w, h) = match (
+                cg_dict_get_f64(bounds_dict, "Width"),
+                cg_dict_get_f64(bounds_dict, "Height"),
+            ) {
+                (Some(w), Some(h)) => (w, h),
+                _ => continue,
+            };
+            if w < MIN_MAIN_WINDOW_SIZE || h < MIN_MAIN_WINDOW_SIZE {
+                continue;
+            }
+
+            let Some(pid) = cg_dict_get_i32(dict, "kCGWindowOwnerPID") else {
+                continue;
+            };
+            let area = w * h;
+            if best.as_ref().map_or(true, |(_, best_area)| area > *best_area) {
+                best = Some((pid, area));
+            }
+        }
+
+        core_foundation_sys::base::CFRelease(window_list as _);
+        best.map(|(pid, _)| pid)
+    }
+}
+
+fn run_wechat_pid_script(script: &str) -> Result<i32> {
     let output = std::process::Command::new("osascript")
-        .args([
-            "-e",
-            &format!(
-                "tell application \"System Events\" to get unix id of (first process whose bundle identifier is \"{}\")",
-                WECHAT_BUNDLE_ID
-            ),
-        ])
+        .args(["-e", script])
         .output()
         .context("failed to run osascript")?;
 
     if !output.status.success() {
-        anyhow::bail!(
-            "未检测到微信进程，请先启动并登录微信: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
+        anyhow::bail!(String::from_utf8_lossy(&output.stderr).trim().to_string());
     }
 
     let pid_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -50,6 +206,47 @@ fn get_wechat_pid() -> Result<i32> {
         .parse::<i32>()
         .context(format!("cannot parse pid: {}", pid_str))
 }
+
+fn get_wechat_pid() -> Result<i32> {
+    let bundle_script = format!(
+        "tell application \"System Events\" to get unix id of (first process whose bundle identifier is \"{}\")",
+        WECHAT_BUNDLE_ID
+    );
+    let mut errors = Vec::new();
+    match run_wechat_pid_script(&bundle_script) {
+        Ok(pid) => return Ok(pid),
+        Err(e) => errors.push(format!("bundle id: {}", e)),
+    }
+
+    for name in WECHAT_PROCESS_NAMES {
+        let name_script = format!(
+            "tell application \"System Events\" to get unix id of (first process whose name is \"{}\")",
+            name
+        );
+        match run_wechat_pid_script(&name_script) {
+            Ok(pid) => return Ok(pid),
+            Err(e) => errors.push(format!("name {}: {}", name, e)),
+        }
+    }
+
+    if let Some(pid) = get_wechat_pid_from_process_list() {
+        return Ok(pid);
+    }
+
+    if let Some(pid) = get_wechat_pid_from_cg_window_list() {
+        return Ok(pid);
+    }
+
+    anyhow::bail!(
+        "未检测到微信进程，请先启动并登录微信: {}",
+        errors.join(" | ")
+    );
+}
+
+pub fn resolve_wechat_pid() -> Result<i32> {
+    get_wechat_pid()
+}
+
 
 unsafe fn ax_element_attribute(
     element: core_foundation_sys::base::CFTypeRef,

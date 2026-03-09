@@ -21,7 +21,8 @@ export function PreflightBar() {
 
   if (!result) return null;
 
-  const allGood = result.wechat_running && result.accessibility_ok && result.wechat_has_window;
+  const wechatAccessible = result.wechat_accessible ?? result.accessibility_ok;
+  const allGood = result.wechat_running && result.accessibility_ok && wechatAccessible && result.wechat_has_window;
 
   if (allGood && !justRecovered) return null;
 
@@ -51,8 +52,13 @@ export function PreflightBar() {
         level: "warn",
       });
     }
+  } else if (!wechatAccessible) {
+    items.push({
+      text: "辅助功能已授权，但当前还读不到微信窗口；如果刚授权，请完全退出并重新打开本应用和微信。",
+      level: "warn",
+    });
   } else if (!result.wechat_has_window) {
-    items.push({ text: "微信已运行但未检测到窗口，请确认已登录", level: "warn" });
+    items.push({ text: "微信已运行但未检测到窗口，请确认已登录并打开主窗口", level: "warn" });
   }
 
   return (
