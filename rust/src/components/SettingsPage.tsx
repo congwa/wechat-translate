@@ -431,10 +431,16 @@ export function SettingsPage() {
     try {
       if (checked) {
         await api.listenStart(parseFloat(pollInterval) || 1);
-        showToast("消息监听已启动", true);
+        showToast(
+          taskState.sidebar ? "消息监听已恢复，浮窗继续运行" : "消息监听已启动",
+          true,
+        );
       } else {
         await api.listenStop();
-        showToast("消息监听已暂停", true);
+        showToast(
+          taskState.sidebar ? "消息监听已暂停，浮窗保持运行" : "消息监听已暂停",
+          true,
+        );
       }
     } catch (e) {
       showToast(`${e}`, false);
@@ -496,7 +502,7 @@ export function SettingsPage() {
           </div>
           <div>
             <h3 className="text-sm font-semibold">消息监听</h3>
-            <p className="text-[11px] text-muted-foreground">轮询与浮窗显示</p>
+            <p className="text-[11px] text-muted-foreground">轮询控制与浮窗联动</p>
           </div>
         </div>
 
@@ -504,7 +510,7 @@ export function SettingsPage() {
           <div>
             <h4 className="text-sm font-medium">消息监听</h4>
             <p className="text-[11px] text-muted-foreground mt-0.5">
-              自动监听微信聊天消息并记录到数据库（应用启动时默认开启）
+              关闭后只暂停轮询；若浮窗已开启，会保留当前窗口和翻译状态，恢复监听后继续收流
             </p>
           </div>
           <Switch
@@ -513,6 +519,17 @@ export function SettingsPage() {
             disabled={busy === "monitoring"}
           />
         </div>
+
+        {!taskState.monitoring && taskState.sidebar && (
+          <div className="rounded-xl border border-amber-500/30 bg-amber-500/8 px-4 py-3">
+            <div className="text-sm font-medium text-amber-700 dark:text-amber-300">
+              监听已暂停，浮窗仍在运行
+            </div>
+            <p className="text-[11px] text-amber-700/80 dark:text-amber-300/80 mt-1">
+              当前不会接收新消息；重新打开监听后，浮窗会自动继续展示和翻译新内容。
+            </p>
+          </div>
+        )}
 
         <div className="grid grid-cols-2 gap-4">
           <div className="space-y-2">

@@ -22,15 +22,6 @@ pub struct TaskState {
     pub sidebar: bool,
 }
 
-impl TaskState {
-    pub fn empty() -> Self {
-        Self {
-            monitoring: false,
-            sidebar: false,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TranslatorServiceStatus {
     pub enabled: bool,
@@ -889,26 +880,24 @@ impl TaskManager {
 
             *monitor_token_ref.lock().await = None;
             monitoring_active.store(false, Ordering::Relaxed);
-            sidebar_enabled.store(false, Ordering::Relaxed);
-            manager.next_translator_generation();
-            manager
-                .set_translator_status(TranslatorServiceStatus::disabled())
-                .await;
 
-            let stopped_state = TaskState::empty();
+            let next_state = TaskState {
+                monitoring: false,
+                sidebar: sidebar_enabled.load(Ordering::Relaxed),
+            };
+
+            if !next_state.sidebar {
+                manager.next_translator_generation();
+                manager
+                    .set_translator_status(TranslatorServiceStatus::disabled())
+                    .await;
+            }
+
+            let translator_status = manager.get_translator_status();
             manager
-                .publish_task_state_event(
-                    "monitoring",
-                    false,
-                    &stopped_state,
-                    &TranslatorServiceStatus::disabled(),
-                )
+                .publish_task_state_event("monitoring", false, &next_state, &translator_status)
                 .await;
-            update_tray_menu(
-                &app_handle,
-                &stopped_state,
-                &TranslatorServiceStatus::disabled(),
-            );
+            update_tray_menu(&app_handle, &next_state, &translator_status);
         });
 
         Ok(())
@@ -998,6 +987,7 @@ impl TaskManager {
 
     pub async fn stop_all(&self) {
         let _ = self.stop_monitoring().await;
+        let _ = self.disable_sidebar().await;
     }
 }
 

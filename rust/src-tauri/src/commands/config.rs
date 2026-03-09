@@ -1,5 +1,6 @@
 use crate::config::{self as app_config, ConfigDir};
 use crate::task_manager::TaskManager;
+use tauri::Emitter;
 
 #[tauri::command]
 pub async fn config_get(
@@ -11,6 +12,7 @@ pub async fn config_get(
 
 #[tauri::command]
 pub async fn config_put(
+    app: tauri::AppHandle,
     config_dir: tauri::State<'_, ConfigDir>,
     manager: tauri::State<'_, TaskManager>,
     config: serde_json::Value,
@@ -24,6 +26,7 @@ pub async fn config_put(
 
     let app_config = app_config::load_app_config(&config_dir.0).map_err(|e| e.to_string())?;
     manager.apply_runtime_config(&app_config).await;
+    let _ = app.emit("config-updated", serde_json::to_value(&app_config).unwrap_or_default());
 
     Ok(serde_json::json!({ "ok": true, "message": "config saved", "path": path }))
 }

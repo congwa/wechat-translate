@@ -174,6 +174,8 @@ function MainApp() {
   }
 
   const sidebarRunning = taskState.sidebar;
+  const liveFrozen = !taskState.monitoring && sidebarRunning;
+  const liveControlsVisible = taskState.monitoring || sidebarRunning;
   const translatorChip = getTranslatorChip(translatorStatus);
 
   return (
@@ -195,7 +197,7 @@ function MainApp() {
         </div>
 
         {/* Live toggle button */}
-        {taskState.monitoring && (
+        {liveControlsVisible && (
           <div className="px-3 pb-4">
             <button
               onClick={handleLiveToggle}
@@ -220,8 +222,18 @@ function MainApp() {
             </button>
             {sidebarRunning && (
               <div className="flex items-center justify-center gap-1.5 mt-2">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                <span className="text-[10px] text-emerald-400">运行中</span>
+                <span
+                  className={`w-1.5 h-1.5 rounded-full ${
+                    liveFrozen ? "bg-amber-400" : "bg-emerald-400 animate-pulse"
+                  }`}
+                />
+                <span
+                  className={`text-[10px] ${
+                    liveFrozen ? "text-amber-300" : "text-emerald-400"
+                  }`}
+                >
+                  {liveFrozen ? "监听已暂停" : "运行中"}
+                </span>
               </div>
             )}
           </div>
@@ -297,6 +309,12 @@ function MainApp() {
                 {key === "sidebar" ? "浮窗" : "监听"}
               </span>
             ))}
+            {liveFrozen && (
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-500/10 px-2.5 py-1 text-[11px] font-medium text-amber-700">
+                <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+                监听已暂停
+              </span>
+            )}
             <span
               className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium transition-colors ${translatorChip.className}`}
             >

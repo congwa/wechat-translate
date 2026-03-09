@@ -203,13 +203,44 @@ export function SidebarView() {
   const setSettings = useFormStore((s) => s.setSettings);
   const translateEnabled = useFormStore((s) => s.translateEnabled);
   const deeplxUrl = useFormStore((s) => s.deeplxUrl);
+  const translatorStatus = useEventStore((s) => s.translatorStatus);
   const collapsedCount = parseInt(useFormStore((s) => s.collapsedDisplayCount) || "0", 10);
   const bottomRef = useRef<HTMLDivElement>(null);
   const [visible, setVisible] = useState(true);
   const [collapsed, setCollapsed] = useState(false);
+  const [configLoaded, setConfigLoaded] = useState(false);
   const expandedSizeRef = useRef({ w: 380, h: 600 });
-  const canSwitchDisplayMode = translateEnabled && deeplxUrl.trim() !== "";
+  const canSwitchDisplayMode = !configLoaded || (translateEnabled && deeplxUrl.trim() !== "");
   const effectiveDisplayMode: DisplayMode = canSwitchDisplayMode ? displayMode : "original";
+
+  const syncTranslateConfig = useCallback(
+    async (configData?: Record<string, unknown>) => {
+      try {
+        const data = configData
+          ?? (((await api.configGet()) as unknown as Record<string, unknown>).data as
+            | Record<string, unknown>
+            | undefined);
+        const translate = data?.translate as Record<string, unknown> | undefined;
+        if (translate) {
+          const patch: Record<string, string | boolean> = {};
+          if (typeof translate.enabled === "boolean") {
+            patch.translateEnabled = translate.enabled;
+          }
+          if (typeof translate.deeplx_url === "string") {
+            patch.deeplxUrl = translate.deeplx_url;
+          }
+          if (Object.keys(patch).length > 0) {
+            setSettings(patch);
+          }
+        }
+      } catch {
+        // Fall back to whatever is already in the local store.
+      } finally {
+        setConfigLoaded(true);
+      }
+    },
+    [setSettings],
+  );
 
   const fetchHistory = useCallback(
     async (chatName: string) => {
@@ -244,6 +275,18 @@ export function SidebarView() {
       cleanup.then((fn) => fn());
     };
   }, []);
+
+  useEffect(() => {
+    syncTranslateConfig();
+
+    const unlisten = listen<Record<string, unknown>>("config-updated", (event) => {
+      syncTranslateConfig(event.payload);
+    });
+
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, [syncTranslateConfig]);
 
   useEffect(() => {
     if (currentChat) {
@@ -383,6 +426,24 @@ export function SidebarView() {
               <AlertCircle className="w-3 h-3 text-gray-400 dark:text-gray-500 shrink-0" />
               <span className="text-[10px] text-gray-400 dark:text-gray-500 italic truncate">
                 {latestError}
+              </span>
+            </div>
+          )}
+
+          {configLoaded && translateEnabled && !deeplxUrl.trim() && (
+            <div className="flex items-center gap-1.5 px-3 py-1.5 mb-2 rounded-lg bg-amber-500/5 dark:bg-amber-500/5">
+              <AlertCircle className="w-3 h-3 text-amber-500 shrink-0" />
+              <span className="text-[10px] text-amber-700 dark:text-amber-300 italic truncate">
+                翻译未配置，当前只显示原文
+              </span>
+            </div>
+          )}
+
+          {translatorStatus.last_error && (
+            <div className="flex items-center gap-1.5 px-3 py-1.5 mb-2 rounded-lg bg-red-500/5 dark:bg-red-500/5">
+              <AlertCircle className="w-3 h-3 text-red-500 shrink-0" />
+              <span className="text-[10px] text-red-600 dark:text-red-300 italic truncate">
+                {translatorStatus.last_error}
               </span>
             </div>
           )}

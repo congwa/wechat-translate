@@ -245,7 +245,7 @@ pub fn run() {
                             let manager = app.state::<TaskManager>();
                             let state = manager.get_task_state();
                             if state.monitoring {
-                                manager.stop_all().await;
+                                let _ = manager.stop_monitoring().await;
                             } else {
                                 let _ = manager.start_monitoring(1.0).await;
                             }
