@@ -62,18 +62,49 @@ function getSenderColor(name: string): string {
   return SENDER_COLORS[Math.abs(hash) % SENDER_COLORS.length];
 }
 
-function useSystemDarkMode() {
+function getInitialSystemDarkMode(): boolean {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+    return false;
+  }
+  return window.matchMedia("(prefers-color-scheme: dark)").matches;
+}
+
+function useSidebarWindowAppearance() {
+  const [isDarkMode, setIsDarkMode] = useState<boolean>(getInitialSystemDarkMode);
+  const [isWindowFocused, setIsWindowFocused] = useState<boolean>(() => {
+    if (typeof document === "undefined") return true;
+    return document.hasFocus();
+  });
+
   useEffect(() => {
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
 
-    function onChange(e: MediaQueryListEvent) {
-      document.documentElement.classList.toggle("dark", e.matches);
+    function onThemeChange(e: MediaQueryListEvent) {
+      setIsDarkMode(e.matches);
     }
 
-    document.documentElement.classList.toggle("dark", mq.matches);
-    mq.addEventListener("change", onChange);
-    return () => mq.removeEventListener("change", onChange);
+    function onFocus() {
+      setIsWindowFocused(true);
+    }
+
+    function onBlur() {
+      setIsWindowFocused(false);
+    }
+
+    setIsDarkMode(mq.matches);
+    setIsWindowFocused(document.hasFocus());
+    mq.addEventListener("change", onThemeChange);
+    window.addEventListener("focus", onFocus);
+    window.addEventListener("blur", onBlur);
+
+    return () => {
+      mq.removeEventListener("change", onThemeChange);
+      window.removeEventListener("focus", onFocus);
+      window.removeEventListener("blur", onBlur);
+    };
   }, []);
+
+  return { isDarkMode, isWindowFocused };
 }
 
 function renderMessageCard(msg: SidebarMessage, displayMode: DisplayMode) {
@@ -155,7 +186,7 @@ function renderMessageCard(msg: SidebarMessage, displayMode: DisplayMode) {
 }
 
 export function SidebarView() {
-  useSystemDarkMode();
+  const { isDarkMode, isWindowFocused } = useSidebarWindowAppearance();
 
   const [windowMode] = useState<WindowMode>(getWindowMode);
   const isIndependent = windowMode === "independent";
@@ -259,12 +290,14 @@ export function SidebarView() {
       initial="visible"
       animate={visible ? "visible" : "hidden"}
       transition={containerTransition}
-      className="flex flex-col h-screen bg-white/80 dark:bg-neutral-900/90 backdrop-blur-xl overflow-hidden select-none transition-colors duration-200"
+      data-window-focus={isWindowFocused ? "true" : "false"}
+      className={`${isDarkMode ? "dark " : ""}sidebar-shell flex flex-col h-screen overflow-hidden select-none transition-colors duration-200`}
     >
       {/* Title bar */}
       <div
         data-tauri-drag-region
-        className="flex items-center justify-between px-3 py-2 border-b border-black/[0.06] dark:border-white/[0.06] shrink-0 bg-white/60 dark:bg-white/[0.03] backdrop-blur-md"
+        data-window-focus={isWindowFocused ? "true" : "false"}
+        className="sidebar-titlebar flex items-center justify-between px-3 py-2 shrink-0"
       >
         <div data-tauri-drag-region className="flex items-center gap-1.5 flex-1 min-w-0">
           <MessageCircle className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0 pointer-events-none" />
@@ -277,7 +310,7 @@ export function SidebarView() {
         </div>
         <div className="flex items-center gap-1 shrink-0">
           {canSwitchDisplayMode && (
-            <div className="flex items-center h-5 rounded-md bg-black/[0.04] dark:bg-white/[0.06] p-0.5">
+            <div className="sidebar-mode-switch flex items-center h-5 rounded-md p-0.5">
               {DISPLAY_MODES.map((mode) => (
                 <button
                   key={mode.value}
@@ -285,8 +318,8 @@ export function SidebarView() {
                   title={mode.title}
                   className={`px-1.5 h-4 rounded text-[9px] font-medium transition-all duration-150 ${
                     effectiveDisplayMode === mode.value
-                      ? "bg-white dark:bg-white/[0.15] text-gray-700 dark:text-gray-200 shadow-sm"
-                      : "text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300"
+                      ? "sidebar-mode-button-active shadow-sm"
+                      : "sidebar-mode-button"
                   }`}
                 >
                   {mode.label}

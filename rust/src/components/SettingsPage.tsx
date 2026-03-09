@@ -81,6 +81,9 @@ function validateConfigSchema(obj: unknown): ValidationResult {
       const v = Number(listen.cross_source_merge_window_seconds);
       if (isNaN(v) || v <= 0) errors.push(`listen.cross_source_merge_window_seconds 必须大于 0，当前值: ${listen.cross_source_merge_window_seconds}`);
     }
+    if (listen.use_right_panel_details !== undefined && typeof listen.use_right_panel_details !== "boolean") {
+      errors.push("listen.use_right_panel_details 必须是布尔值");
+    }
   }
 
   // translate
@@ -147,6 +150,7 @@ export function SettingsPage() {
   const targetLang = useFormStore((s) => s.targetLang);
   const translateTimeout = useFormStore((s) => s.translateTimeout);
   const pollInterval = useFormStore((s) => s.pollInterval);
+  const useRightPanelDetails = useFormStore((s) => s.useRightPanelDetails);
   const displayWidth = useFormStore((s) => s.displayWidth);
   const sidebarWindowMode = useFormStore((s) => s.sidebarWindowMode);
   const collapsedDisplayCount = useFormStore((s) => s.collapsedDisplayCount);
@@ -224,6 +228,9 @@ export function SettingsPage() {
       }
       if (listen?.interval_seconds && typeof listen.interval_seconds === "number" && stored.pollInterval === "1") {
         patch.pollInterval = String(listen.interval_seconds);
+      }
+      if (typeof listen?.use_right_panel_details === "boolean") {
+        patch.useRightPanelDetails = listen.use_right_panel_details;
       }
       if (display?.width && typeof display.width === "number" && stored.displayWidth === "420") {
         patch.displayWidth = String(display.width);
@@ -327,6 +334,7 @@ export function SettingsPage() {
     }
     if (listen) {
       if (typeof listen.interval_seconds === "number") patch.pollInterval = String(listen.interval_seconds);
+      if (typeof listen.use_right_panel_details === "boolean") patch.useRightPanelDetails = listen.use_right_panel_details;
     }
     if (display) {
       if (typeof display.width === "number") patch.displayWidth = String(display.width);
@@ -519,6 +527,21 @@ export function SettingsPage() {
               <span className="text-xs text-muted-foreground shrink-0">px</span>
             </div>
           </div>
+        </div>
+
+        <div className="flex items-center justify-between gap-4 rounded-xl border border-border/60 bg-background/40 px-4 py-3">
+          <div>
+            <h4 className="text-sm font-medium">右侧详情补充</h4>
+            <p className="text-[11px] text-muted-foreground mt-0.5">
+              关闭时只监听左侧列表最新预览；开启后读取右侧消息区补充详情。无论开关状态，都会读取右侧标题区区分群聊和私聊。
+            </p>
+          </div>
+          <Switch
+            checked={useRightPanelDetails}
+            onCheckedChange={(v) => {
+              setAndSync({ useRightPanelDetails: v }, "listen.use_right_panel_details", v);
+            }}
+          />
         </div>
 
         <div className="space-y-2">
@@ -785,6 +808,11 @@ export function SettingsPage() {
           <p className="text-[11px] text-muted-foreground">
             监控微信本地缓存，自动提取聊天中发送的图片缩略图。
           </p>
+          {!useRightPanelDetails && (
+            <p className="text-[11px] text-amber-600 dark:text-amber-400">
+              当前已关闭“右侧详情补充”，图片缩略图不会生效。
+            </p>
+          )}
           <div className="text-[11px] text-muted-foreground/80 space-y-1">
             <p className="font-medium text-muted-foreground">工作原理</p>
             <p>

@@ -14,6 +14,7 @@ interface SettingsFields {
   translateTimeout: string;
 
   pollInterval: string;
+  useRightPanelDetails: boolean;
   displayWidth: string;
   displayMode: DisplayMode;
   sidebarWindowMode: SidebarWindowMode;
@@ -42,6 +43,7 @@ export const useFormStore = create<FormStoreState>()(
       translateTimeout: "8",
 
       pollInterval: "1",
+      useRightPanelDetails: false,
       displayWidth: "420",
       displayMode: "bilingual" as DisplayMode,
       sidebarWindowMode: "follow" as SidebarWindowMode,
@@ -65,6 +67,7 @@ export const useFormStore = create<FormStoreState>()(
         targetLang: state.targetLang,
         translateTimeout: state.translateTimeout,
         pollInterval: state.pollInterval,
+        useRightPanelDetails: state.useRightPanelDetails,
         displayWidth: state.displayWidth,
         displayMode: state.displayMode,
         sidebarWindowMode: state.sidebarWindowMode,

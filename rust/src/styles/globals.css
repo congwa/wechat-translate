@@ -36,6 +36,17 @@
   --color-sidebar-accent-foreground: hsl(224 12% 20%);
   --color-sidebar-border: hsl(220 13% 88%);
   --color-sidebar-ring: hsl(152 55% 42%);
+
+  --sidebar-window-bg: rgba(255, 255, 255, 0.82);
+  --sidebar-window-bg-blurred: rgba(247, 248, 250, 0.92);
+  --sidebar-titlebar-bg: rgba(255, 255, 255, 0.72);
+  --sidebar-titlebar-bg-blurred: rgba(250, 250, 252, 0.88);
+  --sidebar-window-border: rgba(0, 0, 0, 0.06);
+  --sidebar-mode-switch-bg: rgba(0, 0, 0, 0.04);
+  --sidebar-mode-button-fg: rgba(107, 114, 128, 1);
+  --sidebar-mode-button-hover-fg: rgba(75, 85, 99, 1);
+  --sidebar-mode-button-active-bg: rgba(255, 255, 255, 0.94);
+  --sidebar-mode-button-active-fg: rgba(55, 65, 81, 1);
 }
 
 @layer base {
@@ -64,6 +75,16 @@
     --color-accent-foreground: hsl(220 8% 80%);
     --color-border: hsl(224 10% 18%);
     --color-input: hsl(224 10% 18%);
+    --sidebar-window-bg: rgba(18, 20, 26, 0.92);
+    --sidebar-window-bg-blurred: rgba(20, 22, 28, 0.95);
+    --sidebar-titlebar-bg: rgba(28, 30, 38, 0.78);
+    --sidebar-titlebar-bg-blurred: rgba(24, 26, 34, 0.9);
+    --sidebar-window-border: rgba(255, 255, 255, 0.08);
+    --sidebar-mode-switch-bg: rgba(255, 255, 255, 0.06);
+    --sidebar-mode-button-fg: rgba(156, 163, 175, 1);
+    --sidebar-mode-button-hover-fg: rgba(209, 213, 219, 1);
+    --sidebar-mode-button-active-bg: rgba(255, 255, 255, 0.14);
+    --sidebar-mode-button-active-fg: rgba(229, 231, 235, 1);
   }
 }
 
@@ -121,5 +142,40 @@
   }
   .dark .sidebar-scroll::-webkit-scrollbar-thumb {
     background: rgba(255, 255, 255, 0.08);
+  }
+}
+
+
+@layer utilities {
+  .sidebar-shell {
+    background: var(--sidebar-window-bg);
+    border: 1px solid var(--sidebar-window-border);
+    backdrop-filter: blur(20px) saturate(180%);
+    -webkit-backdrop-filter: blur(20px) saturate(180%);
+  }
+  .sidebar-shell[data-window-focus="false"] {
+    background: var(--sidebar-window-bg-blurred);
+  }
+  .sidebar-titlebar {
+    background: var(--sidebar-titlebar-bg);
+    border-bottom: 1px solid var(--sidebar-window-border);
+    backdrop-filter: blur(14px) saturate(180%);
+    -webkit-backdrop-filter: blur(14px) saturate(180%);
+  }
+  .sidebar-titlebar[data-window-focus="false"] {
+    background: var(--sidebar-titlebar-bg-blurred);
+  }
+  .sidebar-mode-switch {
+    background: var(--sidebar-mode-switch-bg);
+  }
+  .sidebar-mode-button {
+    color: var(--sidebar-mode-button-fg);
+  }
+  .sidebar-mode-button:hover {
+    color: var(--sidebar-mode-button-hover-fg);
+  }
+  .sidebar-mode-button-active {
+    background: var(--sidebar-mode-button-active-bg);
+    color: var(--sidebar-mode-button-active-fg);
   }
 }

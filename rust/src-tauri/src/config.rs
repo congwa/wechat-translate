@@ -39,6 +39,8 @@ pub struct ListenConfig {
     pub focus_refresh: bool,
     #[serde(default)]
     pub worker_debug: bool,
+    #[serde(default)]
+    pub use_right_panel_details: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -152,6 +154,7 @@ impl Default for ListenConfig {
             cross_source_merge_window_seconds: default_cross_source_merge(),
             focus_refresh: false,
             worker_debug: false,
+            use_right_panel_details: false,
         }
     }
 }
@@ -299,7 +302,7 @@ impl AppConfig {
 // ---------------------------------------------------------------------------
 
 /// Read config from disk. Missing fields are filled with defaults.
-pub fn read_config(base: &Path) -> Result<Value> {
+pub fn load_app_config(base: &Path) -> Result<AppConfig> {
     let path = config_path(base);
     let mut app_config: AppConfig = if path.exists() {
         let content = std::fs::read_to_string(&path)
@@ -309,6 +312,12 @@ pub fn read_config(base: &Path) -> Result<Value> {
         AppConfig::default()
     };
     app_config.normalize();
+    Ok(app_config)
+}
+
+/// Read config from disk. Missing fields are filled with defaults.
+pub fn read_config(base: &Path) -> Result<Value> {
+    let app_config = load_app_config(base)?;
     serde_json::to_value(&app_config).context("config serialize failed")
 }
 
@@ -360,11 +369,18 @@ mod tests {
     fn default_config_should_include_translate_endpoint_fields() {
         let value = default_config_value();
         let translate = value.get("translate").expect("translate section");
+        let listen = value.get("listen").expect("listen section");
         assert_eq!(
             translate.get("deeplx_url").and_then(|v| v.as_str()),
             Some("")
         );
         assert_eq!(translate.get("deeplx_base_url"), None);
+        assert_eq!(
+            listen
+                .get("use_right_panel_details")
+                .and_then(|v| v.as_bool()),
+            Some(false)
+        );
     }
 
     #[test]
@@ -394,5 +410,40 @@ mod tests {
             Some("https://api.deeplx.org/Pte_wVKtHoepysL2Q94Mq2LEZHE2Vnnl02tG-IogwGM/translate")
         );
         assert_eq!(translate.get("deeplx_base_url"), None);
+        assert_eq!(
+            saved["listen"]["use_right_panel_details"].as_bool(),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn validate_and_write_config_should_persist_right_panel_toggle() {
+        let base = temp_base();
+        let raw = json!({
+            "listen": {
+                "mode": "session",
+                "interval_seconds": 1.0,
+                "use_right_panel_details": true
+            },
+            "translate": {
+                "enabled": false,
+                "provider": "deeplx",
+                "deeplx_url": "",
+                "source_lang": "auto",
+                "target_lang": "EN",
+                "timeout_seconds": 8.0
+            },
+            "display": { "english_only": true, "on_translate_fail": "show_cn_with_reason", "width": 420, "side": "right" },
+            "logging": { "file": "logs/sidebar_listener.log" }
+        });
+
+        let (errors, _) = validate_and_write_config(&base, &raw).expect("write config");
+        assert!(errors.is_empty());
+
+        let saved = read_config(&base).expect("read config");
+        assert_eq!(
+            saved["listen"]["use_right_panel_details"].as_bool(),
+            Some(true)
+        );
     }
 }

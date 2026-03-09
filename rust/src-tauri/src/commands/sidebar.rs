@@ -1,3 +1,4 @@
+use crate::config::{load_app_config, ConfigDir};
 use crate::sidebar_window::{SidebarWindowState, WindowMode};
 use crate::task_manager::TaskManager;
 use crate::translator::DeepLXTranslator;
@@ -5,6 +6,7 @@ use std::sync::Arc;
 
 #[tauri::command]
 pub async fn sidebar_start(
+    config_dir: tauri::State<'_, ConfigDir>,
     manager: tauri::State<'_, TaskManager>,
     targets: Option<Vec<String>>,
     translate_enabled: Option<bool>,
@@ -14,6 +16,11 @@ pub async fn sidebar_start(
     timeout_seconds: Option<f64>,
     image_capture: Option<bool>,
 ) -> Result<serde_json::Value, String> {
+    let config = load_app_config(&config_dir.0).map_err(|e| e.to_string())?;
+    manager
+        .set_use_right_panel_details(config.listen.use_right_panel_details)
+        .await;
+
     let translate_enabled = translate_enabled.unwrap_or(false);
     let deeplx_url = deeplx_url.unwrap_or_default();
 
@@ -47,6 +54,7 @@ pub async fn sidebar_stop(
 #[tauri::command]
 pub async fn live_start(
     app: tauri::AppHandle,
+    config_dir: tauri::State<'_, ConfigDir>,
     manager: tauri::State<'_, TaskManager>,
     sidebar_state: tauri::State<'_, Arc<SidebarWindowState>>,
     translate_enabled: Option<bool>,
@@ -58,6 +66,10 @@ pub async fn live_start(
     window_mode: Option<String>,
 ) -> Result<serde_json::Value, String> {
     let mode = WindowMode::from_str_opt(window_mode.as_deref());
+    let config = load_app_config(&config_dir.0).map_err(|e| e.to_string())?;
+    manager
+        .set_use_right_panel_details(config.listen.use_right_panel_details)
+        .await;
 
     let translate_enabled = translate_enabled.unwrap_or(false);
     let deeplx_url = deeplx_url.unwrap_or_default();

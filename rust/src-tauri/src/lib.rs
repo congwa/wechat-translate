@@ -9,7 +9,7 @@ mod task_manager;
 pub mod translator;
 
 use adapter::MacOSAdapter;
-use config::ConfigDir;
+use config::{load_app_config, ConfigDir};
 use db::MessageDb;
 use events::EventStore;
 use image_cache::WeChatImageCache;
@@ -63,6 +63,7 @@ pub fn run() {
             );
             let sidebar_state = sidebar_window::create_state();
 
+            let config_base = data_dir.clone();
             app.manage(ConfigDir(data_dir));
             app.manage(message_db);
             app.manage(image_cache);
@@ -72,6 +73,11 @@ pub fn run() {
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 manager.set_app_handle(handle).await;
+                if let Ok(config) = load_app_config(&config_base) {
+                    manager
+                        .set_use_right_panel_details(config.listen.use_right_panel_details)
+                        .await;
+                }
                 let _ = manager.start_monitoring(1.0).await;
             });
 

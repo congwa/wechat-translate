@@ -121,6 +121,11 @@ struct SidebarConfig {
     image_capture: bool,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct MonitorConfig {
+    use_right_panel_details: bool,
+}
+
 #[derive(Clone)]
 pub struct TaskManager {
     adapter: Arc<MacOSAdapter>,
@@ -129,6 +134,7 @@ pub struct TaskManager {
     image_cache: Arc<std::sync::Mutex<WeChatImageCache>>,
     monitor_token: Arc<Mutex<Option<CancellationToken>>>,
     monitoring_active: Arc<AtomicBool>,
+    monitor_config: Arc<Mutex<MonitorConfig>>,
     sidebar_enabled: Arc<AtomicBool>,
     sidebar_config: Arc<Mutex<SidebarConfig>>,
     translator_status: Arc<std::sync::Mutex<TranslatorServiceStatus>>,
@@ -150,6 +156,9 @@ impl TaskManager {
             image_cache,
             monitor_token: Arc::new(Mutex::new(None)),
             monitoring_active: Arc::new(AtomicBool::new(false)),
+            monitor_config: Arc::new(Mutex::new(MonitorConfig {
+                use_right_panel_details: false,
+            })),
             sidebar_enabled: Arc::new(AtomicBool::new(false)),
             sidebar_config: Arc::new(Mutex::new(SidebarConfig {
                 translator: None,
@@ -164,6 +173,10 @@ impl TaskManager {
 
     pub async fn set_app_handle(&self, handle: AppHandle) {
         *self.app_handle.lock().await = Some(handle);
+    }
+
+    pub async fn set_use_right_panel_details(&self, enabled: bool) {
+        self.monitor_config.lock().await.use_right_panel_details = enabled;
     }
 
     async fn get_app_handle(&self) -> Result<AppHandle> {
@@ -277,6 +290,7 @@ impl TaskManager {
         let image_cache = self.image_cache.clone();
         let monitor_token_ref = self.monitor_token.clone();
         let monitoring_active = self.monitoring_active.clone();
+        let monitor_config = self.monitor_config.clone();
         let sidebar_enabled = self.sidebar_enabled.clone();
         let sidebar_config = self.sidebar_config.clone();
         let app_handle = app.clone();
@@ -291,6 +305,7 @@ impl TaskManager {
             let mut active_chat_name = String::new();
             let mut pending_chat_name: Option<String> = None;
             let mut pending_count: u32 = 0;
+            let mut last_use_right_panel_details: Option<bool> = None;
             const DEBOUNCE_THRESHOLD: u32 = 2;
             const SESSION_CORRECTION_WINDOW_SECONDS: i64 = 15;
 
@@ -307,16 +322,31 @@ impl TaskManager {
                     continue;
                 }
 
+                let use_right_panel_details = monitor_config.lock().await.use_right_panel_details;
+                if last_use_right_panel_details != Some(use_right_panel_details) {
+                    chat_baselines.clear();
+                    last_use_right_panel_details = Some(use_right_panel_details);
+                }
+
                 let poll_result = tokio::task::spawn_blocking({
                     let adapter = adapter.clone();
-                    move || -> Result<(String, Vec<ax_reader::SessionItemSnapshot>, Vec<ChatMessage>, Option<u32>)> {
+                    move || -> Result<(
+                        String,
+                        Vec<ax_reader::SessionItemSnapshot>,
+                        Vec<ChatMessage>,
+                        Option<u32>,
+                    )> {
                         if adapter.is_ui_paused() || adapter.has_popup_or_menu() {
                             anyhow::bail!("ui paused or popup detected, skip");
                         }
                         let chat_name = adapter.read_active_chat_name()?;
                         let snapshots = adapter.read_session_snapshots()?;
-                        let messages = adapter.read_chat_messages_rich().unwrap_or_default();
                         let member_count = adapter.read_active_chat_member_count().unwrap_or(None);
+                        let messages = if use_right_panel_details {
+                            adapter.read_chat_messages_rich().unwrap_or_default()
+                        } else {
+                            Vec::new()
+                        };
                         Ok((chat_name, snapshots, messages, member_count))
                     }
                 })
@@ -396,9 +426,11 @@ impl TaskManager {
                                 }),
                             );
 
-                            // Skip DB insert for the active chat — the higher-quality
-                            // chat_diff path handles it with better sender/content data.
-                            if snapshot.chat_name != chat_name {
+                            if should_forward_session_preview(
+                                use_right_panel_details,
+                                &snapshot.chat_name,
+                                &chat_name,
+                            ) {
                                 let _ = db.insert_message_with_meta(
                                     &snapshot.chat_name,
                                     &sender,
@@ -410,6 +442,59 @@ impl TaskManager {
                                     "session_preview",
                                     "low",
                                 );
+                            }
+
+                            if sidebar_enabled.load(Ordering::Relaxed)
+                                && should_forward_session_preview(
+                                    use_right_panel_details,
+                                    &snapshot.chat_name,
+                                    &chat_name,
+                                )
+                            {
+                                let (translator, target_set) = {
+                                    let config = sidebar_config.lock().await;
+                                    (config.translator.clone(), config.target_set.clone())
+                                };
+
+                                if target_set.is_empty() || target_set.contains(&snapshot.chat_name)
+                                {
+                                    let sidebar_event = publish_sidebar_append(
+                                        &events,
+                                        &app_handle,
+                                        &snapshot.chat_name,
+                                        chat_kind.as_str(),
+                                        if snapshot.has_sender_prefix {
+                                            "prefix"
+                                        } else if unread_increased {
+                                            "unread"
+                                        } else if matches!(chat_kind, ChatKind::Group) {
+                                            "group_no_prefix"
+                                        } else {
+                                            "unread_stable"
+                                        },
+                                        "session_preview",
+                                        "low",
+                                        &sender,
+                                        &snapshot.preview_body,
+                                        is_self,
+                                        None,
+                                    );
+
+                                    if let Some(translator) = translator {
+                                        spawn_sidebar_translation_update(
+                                            manager.clone(),
+                                            events.clone(),
+                                            app_handle.clone(),
+                                            db.clone(),
+                                            translator,
+                                            sidebar_event.id,
+                                            snapshot.chat_name.clone(),
+                                            sender.clone(),
+                                            snapshot.preview_body.clone(),
+                                            now.clone(),
+                                        );
+                                    }
+                                }
                             }
                         }
 
@@ -448,7 +533,7 @@ impl TaskManager {
                         pending_count = 0;
                     }
 
-                    if !messages.is_empty() {
+                    if use_right_panel_details && !messages.is_empty() {
                         let mut chat_kind = chat_kinds
                             .get(&chat_name)
                             .copied()
@@ -632,29 +717,18 @@ impl TaskManager {
                                     };
 
                                     if target_set.is_empty() || target_set.contains(&chat_name) {
-                                        let mut sidebar_payload = serde_json::json!({
-                                            "kind": "append",
-                                            "chat_name": chat_name,
-                                            "chat_type": chat_type_label.clone(),
-                                            "self_source": self_source_label(msg),
-                                            "source": "chat",
-                                            "quality": "high",
-                                            "sender": msg.sender,
-                                            "text_cn": msg.content,
-                                            "text_en": "",
-                                            "translate_error": "",
-                                            "is_self": msg.is_self,
-                                        });
-                                        if let Some(ref ip) = found_image_path {
-                                            sidebar_payload["image_path"] =
-                                                serde_json::Value::String(ip.clone());
-                                        }
-
-                                        let sidebar_event = events.publish(
+                                        let sidebar_event = publish_sidebar_append(
+                                            &events,
                                             &app_handle,
-                                            EventType::Message,
-                                            "sidebar",
-                                            sidebar_payload,
+                                            &chat_name,
+                                            &chat_type_label,
+                                            self_source_label(msg),
+                                            "chat",
+                                            "high",
+                                            &msg.sender,
+                                            &msg.content,
+                                            msg.is_self,
+                                            found_image_path.as_deref(),
                                         );
 
                                         if let Some(translator) = translator {
@@ -1244,6 +1318,47 @@ fn bag_diff(old: &[ChatMessage], new: &[ChatMessage]) -> Vec<ChatMessage> {
     result
 }
 
+fn should_forward_session_preview(
+    use_right_panel_details: bool,
+    snapshot_chat_name: &str,
+    active_chat_name: &str,
+) -> bool {
+    !use_right_panel_details || snapshot_chat_name != active_chat_name
+}
+
+fn publish_sidebar_append(
+    events: &EventStore,
+    app_handle: &AppHandle,
+    chat_name: &str,
+    chat_type: &str,
+    self_source: &str,
+    source: &str,
+    quality: &str,
+    sender: &str,
+    text_cn: &str,
+    is_self: bool,
+    image_path: Option<&str>,
+) -> crate::events::ServiceEvent {
+    let mut payload = serde_json::json!({
+        "kind": "append",
+        "chat_name": chat_name,
+        "chat_type": chat_type,
+        "self_source": self_source,
+        "source": source,
+        "quality": quality,
+        "sender": sender,
+        "text_cn": text_cn,
+        "text_en": "",
+        "translate_error": "",
+        "is_self": is_self,
+    });
+    if let Some(path) = image_path {
+        payload["image_path"] = serde_json::Value::String(path.to_string());
+    }
+
+    events.publish(app_handle, EventType::Message, "sidebar", payload)
+}
+
 fn spawn_sidebar_translation_update(
     manager: TaskManager,
     events: Arc<EventStore>,
@@ -1356,7 +1471,7 @@ fn update_tray_menu(
 
 #[cfg(test)]
 mod tests {
-    use super::{short_error_text, TranslatorServiceStatus};
+    use super::{short_error_text, should_forward_session_preview, TranslatorServiceStatus};
 
     #[test]
     fn translator_status_menu_text_matches_state() {
@@ -1401,5 +1516,12 @@ mod tests {
 
         assert_eq!(shortened.len(), 123);
         assert!(shortened.ends_with("..."));
+    }
+
+    #[test]
+    fn session_preview_forwarding_skips_active_chat_when_right_panel_enabled() {
+        assert!(should_forward_session_preview(false, "项目群", "项目群"));
+        assert!(should_forward_session_preview(true, "另一个群", "项目群"));
+        assert!(!should_forward_session_preview(true, "项目群", "项目群"));
     }
 }

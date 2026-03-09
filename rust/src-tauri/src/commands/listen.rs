@@ -1,10 +1,16 @@
+use crate::config::{load_app_config, ConfigDir};
 use crate::task_manager::TaskManager;
 
 #[tauri::command]
 pub async fn listen_start(
+    config_dir: tauri::State<'_, ConfigDir>,
     manager: tauri::State<'_, TaskManager>,
     interval_seconds: Option<f64>,
 ) -> Result<serde_json::Value, String> {
+    let config = load_app_config(&config_dir.0).map_err(|e| e.to_string())?;
+    manager
+        .set_use_right_panel_details(config.listen.use_right_panel_details)
+        .await;
     let interval = interval_seconds.unwrap_or(1.0);
     manager
         .start_monitoring(interval)
