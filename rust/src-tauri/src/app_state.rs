@@ -48,9 +48,12 @@ pub fn load_snapshot(
 
 pub fn emit_settings_updated(app: &AppHandle, settings: &AppConfig) {
     if let Some(menu_state) = app.try_state::<crate::TrayMenuState>() {
+        // 同步 macOS 应用菜单栏的翻译开关
         if let Some(toggle) = &menu_state.translate_enabled_check {
             let _ = toggle.set_checked(settings.translate.enabled);
         }
+        // 同步系统托盘菜单的翻译开关
+        let _ = menu_state.translate_toggle.set_checked(settings.translate.enabled);
     }
     let _ = app.emit("settings-updated", settings);
 }
