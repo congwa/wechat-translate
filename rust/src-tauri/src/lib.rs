@@ -168,6 +168,8 @@ pub fn run() {
                                         "auto".into(),
                                         "EN".into(),
                                         8.0,
+                                        3,
+                                        3,
                                         false,
                                     )
                                     .await;

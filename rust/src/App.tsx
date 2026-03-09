@@ -93,6 +93,18 @@ function MainApp() {
         const savedEnabled = typeof translate.enabled === "boolean" ? translate.enabled : store.translateEnabled;
         const savedSource = typeof translate.source_lang === "string" ? translate.source_lang : store.sourceLang;
         const savedTarget = typeof translate.target_lang === "string" ? translate.target_lang : store.targetLang;
+        const savedTimeout =
+          typeof translate.timeout_seconds === "number"
+            ? translate.timeout_seconds
+            : parseFloat(store.translateTimeout) || 8;
+        const savedMaxConcurrency =
+          typeof translate.max_concurrency === "number"
+            ? translate.max_concurrency
+            : parseInt(store.translateMaxConcurrency, 10) || 3;
+        const savedMaxRequestsPerSecond =
+          typeof translate.max_requests_per_second === "number"
+            ? translate.max_requests_per_second
+            : parseInt(store.translateMaxRequestsPerSecond, 10) || 3;
         const fullUrl = savedUrl.trim();
 
         if (savedEnabled && !fullUrl) {
@@ -105,6 +117,9 @@ function MainApp() {
           deeplxUrl: fullUrl,
           sourceLang: savedSource,
           targetLang: savedTarget,
+          timeoutSeconds: savedTimeout,
+          maxConcurrency: savedMaxConcurrency,
+          maxRequestsPerSecond: savedMaxRequestsPerSecond,
           intervalSeconds: parseFloat(store.pollInterval) || 1,
           imageCapture: store.imageCapture,
           windowMode: store.sidebarWindowMode,

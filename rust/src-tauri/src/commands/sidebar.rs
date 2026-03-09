@@ -14,6 +14,8 @@ pub async fn sidebar_start(
     source_lang: Option<String>,
     target_lang: Option<String>,
     timeout_seconds: Option<f64>,
+    max_concurrency: Option<usize>,
+    max_requests_per_second: Option<usize>,
     image_capture: Option<bool>,
 ) -> Result<serde_json::Value, String> {
     let config = load_app_config(&config_dir.0).map_err(|e| e.to_string())?;
@@ -21,17 +23,20 @@ pub async fn sidebar_start(
         .set_use_right_panel_details(config.listen.use_right_panel_details)
         .await;
 
-    let translate_enabled = translate_enabled.unwrap_or(false);
-    let deeplx_url = deeplx_url.unwrap_or_default();
+    let translate_enabled = translate_enabled.unwrap_or(config.translate.enabled);
+    let deeplx_url = deeplx_url.unwrap_or_else(|| config.translate.deeplx_url.clone());
 
     manager
         .enable_sidebar(
             targets.unwrap_or_default(),
             translate_enabled,
             deeplx_url,
-            source_lang.unwrap_or_else(|| "auto".to_string()),
-            target_lang.unwrap_or_else(|| "EN".to_string()),
-            timeout_seconds.unwrap_or(8.0),
+            source_lang.unwrap_or_else(|| config.translate.source_lang.clone()),
+            target_lang.unwrap_or_else(|| config.translate.target_lang.clone()),
+            timeout_seconds.unwrap_or(config.translate.timeout_seconds),
+            max_concurrency.unwrap_or(config.translate.max_concurrency),
+            max_requests_per_second
+                .unwrap_or(config.translate.max_requests_per_second),
             image_capture.unwrap_or(false),
         )
         .await
@@ -62,6 +67,9 @@ pub async fn live_start(
     source_lang: Option<String>,
     target_lang: Option<String>,
     interval_seconds: Option<f64>,
+    timeout_seconds: Option<f64>,
+    max_concurrency: Option<usize>,
+    max_requests_per_second: Option<usize>,
     image_capture: Option<bool>,
     window_mode: Option<String>,
 ) -> Result<serde_json::Value, String> {
@@ -71,8 +79,8 @@ pub async fn live_start(
         .set_use_right_panel_details(config.listen.use_right_panel_details)
         .await;
 
-    let translate_enabled = translate_enabled.unwrap_or(false);
-    let deeplx_url = deeplx_url.unwrap_or_default();
+    let translate_enabled = translate_enabled.unwrap_or(config.translate.enabled);
+    let deeplx_url = deeplx_url.unwrap_or_else(|| config.translate.deeplx_url.clone());
 
     let state = manager.get_task_state();
     if !state.monitoring {
@@ -88,9 +96,12 @@ pub async fn live_start(
             vec![],
             translate_enabled,
             deeplx_url,
-            source_lang.unwrap_or_else(|| "auto".to_string()),
-            target_lang.unwrap_or_else(|| "EN".to_string()),
-            8.0,
+            source_lang.unwrap_or_else(|| config.translate.source_lang.clone()),
+            target_lang.unwrap_or_else(|| config.translate.target_lang.clone()),
+            timeout_seconds.unwrap_or(config.translate.timeout_seconds),
+            max_concurrency.unwrap_or(config.translate.max_concurrency),
+            max_requests_per_second
+                .unwrap_or(config.translate.max_requests_per_second),
             image_capture.unwrap_or(false),
         )
         .await

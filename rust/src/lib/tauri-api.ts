@@ -20,6 +20,8 @@ export async function sidebarStart(params: {
   sourceLang?: string;
   targetLang?: string;
   timeoutSeconds?: number;
+  maxConcurrency?: number;
+  maxRequestsPerSecond?: number;
   imageCapture?: boolean;
 }): Promise<ApiResponse> {
   return invoke("sidebar_start", params);
@@ -35,6 +37,9 @@ export async function liveStart(params?: {
   sourceLang?: string;
   targetLang?: string;
   intervalSeconds?: number;
+  timeoutSeconds?: number;
+  maxConcurrency?: number;
+  maxRequestsPerSecond?: number;
   imageCapture?: boolean;
   windowMode?: string;
 }): Promise<ApiResponse> {

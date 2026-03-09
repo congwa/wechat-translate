@@ -93,6 +93,14 @@ function validateConfigSchema(obj: unknown): ValidationResult {
       const v = Number(translate.timeout_seconds);
       if (isNaN(v) || v < 1.0) errors.push(`translate.timeout_seconds 不能小于 1.0，当前值: ${translate.timeout_seconds}`);
     }
+    if (translate.max_concurrency !== undefined) {
+      const v = Number(translate.max_concurrency);
+      if (!Number.isInteger(v) || v < 1) errors.push(`translate.max_concurrency 必须是大于 0 的整数，当前值: ${translate.max_concurrency}`);
+    }
+    if (translate.max_requests_per_second !== undefined) {
+      const v = Number(translate.max_requests_per_second);
+      if (!Number.isInteger(v) || v < 1) errors.push(`translate.max_requests_per_second 必须是大于 0 的整数，当前值: ${translate.max_requests_per_second}`);
+    }
   }
 
   // display
@@ -149,6 +157,8 @@ export function SettingsPage() {
   const sourceLang = useFormStore((s) => s.sourceLang);
   const targetLang = useFormStore((s) => s.targetLang);
   const translateTimeout = useFormStore((s) => s.translateTimeout);
+  const translateMaxConcurrency = useFormStore((s) => s.translateMaxConcurrency);
+  const translateMaxRequestsPerSecond = useFormStore((s) => s.translateMaxRequestsPerSecond);
   const pollInterval = useFormStore((s) => s.pollInterval);
   const useRightPanelDetails = useFormStore((s) => s.useRightPanelDetails);
   const displayWidth = useFormStore((s) => s.displayWidth);
@@ -225,6 +235,12 @@ export function SettingsPage() {
       }
       if (typeof translate?.timeout_seconds === "number") {
         patch.translateTimeout = String(translate.timeout_seconds);
+      }
+      if (typeof translate?.max_concurrency === "number") {
+        patch.translateMaxConcurrency = String(translate.max_concurrency);
+      }
+      if (typeof translate?.max_requests_per_second === "number") {
+        patch.translateMaxRequestsPerSecond = String(translate.max_requests_per_second);
       }
       if (listen?.interval_seconds && typeof listen.interval_seconds === "number" && stored.pollInterval === "1") {
         patch.pollInterval = String(listen.interval_seconds);
@@ -331,6 +347,10 @@ export function SettingsPage() {
       if (typeof translate.source_lang === "string") patch.sourceLang = translate.source_lang;
       if (typeof translate.target_lang === "string") patch.targetLang = translate.target_lang;
       if (typeof translate.timeout_seconds === "number") patch.translateTimeout = String(translate.timeout_seconds);
+      if (typeof translate.max_concurrency === "number") patch.translateMaxConcurrency = String(translate.max_concurrency);
+      if (typeof translate.max_requests_per_second === "number") {
+        patch.translateMaxRequestsPerSecond = String(translate.max_requests_per_second);
+      }
     }
     if (listen) {
       if (typeof listen.interval_seconds === "number") patch.pollInterval = String(listen.interval_seconds);
@@ -704,7 +724,7 @@ export function SettingsPage() {
           <div className="mt-1 opacity-90">{getTranslateConfigStatus().detail}</div>
         </div>
 
-        <div className="grid grid-cols-3 gap-4">
+        <div className="grid grid-cols-2 gap-4 lg:grid-cols-3">
           <div className="space-y-2">
             <Label className="text-xs text-muted-foreground">源语言</Label>
             <Select
@@ -759,6 +779,46 @@ export function SettingsPage() {
                 }}
               />
               <span className="text-xs text-muted-foreground shrink-0">秒</span>
+            </div>
+          </div>
+          <div className="space-y-2">
+            <Label className="text-xs text-muted-foreground">同时并发数</Label>
+            <div className="flex items-center gap-2">
+              <Input
+                type="number"
+                min="1"
+                step="1"
+                value={translateMaxConcurrency}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setAndSync(
+                    { translateMaxConcurrency: val },
+                    "translate.max_concurrency",
+                    Math.max(1, parseInt(val, 10) || 1),
+                  );
+                }}
+              />
+              <span className="text-xs text-muted-foreground shrink-0">个</span>
+            </div>
+          </div>
+          <div className="space-y-2">
+            <Label className="text-xs text-muted-foreground">每秒请求数</Label>
+            <div className="flex items-center gap-2">
+              <Input
+                type="number"
+                min="1"
+                step="1"
+                value={translateMaxRequestsPerSecond}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setAndSync(
+                    { translateMaxRequestsPerSecond: val },
+                    "translate.max_requests_per_second",
+                    Math.max(1, parseInt(val, 10) || 1),
+                  );
+                }}
+              />
+              <span className="text-xs text-muted-foreground shrink-0">次</span>
             </div>
           </div>
         </div>

@@ -12,6 +12,8 @@ interface SettingsFields {
   sourceLang: string;
   targetLang: string;
   translateTimeout: string;
+  translateMaxConcurrency: string;
+  translateMaxRequestsPerSecond: string;
 
   pollInterval: string;
   useRightPanelDetails: boolean;
@@ -41,6 +43,8 @@ export const useFormStore = create<FormStoreState>()(
       sourceLang: "auto",
       targetLang: "EN",
       translateTimeout: "8",
+      translateMaxConcurrency: "3",
+      translateMaxRequestsPerSecond: "3",
 
       pollInterval: "1",
       useRightPanelDetails: false,
@@ -66,6 +70,8 @@ export const useFormStore = create<FormStoreState>()(
         sourceLang: state.sourceLang,
         targetLang: state.targetLang,
         translateTimeout: state.translateTimeout,
+        translateMaxConcurrency: state.translateMaxConcurrency,
+        translateMaxRequestsPerSecond: state.translateMaxRequestsPerSecond,
         pollInterval: state.pollInterval,
         useRightPanelDetails: state.useRightPanelDetails,
         displayWidth: state.displayWidth,

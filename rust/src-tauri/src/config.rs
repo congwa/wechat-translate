@@ -61,6 +61,10 @@ pub struct TranslateConfig {
     pub target_lang: String,
     #[serde(default = "default_timeout")]
     pub timeout_seconds: f64,
+    #[serde(default = "default_max_concurrency")]
+    pub max_concurrency: usize,
+    #[serde(default = "default_max_requests_per_second")]
+    pub max_requests_per_second: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -130,6 +134,12 @@ fn default_target_lang() -> String {
 fn default_timeout() -> f64 {
     8.0
 }
+fn default_max_concurrency() -> usize {
+    3
+}
+fn default_max_requests_per_second() -> usize {
+    3
+}
 fn default_on_translate_fail() -> String {
     "show_cn_with_reason".into()
 }
@@ -170,6 +180,8 @@ impl Default for TranslateConfig {
             source_lang: default_source_lang(),
             target_lang: default_target_lang(),
             timeout_seconds: default_timeout(),
+            max_concurrency: default_max_concurrency(),
+            max_requests_per_second: default_max_requests_per_second(),
         }
     }
 }
@@ -270,6 +282,12 @@ impl AppConfig {
                 "translate.timeout_seconds 不能小于 1.0，当前值: {}",
                 self.translate.timeout_seconds
             ));
+        }
+        if self.translate.max_concurrency == 0 {
+            errors.push("translate.max_concurrency 必须大于 0".to_string());
+        }
+        if self.translate.max_requests_per_second == 0 {
+            errors.push("translate.max_requests_per_second 必须大于 0".to_string());
         }
 
         if !(200..=1200).contains(&self.display.width) {
@@ -374,6 +392,18 @@ mod tests {
             translate.get("deeplx_url").and_then(|v| v.as_str()),
             Some("")
         );
+        assert_eq!(
+            translate
+                .get("max_concurrency")
+                .and_then(|v| v.as_u64()),
+            Some(3)
+        );
+        assert_eq!(
+            translate
+                .get("max_requests_per_second")
+                .and_then(|v| v.as_u64()),
+            Some(3)
+        );
         assert_eq!(translate.get("deeplx_base_url"), None);
         assert_eq!(
             listen
@@ -394,7 +424,9 @@ mod tests {
                 "deeplx_url": "https://api.deeplx.org/Pte_wVKtHoepysL2Q94Mq2LEZHE2Vnnl02tG-IogwGM/translate",
                 "source_lang": "auto",
                 "target_lang": "EN",
-                "timeout_seconds": 8.0
+                "timeout_seconds": 8.0,
+                "max_concurrency": 4,
+                "max_requests_per_second": 5
             },
             "display": { "english_only": true, "on_translate_fail": "show_cn_with_reason", "width": 420, "side": "right" },
             "logging": { "file": "logs/sidebar_listener.log" }
@@ -408,6 +440,18 @@ mod tests {
         assert_eq!(
             translate.get("deeplx_url").and_then(|v| v.as_str()),
             Some("https://api.deeplx.org/Pte_wVKtHoepysL2Q94Mq2LEZHE2Vnnl02tG-IogwGM/translate")
+        );
+        assert_eq!(
+            translate
+                .get("max_concurrency")
+                .and_then(|v| v.as_u64()),
+            Some(4)
+        );
+        assert_eq!(
+            translate
+                .get("max_requests_per_second")
+                .and_then(|v| v.as_u64()),
+            Some(5)
         );
         assert_eq!(translate.get("deeplx_base_url"), None);
         assert_eq!(

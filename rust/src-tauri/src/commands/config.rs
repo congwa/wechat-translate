@@ -23,9 +23,7 @@ pub async fn config_put(
     }
 
     let app_config = app_config::load_app_config(&config_dir.0).map_err(|e| e.to_string())?;
-    manager
-        .set_use_right_panel_details(app_config.listen.use_right_panel_details)
-        .await;
+    manager.apply_runtime_config(&app_config).await;
 
     Ok(serde_json::json!({ "ok": true, "message": "config saved", "path": path }))
 }

@@ -1,5 +1,6 @@
 use crate::adapter::ax_reader::{self, ChatMessage};
 use crate::adapter::MacOSAdapter;
+use crate::config::AppConfig;
 use crate::db::MessageDb;
 use crate::events::{EventStore, EventType};
 use crate::image_cache::{self, WeChatImageCache};
@@ -7,12 +8,12 @@ use crate::translator::DeepLXTranslator;
 use anyhow::Result;
 use log::debug;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore};
 use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -117,6 +118,7 @@ impl TranslatorServiceStatus {
 
 struct SidebarConfig {
     translator: Option<Arc<DeepLXTranslator>>,
+    limiter: Option<Arc<TranslationLimiter>>,
     target_set: HashSet<String>,
     image_capture: bool,
 }
@@ -124,6 +126,65 @@ struct SidebarConfig {
 #[derive(Debug, Clone, Copy)]
 struct MonitorConfig {
     use_right_panel_details: bool,
+}
+
+struct TranslationLimiter {
+    semaphore: Arc<Semaphore>,
+    recent_requests: Mutex<VecDeque<Instant>>,
+    max_requests_per_second: usize,
+}
+
+impl TranslationLimiter {
+    fn new(max_concurrency: usize, max_requests_per_second: usize) -> Self {
+        Self {
+            semaphore: Arc::new(Semaphore::new(max_concurrency.max(1))),
+            recent_requests: Mutex::new(VecDeque::new()),
+            max_requests_per_second: max_requests_per_second.max(1),
+        }
+    }
+
+    async fn acquire(&self) -> OwnedSemaphorePermit {
+        self.wait_for_window_slot().await;
+        self.semaphore
+            .clone()
+            .acquire_owned()
+            .await
+            .expect("translation semaphore closed")
+    }
+
+    async fn wait_for_window_slot(&self) {
+        let window = Duration::from_secs(1);
+        loop {
+            let wait_duration = {
+                let mut requests = self.recent_requests.lock().await;
+                let now = Instant::now();
+
+                while let Some(oldest) = requests.front() {
+                    if now.duration_since(*oldest) >= window {
+                        requests.pop_front();
+                    } else {
+                        break;
+                    }
+                }
+
+                if requests.len() < self.max_requests_per_second {
+                    requests.push_back(now);
+                    None
+                } else {
+                    requests
+                        .front()
+                        .map(|oldest| window.saturating_sub(now.duration_since(*oldest)))
+                }
+            };
+
+            if let Some(delay) = wait_duration {
+                tokio::time::sleep(delay).await;
+                continue;
+            }
+
+            break;
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -162,6 +223,7 @@ impl TaskManager {
             sidebar_enabled: Arc::new(AtomicBool::new(false)),
             sidebar_config: Arc::new(Mutex::new(SidebarConfig {
                 translator: None,
+                limiter: None,
                 target_set: HashSet::new(),
                 image_capture: false,
             })),
@@ -213,6 +275,97 @@ impl TaskManager {
 
     fn next_translator_generation(&self) -> u64 {
         self.translator_generation.fetch_add(1, Ordering::Relaxed) + 1
+    }
+
+    fn build_sidebar_translation_runtime(
+        translate_enabled: bool,
+        deeplx_url: &str,
+        source_lang: &str,
+        target_lang: &str,
+        timeout_seconds: f64,
+        max_concurrency: usize,
+        max_requests_per_second: usize,
+    ) -> (
+        Option<Arc<DeepLXTranslator>>,
+        Option<Arc<TranslationLimiter>>,
+        TranslatorServiceStatus,
+    ) {
+        let deeplx_url = deeplx_url.trim();
+        if !translate_enabled {
+            return (None, None, TranslatorServiceStatus::disabled());
+        }
+        if deeplx_url.is_empty() {
+            return (None, None, TranslatorServiceStatus::unconfigured());
+        }
+
+        (
+            Some(Arc::new(DeepLXTranslator::new(
+                deeplx_url,
+                source_lang,
+                target_lang,
+                timeout_seconds,
+            ))),
+            Some(Arc::new(TranslationLimiter::new(
+                max_concurrency,
+                max_requests_per_second,
+            ))),
+            TranslatorServiceStatus::checking(),
+        )
+    }
+
+    fn spawn_translator_health_check(
+        &self,
+        translator_generation: u64,
+        translator: Option<Arc<DeepLXTranslator>>,
+    ) {
+        if let Some(translator) = translator {
+            let manager = self.clone();
+            tokio::spawn(async move {
+                let next_status = match translator.check_health().await {
+                    Ok(_) => TranslatorServiceStatus::healthy(),
+                    Err(error) => TranslatorServiceStatus::error(error.to_string()),
+                };
+                manager
+                    .set_translator_status_if_current(translator_generation, next_status)
+                    .await;
+            });
+        }
+    }
+
+    pub async fn apply_runtime_config(&self, config: &AppConfig) {
+        self.set_use_right_panel_details(config.listen.use_right_panel_details)
+            .await;
+
+        if !self.sidebar_enabled.load(Ordering::Relaxed) {
+            return;
+        }
+
+        let translator_generation = self.next_translator_generation();
+        let (translator, limiter, translator_status) = Self::build_sidebar_translation_runtime(
+            config.translate.enabled,
+            &config.translate.deeplx_url,
+            &config.translate.source_lang,
+            &config.translate.target_lang,
+            config.translate.timeout_seconds,
+            config.translate.max_concurrency,
+            config.translate.max_requests_per_second,
+        );
+        let translator_for_check = translator.clone();
+
+        {
+            let mut sidebar_config = self.sidebar_config.lock().await;
+            sidebar_config.translator = translator;
+            sidebar_config.limiter = limiter;
+        }
+
+        self.set_translator_status(translator_status.clone()).await;
+
+        if let Ok(app) = self.get_app_handle().await {
+            let state = self.get_task_state();
+            update_tray_menu(&app, &state, &translator_status);
+        }
+
+        self.spawn_translator_health_check(translator_generation, translator_for_check);
     }
 
     async fn set_translator_status(&self, status: TranslatorServiceStatus) {
@@ -451,9 +604,13 @@ impl TaskManager {
                                     &chat_name,
                                 )
                             {
-                                let (translator, target_set) = {
+                                let (translator, limiter, target_set) = {
                                     let config = sidebar_config.lock().await;
-                                    (config.translator.clone(), config.target_set.clone())
+                                    (
+                                        config.translator.clone(),
+                                        config.limiter.clone(),
+                                        config.target_set.clone(),
+                                    )
                                 };
 
                                 if target_set.is_empty() || target_set.contains(&snapshot.chat_name)
@@ -480,13 +637,16 @@ impl TaskManager {
                                         None,
                                     );
 
-                                    if let Some(translator) = translator {
+                                    if let (Some(translator), Some(limiter)) =
+                                        (translator, limiter)
+                                    {
                                         spawn_sidebar_translation_update(
                                             manager.clone(),
                                             events.clone(),
                                             app_handle.clone(),
                                             db.clone(),
                                             translator,
+                                            limiter,
                                             sidebar_event.id,
                                             snapshot.chat_name.clone(),
                                             sender.clone(),
@@ -711,9 +871,13 @@ impl TaskManager {
                                 }
 
                                 if sidebar_enabled.load(Ordering::Relaxed) {
-                                    let (translator, target_set) = {
+                                    let (translator, limiter, target_set) = {
                                         let config = sidebar_config.lock().await;
-                                        (config.translator.clone(), config.target_set.clone())
+                                        (
+                                            config.translator.clone(),
+                                            config.limiter.clone(),
+                                            config.target_set.clone(),
+                                        )
                                     };
 
                                     if target_set.is_empty() || target_set.contains(&chat_name) {
@@ -731,13 +895,16 @@ impl TaskManager {
                                             found_image_path.as_deref(),
                                         );
 
-                                        if let Some(translator) = translator {
+                                        if let (Some(translator), Some(limiter)) =
+                                            (translator, limiter)
+                                        {
                                             spawn_sidebar_translation_update(
                                                 manager.clone(),
                                                 events.clone(),
                                                 app_handle.clone(),
                                                 db.clone(),
                                                 translator,
+                                                limiter,
                                                 sidebar_event.id,
                                                 chat_name.clone(),
                                                 msg.sender.clone(),
@@ -805,19 +972,20 @@ impl TaskManager {
         source_lang: String,
         target_lang: String,
         timeout_seconds: f64,
+        max_concurrency: usize,
+        max_requests_per_second: usize,
         image_capture: bool,
     ) -> Result<()> {
         let translator_generation = self.next_translator_generation();
-        let translator = if translate_enabled && !deeplx_url.is_empty() {
-            Some(Arc::new(DeepLXTranslator::new(
-                &deeplx_url,
-                &source_lang,
-                &target_lang,
-                timeout_seconds,
-            )))
-        } else {
-            None
-        };
+        let (translator, limiter, translator_status) = Self::build_sidebar_translation_runtime(
+            translate_enabled,
+            &deeplx_url,
+            &source_lang,
+            &target_lang,
+            timeout_seconds,
+            max_concurrency,
+            max_requests_per_second,
+        );
         let translator_for_check = translator.clone();
 
         let target_set: HashSet<String> = targets.into_iter().filter(|t| !t.is_empty()).collect();
@@ -825,19 +993,13 @@ impl TaskManager {
         {
             let mut config = self.sidebar_config.lock().await;
             config.translator = translator;
+            config.limiter = limiter;
             config.target_set = target_set;
             config.image_capture = image_capture;
         }
 
         self.sidebar_enabled.store(true, Ordering::Relaxed);
 
-        let translator_status = if !translate_enabled {
-            TranslatorServiceStatus::disabled()
-        } else if deeplx_url.is_empty() {
-            TranslatorServiceStatus::unconfigured()
-        } else {
-            TranslatorServiceStatus::checking()
-        };
         self.set_translator_status(translator_status.clone()).await;
 
         let app = self.get_app_handle().await?;
@@ -854,18 +1016,7 @@ impl TaskManager {
         );
         update_tray_menu(&app, &state, &translator_status);
 
-        if let Some(translator) = translator_for_check {
-            let manager = self.clone();
-            tokio::spawn(async move {
-                let next_status = match translator.check_health().await {
-                    Ok(_) => TranslatorServiceStatus::healthy(),
-                    Err(error) => TranslatorServiceStatus::error(error.to_string()),
-                };
-                manager
-                    .set_translator_status_if_current(translator_generation, next_status)
-                    .await;
-            });
-        }
+        self.spawn_translator_health_check(translator_generation, translator_for_check);
 
         Ok(())
     }
@@ -877,6 +1028,7 @@ impl TaskManager {
         {
             let mut config = self.sidebar_config.lock().await;
             config.translator = None;
+            config.limiter = None;
             config.target_set.clear();
             config.image_capture = false;
         }
@@ -1365,6 +1517,7 @@ fn spawn_sidebar_translation_update(
     app_handle: AppHandle,
     db: Arc<MessageDb>,
     translator: Arc<DeepLXTranslator>,
+    limiter: Arc<TranslationLimiter>,
     message_id: u64,
     chat_name: String,
     sender: String,
@@ -1373,15 +1526,48 @@ fn spawn_sidebar_translation_update(
 ) {
     tokio::spawn(async move {
         let translator_generation = manager.translator_generation.load(Ordering::Relaxed);
-        match translator.translate(&content).await {
-            Ok(translated) => {
+        let source_lang = translator.source_lang().to_string();
+        let target_lang = translator.target_lang().to_string();
+
+        if let Ok(Some(cached)) = db.get_cached_translation(&content, &source_lang, &target_lang) {
+            if target_lang == "EN" {
                 let _ = db.update_message_translation(
                     &chat_name,
                     &sender,
                     &content,
                     &detected_at,
-                    &translated,
+                    &cached.translated_text,
                 );
+            }
+            events.publish(
+                &app_handle,
+                EventType::Message,
+                "sidebar",
+                serde_json::json!({
+                    "kind": "update",
+                    "message_id": message_id,
+                    "chat_name": chat_name,
+                    "text_en": cached.translated_text,
+                    "translate_error": "",
+                }),
+            );
+            return;
+        }
+
+        let _permit = limiter.acquire().await;
+        match translator.translate(&content).await {
+            Ok(translated) => {
+                let _ =
+                    db.upsert_cached_translation(&content, &source_lang, &target_lang, &translated);
+                if target_lang == "EN" {
+                    let _ = db.update_message_translation(
+                        &chat_name,
+                        &sender,
+                        &content,
+                        &detected_at,
+                        &translated,
+                    );
+                }
                 manager
                     .set_translator_status_if_current(
                         translator_generation,

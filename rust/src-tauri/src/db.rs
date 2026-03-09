@@ -40,6 +40,14 @@ pub struct DbStats {
     pub latest_message: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct CachedTranslation {
+    pub translated_text: String,
+    pub source_lang: String,
+    pub target_lang: String,
+    pub updated_at: String,
+}
+
 pub(crate) fn content_hash(sender: &str, content: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(sender.as_bytes());
@@ -105,7 +113,18 @@ impl MessageDb {
             );
             CREATE INDEX IF NOT EXISTS idx_chat_time ON messages(chat_name, detected_at);
             CREATE INDEX IF NOT EXISTS idx_sender ON messages(sender);
-            CREATE INDEX IF NOT EXISTS idx_source_quality ON messages(source, quality, chat_name, detected_at);",
+            CREATE INDEX IF NOT EXISTS idx_source_quality ON messages(source, quality, chat_name, detected_at);
+            CREATE TABLE IF NOT EXISTS message_translations (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                content_hash    TEXT NOT NULL,
+                source_lang     TEXT NOT NULL,
+                target_lang     TEXT NOT NULL,
+                translated_text TEXT NOT NULL,
+                updated_at      TEXT NOT NULL,
+                UNIQUE(content_hash, source_lang, target_lang)
+            );
+            CREATE INDEX IF NOT EXISTS idx_message_translations_lookup
+              ON message_translations(content_hash, source_lang, target_lang);",
         )
         .context("create schema")?;
 
@@ -229,6 +248,55 @@ impl MessageDb {
             )
             .context("update message translation")?;
         Ok(rows > 0)
+    }
+
+    pub fn get_cached_translation(
+        &self,
+        content: &str,
+        source_lang: &str,
+        target_lang: &str,
+    ) -> Result<Option<CachedTranslation>> {
+        let hash = content_only_hash(content);
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT translated_text, source_lang, target_lang, updated_at
+             FROM message_translations
+             WHERE content_hash = ?1 AND source_lang = ?2 AND target_lang = ?3
+             LIMIT 1",
+        )?;
+        let mut rows = stmt.query(params![hash, source_lang, target_lang])?;
+        if let Some(row) = rows.next()? {
+            return Ok(Some(CachedTranslation {
+                translated_text: row.get(0)?,
+                source_lang: row.get(1)?,
+                target_lang: row.get(2)?,
+                updated_at: row.get(3)?,
+            }));
+        }
+        Ok(None)
+    }
+
+    pub fn upsert_cached_translation(
+        &self,
+        content: &str,
+        source_lang: &str,
+        target_lang: &str,
+        translated_text: &str,
+    ) -> Result<()> {
+        let hash = content_only_hash(content);
+        let updated_at = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO message_translations (
+                content_hash, source_lang, target_lang, translated_text, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(content_hash, source_lang, target_lang)
+             DO UPDATE SET translated_text = excluded.translated_text,
+                           updated_at = excluded.updated_at",
+            params![hash, source_lang, target_lang, translated_text, updated_at],
+        )
+        .context("upsert cached translation")?;
+        Ok(())
     }
 
     /// Try updating a recent low-quality session_preview row into a corrected high-quality row.
@@ -620,6 +688,29 @@ mod tests {
             .expect("query messages");
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].content_en, "Hello");
+
+        drop(db);
+        cleanup_db(&path);
+    }
+
+    #[test]
+    fn cached_translation_should_match_same_language_pair_only() {
+        let path = temp_db_path("cached_translation");
+        let db = MessageDb::new(&path).expect("create db");
+
+        db.upsert_cached_translation("你好", "auto", "EN", "Hello")
+            .expect("cache translation");
+
+        let hit = db
+            .get_cached_translation("你好", "auto", "EN")
+            .expect("query cache")
+            .expect("cached translation exists");
+        assert_eq!(hit.translated_text, "Hello");
+
+        let miss = db
+            .get_cached_translation("你好", "auto", "JA")
+            .expect("query other lang");
+        assert!(miss.is_none());
 
         drop(db);
         cleanup_db(&path);

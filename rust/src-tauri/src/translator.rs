@@ -91,4 +91,12 @@ impl DeepLXTranslator {
     pub async fn check_health(&self) -> Result<()> {
         self.translate("你好，世界").await.map(|_| ())
     }
+
+    pub fn source_lang(&self) -> &str {
+        &self.source_lang
+    }
+
+    pub fn target_lang(&self) -> &str {
+        &self.target_lang
+    }
 }
