@@ -661,9 +661,12 @@ impl TaskManager {
                                     "low",
                                 );
 
-                                // 会话预览消息入库后也需要通知悬浮窗刷新 + 触发翻译
+                                // 会话预览消息入库后：
+                                // - 只有当消息属于当前聊天时才刷新悬浮窗
+                                // - 避免其他聊天的新消息导致悬浮窗切换
                                 if sidebar_enabled.load(Ordering::Relaxed)
                                     && should_forward_sidebar_chat(&snapshot.chat_name)
+                                    && snapshot.chat_name == chat_name
                                 {
                                     let refresh_version =
                                         sidebar_runtime.update_chat_and_version(&snapshot.chat_name);
