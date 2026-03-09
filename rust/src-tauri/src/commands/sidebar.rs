@@ -107,7 +107,9 @@ pub async fn live_start(
         .await
         .map_err(|e| e.to_string())?;
 
-    let _ = sidebar_state.open(&app, None, mode).await;
+    let _ = sidebar_state
+        .open(&app, Some(config.display.width as f64), mode)
+        .await;
 
     Ok(serde_json::json!({ "ok": true, "message": "live started" }))
 }
@@ -115,13 +117,15 @@ pub async fn live_start(
 #[tauri::command]
 pub async fn sidebar_window_open(
     app: tauri::AppHandle,
+    config_dir: tauri::State<'_, ConfigDir>,
     state: tauri::State<'_, Arc<SidebarWindowState>>,
     width: Option<f64>,
     window_mode: Option<String>,
 ) -> Result<serde_json::Value, String> {
     let mode = WindowMode::from_str_opt(window_mode.as_deref());
+    let config = load_app_config(&config_dir.0).map_err(|e| e.to_string())?;
     state
-        .open(&app, width, mode)
+        .open(&app, width.or(Some(config.display.width as f64)), mode)
         .await
         .map_err(|e| e.to_string())?;
     Ok(serde_json::json!({ "ok": true, "message": "sidebar window opened" }))

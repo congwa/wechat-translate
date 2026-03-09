@@ -1,5 +1,18 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { ApiResponse } from "./types";
+import type { ApiResponse, AppSettings, AppStateSnapshot } from "./types";
+
+export async function appStateGet(): Promise<ApiResponse<AppStateSnapshot>> {
+  return invoke("app_state_get");
+}
+
+export interface SettingsUpdateResponse extends ApiResponse<AppStateSnapshot> {
+  errors?: string[];
+  path?: string;
+}
+
+export async function settingsUpdate(settings: AppSettings): Promise<SettingsUpdateResponse> {
+  return invoke("settings_update", { settings });
+}
 
 export async function getSessions(): Promise<ApiResponse<string[]>> {
   return invoke("get_sessions");

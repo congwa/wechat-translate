@@ -2,8 +2,7 @@ import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import type { TaskState } from "@/lib/types";
-import { useEventStore } from "@/stores/eventStore";
-import { useFormStore } from "@/stores/formStore";
+import { useRuntimeStore } from "@/stores/runtimeStore";
 import * as api from "@/lib/tauri-api";
 import { motion } from "framer-motion";
 
@@ -13,12 +12,10 @@ const taskLabels: { key: keyof TaskState; label: string }[] = [
 ];
 
 export function Header() {
-  const taskState = useEventStore((s) => s.taskState);
-  const closeToTray = useFormStore((s) => s.closeToTray);
-  const setSettings = useFormStore((s) => s.setSettings);
+  const taskState = useRuntimeStore((s) => s.runtime.tasks);
+  const closeToTray = useRuntimeStore((s) => s.runtime.close_to_tray);
 
   function handleToggle(checked: boolean) {
-    setSettings({ closeToTray: checked });
     api.setCloseToTray(checked).catch(() => {});
   }
 

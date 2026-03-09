@@ -6,8 +6,9 @@ import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import { X, MessageCircle, Languages, AlertCircle, ChevronUp, ChevronDown } from "lucide-react";
 import { useSidebarStore } from "@/stores/sidebarStore";
 import type { SidebarMessage, StoredMessage } from "@/lib/types";
-import { useEventStore } from "@/stores/eventStore";
 import { useFormStore, type DisplayMode } from "@/stores/formStore";
+import { useRuntimeStore } from "@/stores/runtimeStore";
+import { useSettingsStore } from "@/stores/settingsStore";
 import * as api from "@/lib/tauri-api";
 
 type WindowMode = "follow" | "independent";
@@ -201,46 +202,17 @@ export function SidebarView() {
   const loadHistory = useSidebarStore((s) => s.loadHistory);
   const displayMode = useFormStore((s) => s.displayMode);
   const setSettings = useFormStore((s) => s.setSettings);
-  const translateEnabled = useFormStore((s) => s.translateEnabled);
-  const deeplxUrl = useFormStore((s) => s.deeplxUrl);
-  const translatorStatus = useEventStore((s) => s.translatorStatus);
+  const settings = useSettingsStore((s) => s.settings);
+  const translatorStatus = useRuntimeStore((s) => s.runtime.translator);
   const collapsedCount = parseInt(useFormStore((s) => s.collapsedDisplayCount) || "0", 10);
   const bottomRef = useRef<HTMLDivElement>(null);
   const [visible, setVisible] = useState(true);
   const [collapsed, setCollapsed] = useState(false);
-  const [configLoaded, setConfigLoaded] = useState(false);
   const expandedSizeRef = useRef({ w: 380, h: 600 });
-  const canSwitchDisplayMode = !configLoaded || (translateEnabled && deeplxUrl.trim() !== "");
+  const translateEnabled = settings?.translate.enabled ?? false;
+  const deeplxUrl = settings?.translate.deeplx_url ?? "";
+  const canSwitchDisplayMode = !settings || (translateEnabled && deeplxUrl.trim() !== "");
   const effectiveDisplayMode: DisplayMode = canSwitchDisplayMode ? displayMode : "original";
-
-  const syncTranslateConfig = useCallback(
-    async (configData?: Record<string, unknown>) => {
-      try {
-        const data = configData
-          ?? (((await api.configGet()) as unknown as Record<string, unknown>).data as
-            | Record<string, unknown>
-            | undefined);
-        const translate = data?.translate as Record<string, unknown> | undefined;
-        if (translate) {
-          const patch: Record<string, string | boolean> = {};
-          if (typeof translate.enabled === "boolean") {
-            patch.translateEnabled = translate.enabled;
-          }
-          if (typeof translate.deeplx_url === "string") {
-            patch.deeplxUrl = translate.deeplx_url;
-          }
-          if (Object.keys(patch).length > 0) {
-            setSettings(patch);
-          }
-        }
-      } catch {
-        // Fall back to whatever is already in the local store.
-      } finally {
-        setConfigLoaded(true);
-      }
-    },
-    [setSettings],
-  );
 
   const fetchHistory = useCallback(
     async (chatName: string) => {
@@ -268,25 +240,6 @@ export function SidebarView() {
     }
     return "";
   }, [items]);
-
-  useEffect(() => {
-    const cleanup = useEventStore.getState().initEventListener();
-    return () => {
-      cleanup.then((fn) => fn());
-    };
-  }, []);
-
-  useEffect(() => {
-    syncTranslateConfig();
-
-    const unlisten = listen<Record<string, unknown>>("config-updated", (event) => {
-      syncTranslateConfig(event.payload);
-    });
-
-    return () => {
-      unlisten.then((fn) => fn());
-    };
-  }, [syncTranslateConfig]);
 
   useEffect(() => {
     if (currentChat) {
@@ -430,7 +383,7 @@ export function SidebarView() {
             </div>
           )}
 
-          {configLoaded && translateEnabled && !deeplxUrl.trim() && (
+          {settings && translateEnabled && !deeplxUrl.trim() && (
             <div className="flex items-center gap-1.5 px-3 py-1.5 mb-2 rounded-lg bg-amber-500/5 dark:bg-amber-500/5">
               <AlertCircle className="w-3 h-3 text-amber-500 shrink-0" />
               <span className="text-[10px] text-amber-700 dark:text-amber-300 italic truncate">

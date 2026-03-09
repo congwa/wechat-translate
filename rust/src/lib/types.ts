@@ -21,6 +21,58 @@ export interface TranslatorServiceStatus {
   last_error: string | null;
 }
 
+export interface ListenSettings {
+  mode: string;
+  targets: string[];
+  interval_seconds: number;
+  dedupe_window_seconds: number;
+  session_preview_dedupe_window_seconds: number;
+  cross_source_merge_window_seconds: number;
+  focus_refresh: boolean;
+  worker_debug: boolean;
+  use_right_panel_details: boolean;
+}
+
+export interface TranslateSettings {
+  enabled: boolean;
+  provider: string;
+  deeplx_url: string;
+  source_lang: string;
+  target_lang: string;
+  timeout_seconds: number;
+  max_concurrency: number;
+  max_requests_per_second: number;
+}
+
+export interface DisplaySettings {
+  english_only: boolean;
+  on_translate_fail: string;
+  width: number;
+  side: string;
+}
+
+export interface LoggingSettings {
+  file: string;
+}
+
+export interface AppSettings {
+  listen: ListenSettings;
+  translate: TranslateSettings;
+  display: DisplaySettings;
+  logging: LoggingSettings;
+}
+
+export interface AppRuntime {
+  tasks: TaskState;
+  translator: TranslatorServiceStatus;
+  close_to_tray: boolean;
+}
+
+export interface AppStateSnapshot {
+  settings: AppSettings;
+  runtime: AppRuntime;
+}
+
 export interface ServiceStatus {
   adapter: {
     platform: string;

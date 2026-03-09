@@ -1,4 +1,5 @@
 pub mod adapter;
+mod app_state;
 mod commands;
 mod config;
 pub mod db;
@@ -135,8 +136,11 @@ pub fn run() {
                     manager
                         .set_use_right_panel_details(config.listen.use_right_panel_details)
                         .await;
+                    manager.apply_runtime_config(&config).await;
+                    let _ = manager.start_monitoring(config.listen.interval_seconds).await;
+                } else {
+                    let _ = manager.start_monitoring(1.0).await;
                 }
-                let _ = manager.start_monitoring(1.0).await;
             });
 
             // -- Tray menu items --
@@ -215,26 +219,32 @@ pub fn run() {
                                     app.state::<Arc<sidebar_window::SidebarWindowState>>();
                                 let _ = sidebar_ws.close(&app).await;
                             } else {
+                                let config_dir = app.state::<ConfigDir>();
+                                let config = load_app_config(&config_dir.0).unwrap_or_default();
                                 if !state.monitoring {
-                                    let _ = manager.start_monitoring(1.0).await;
+                                    let _ = manager.start_monitoring(config.listen.interval_seconds).await;
                                 }
                                 let _ = manager
                                     .enable_sidebar(
                                         vec![],
-                                        false,
-                                        String::new(),
-                                        "auto".into(),
-                                        "EN".into(),
-                                        8.0,
-                                        3,
-                                        3,
+                                        config.translate.enabled,
+                                        config.translate.deeplx_url.clone(),
+                                        config.translate.source_lang.clone(),
+                                        config.translate.target_lang.clone(),
+                                        config.translate.timeout_seconds,
+                                        config.translate.max_concurrency,
+                                        config.translate.max_requests_per_second,
                                         false,
                                     )
                                     .await;
                                 let sidebar_ws =
                                     app.state::<Arc<sidebar_window::SidebarWindowState>>();
                                 let _ = sidebar_ws
-                                    .open(&app, None, sidebar_window::WindowMode::default())
+                                    .open(
+                                        &app,
+                                        Some(config.display.width as f64),
+                                        sidebar_window::WindowMode::default(),
+                                    )
                                     .await;
                             }
                         });
@@ -247,15 +257,19 @@ pub fn run() {
                             if state.monitoring {
                                 let _ = manager.stop_monitoring().await;
                             } else {
-                                let _ = manager.start_monitoring(1.0).await;
+                                let config_dir = app.state::<ConfigDir>();
+                                let config = load_app_config(&config_dir.0).unwrap_or_default();
+                                let _ = manager.start_monitoring(config.listen.interval_seconds).await;
                             }
                         });
                     }
                     "toggle_close_to_tray" => {
                         let close = app.state::<CloseToTray>();
+                        let manager = app.state::<TaskManager>();
                         let tray = app.state::<TrayMenuState>();
                         let checked = tray.close_to_tray_check.is_checked().unwrap_or(true);
                         close.0.store(checked, Ordering::Relaxed);
+                        app_state::emit_runtime_updated(app, &manager);
                     }
                     "clear_db_restart" => {
                         handle_clear_db_restart_menu(app);
@@ -286,6 +300,8 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            commands::app_state::app_state_get,
+            commands::app_state::settings_update,
             commands::sessions::get_sessions,
             commands::listen::listen_start,
             commands::listen::listen_stop,

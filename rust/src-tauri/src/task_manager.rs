@@ -1,3 +1,4 @@
+use crate::app_state;
 use crate::adapter::ax_reader::{self, ChatMessage};
 use crate::adapter::MacOSAdapter;
 use crate::config::AppConfig;
@@ -349,10 +350,6 @@ impl TaskManager {
         self.set_use_right_panel_details(config.listen.use_right_panel_details)
             .await;
 
-        if !self.sidebar_enabled.load(Ordering::Relaxed) {
-            return;
-        }
-
         let translator_generation = self.next_translator_generation();
         let (translator, limiter, translator_status) = Self::build_sidebar_translation_runtime(
             config.translate.enabled,
@@ -365,7 +362,7 @@ impl TaskManager {
         );
         let translator_for_check = translator.clone();
 
-        {
+        if self.sidebar_enabled.load(Ordering::Relaxed) {
             let mut sidebar_config = self.sidebar_config.lock().await;
             sidebar_config.translator = translator;
             sidebar_config.limiter = limiter;
@@ -376,6 +373,7 @@ impl TaskManager {
         if let Ok(app) = self.get_app_handle().await {
             let state = self.get_task_state();
             update_tray_menu(&app, &state, &translator_status);
+            app_state::emit_runtime_updated(&app, self);
         }
 
         self.spawn_translator_health_check(translator_generation, translator_for_check);
@@ -393,6 +391,7 @@ impl TaskManager {
 
         if let Ok(app) = self.get_app_handle().await {
             update_tray_menu(&app, &task_state, &status);
+            app_state::emit_runtime_updated(&app, self);
         }
     }
 
@@ -426,6 +425,7 @@ impl TaskManager {
                 return;
             }
             update_tray_menu(&app, &task_state, &status);
+            app_state::emit_runtime_updated(&app, self);
         }
     }
 
@@ -447,6 +447,7 @@ impl TaskManager {
         self.publish_task_state_event("monitoring", true, &state, &translator_status)
             .await;
         update_tray_menu(&app, &state, &translator_status);
+        app_state::emit_runtime_updated(&app, self);
 
         let adapter = self.adapter.clone();
         let events = self.events.clone();
@@ -898,6 +899,7 @@ impl TaskManager {
                 .publish_task_state_event("monitoring", false, &next_state, &translator_status)
                 .await;
             update_tray_menu(&app_handle, &next_state, &translator_status);
+            app_state::emit_runtime_updated(&app_handle, &manager);
         });
 
         Ok(())
@@ -954,6 +956,7 @@ impl TaskManager {
         self.publish_task_state_event("sidebar", true, &state, &translator_status)
             .await;
         update_tray_menu(&app, &state, &translator_status);
+        app_state::emit_runtime_updated(&app, self);
 
         self.spawn_translator_health_check(translator_generation, translator_for_check);
 
@@ -981,6 +984,7 @@ impl TaskManager {
         self.publish_task_state_event("sidebar", false, &state, &translator_status)
             .await;
         update_tray_menu(&app, &state, &translator_status);
+        app_state::emit_runtime_updated(&app, self);
 
         Ok(())
     }

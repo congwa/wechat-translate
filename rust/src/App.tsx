@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Settings,
@@ -17,13 +17,39 @@ import { SidebarView } from "@/components/SidebarView";
 import { useEventStore } from "@/stores/eventStore";
 import { useToastStore } from "@/stores/toastStore";
 import { useFormStore } from "@/stores/formStore";
+import { useSettingsStore } from "@/stores/settingsStore";
+import { useRuntimeStore } from "@/stores/runtimeStore";
 import * as api from "@/lib/tauri-api";
-import type { ServiceStatus, TaskState, TranslatorServiceStatus } from "@/lib/types";
+import type { TaskState, TranslatorServiceStatus } from "@/lib/types";
 
 const isSidebarView =
   new URLSearchParams(window.location.search).get("view") === "sidebar";
 
 export default function App() {
+  useEffect(() => {
+    const cleanupPromises = [
+      useEventStore.getState().initEventListener(),
+      useSettingsStore.getState().initSettingsListener(),
+      useRuntimeStore.getState().initRuntimeListener(),
+    ];
+
+    api
+      .appStateGet()
+      .then((resp) => {
+        if (resp.data) {
+          useSettingsStore.getState().setSettings(resp.data.settings);
+          useRuntimeStore.getState().setRuntime(resp.data.runtime);
+        }
+      })
+      .catch(() => {});
+
+    return () => {
+      cleanupPromises.forEach((cleanup) => {
+        cleanup.then((fn) => fn());
+      });
+    };
+  }, []);
+
   if (isSidebarView) {
     return <SidebarView />;
   }
@@ -87,34 +113,11 @@ function MainApp() {
   const [liveBusy, setLiveBusy] = useState(false);
   const toast = useToastStore((s) => s.toast);
   const showToast = useToastStore((s) => s.showToast);
-  const taskState = useEventStore((s) => s.taskState);
-  const translatorStatus = useEventStore((s) => s.translatorStatus);
-  const closeToTray = useFormStore((s) => s.closeToTray);
-
-  useEffect(() => {
-    const cleanup = useEventStore.getState().initEventListener();
-
-    api
-      .getTaskStatus()
-      .then((resp) => {
-        const r = resp as unknown as Record<string, unknown>;
-        const data = r.data as ServiceStatus | undefined;
-        if (data?.tasks) {
-          useEventStore.getState().setTaskState(data.tasks);
-        }
-        if (data?.translator) {
-          useEventStore.getState().setTranslatorStatus(data.translator);
-        }
-      })
-      .catch(() => {});
-
-    api.setCloseToTray(closeToTray).catch(() => {});
-
-    return () => {
-      cleanup.then((fn) => fn());
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  const taskState = useRuntimeStore((s) => s.runtime.tasks);
+  const translatorStatus = useRuntimeStore((s) => s.runtime.translator);
+  const settings = useSettingsStore((s) => s.settings);
+  const imageCapture = useFormStore((s) => s.imageCapture);
+  const sidebarWindowMode = useFormStore((s) => s.sidebarWindowMode);
 
   async function handleLiveToggle() {
     if (liveBusy) return;
@@ -125,44 +128,28 @@ function MainApp() {
         await api.sidebarStop();
         showToast("浮窗已关闭", true);
       } else {
-        const store = useFormStore.getState();
-        const resp = (await api.configGet()) as unknown as Record<string, unknown>;
-        const data = (resp.data ?? {}) as Record<string, unknown>;
-        const translate = (data.translate ?? {}) as Record<string, unknown>;
-        const savedUrl = typeof translate.deeplx_url === "string" ? translate.deeplx_url : store.deeplxUrl;
-        const savedEnabled = typeof translate.enabled === "boolean" ? translate.enabled : store.translateEnabled;
-        const savedSource = typeof translate.source_lang === "string" ? translate.source_lang : store.sourceLang;
-        const savedTarget = typeof translate.target_lang === "string" ? translate.target_lang : store.targetLang;
-        const savedTimeout =
-          typeof translate.timeout_seconds === "number"
-            ? translate.timeout_seconds
-            : parseFloat(store.translateTimeout) || 8;
-        const savedMaxConcurrency =
-          typeof translate.max_concurrency === "number"
-            ? translate.max_concurrency
-            : parseInt(store.translateMaxConcurrency, 10) || 3;
-        const savedMaxRequestsPerSecond =
-          typeof translate.max_requests_per_second === "number"
-            ? translate.max_requests_per_second
-            : parseInt(store.translateMaxRequestsPerSecond, 10) || 3;
-        const fullUrl = savedUrl.trim();
+        if (!settings) {
+          showToast("配置尚未加载完成", false);
+          return;
+        }
 
-        if (savedEnabled && !fullUrl) {
+        const fullUrl = settings.translate.deeplx_url.trim();
+        if (settings.translate.enabled && !fullUrl) {
           showToast("翻译接口未配置，不能启用翻译", false);
           return;
         }
 
         await api.liveStart({
-          translateEnabled: savedEnabled,
+          translateEnabled: settings.translate.enabled,
           deeplxUrl: fullUrl,
-          sourceLang: savedSource,
-          targetLang: savedTarget,
-          timeoutSeconds: savedTimeout,
-          maxConcurrency: savedMaxConcurrency,
-          maxRequestsPerSecond: savedMaxRequestsPerSecond,
-          intervalSeconds: parseFloat(store.pollInterval) || 1,
-          imageCapture: store.imageCapture,
-          windowMode: store.sidebarWindowMode,
+          sourceLang: settings.translate.source_lang,
+          targetLang: settings.translate.target_lang,
+          timeoutSeconds: settings.translate.timeout_seconds,
+          maxConcurrency: settings.translate.max_concurrency,
+          maxRequestsPerSecond: settings.translate.max_requests_per_second,
+          intervalSeconds: settings.listen.interval_seconds,
+          imageCapture,
+          windowMode: sidebarWindowMode,
         });
         showToast("实时浮窗已开启", true);
       }
@@ -180,7 +167,6 @@ function MainApp() {
 
   return (
     <div className="h-screen flex overflow-hidden bg-background">
-      {/* Sidebar */}
       <aside
         className="w-[200px] shrink-0 flex flex-col"
         style={{
@@ -188,7 +174,6 @@ function MainApp() {
           color: "var(--color-sidebar-foreground)",
         }}
       >
-        {/* Brand */}
         <div className="px-5 pt-6 pb-3">
           <h1 className="text-[15px] font-semibold text-white tracking-tight leading-tight">
             WeChat Auto
@@ -196,7 +181,6 @@ function MainApp() {
           <p className="text-[11px] mt-1 opacity-50">macOS · Rust + Tauri</p>
         </div>
 
-        {/* Live toggle button */}
         {liveControlsVisible && (
           <div className="px-3 pb-4">
             <button
@@ -239,7 +223,6 @@ function MainApp() {
           </div>
         )}
 
-        {/* Navigation */}
         <nav className="flex-1 px-3 space-y-0.5">
           {NAV_ITEMS.map((item) => {
             const active = page === item.key;
@@ -258,119 +241,107 @@ function MainApp() {
                     layoutId="nav-active"
                     className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-5 rounded-r-full"
                     style={{ background: "var(--color-sidebar-active)" }}
-                    transition={{ type: "spring", stiffness: 400, damping: 30 }}
                   />
                 )}
-                <span className={active ? "text-white" : "opacity-60 group-hover:opacity-90"}>
+                <span className="relative z-10 opacity-85 group-hover:opacity-100">
                   {item.icon}
                 </span>
-                <span className="flex-1 text-left">{item.label}</span>
+                <span className="relative z-10 flex-1 text-left">{item.label}</span>
+                {running && (
+                  <span className="relative z-10 w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                )}
                 {item.beta && (
-                  <span className="px-1.5 py-0.5 rounded bg-amber-400/20 text-amber-300 text-[9px] font-bold uppercase leading-none">
+                  <span className="relative z-10 text-[9px] px-1.5 py-0.5 rounded-full bg-white/10 text-white/70">
                     Beta
                   </span>
                 )}
-                {running && (
-                  <span
-                    className="w-2 h-2 rounded-full animate-pulse"
-                    style={{ background: "var(--color-sidebar-active)" }}
-                  />
-                )}
-                {active && <ChevronRight className="w-3.5 h-3.5 opacity-40" />}
               </button>
             );
           })}
         </nav>
 
-      </aside>
-
-      {/* Main content */}
-      <main className="flex-1 flex flex-col min-w-0 overflow-hidden">
-        {/* Top bar */}
-        <div className="shrink-0 px-6 pt-5 pb-3 flex items-center justify-between">
-          <h2 className="text-lg font-semibold tracking-tight">
-            {NAV_ITEMS.find((n) => n.key === page)?.label}
-          </h2>
-          <div className="flex items-center gap-2">
-            {(["monitoring", "sidebar"] as const).map((key) => (
-              <span
-                key={key}
-                className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium transition-colors ${
-                  taskState[key]
-                    ? "bg-primary/10 text-primary"
-                    : "bg-muted text-muted-foreground"
-                }`}
-              >
-                <span
-                  className={`w-1.5 h-1.5 rounded-full ${
-                    taskState[key] ? "bg-primary animate-pulse" : "bg-muted-foreground/30"
-                  }`}
-                />
-                {key === "sidebar" ? "浮窗" : "监听"}
-              </span>
-            ))}
-            {liveFrozen && (
-              <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-500/10 px-2.5 py-1 text-[11px] font-medium text-amber-700">
-                <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
-                监听已暂停
-              </span>
-            )}
-            <span
-              className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium transition-colors ${translatorChip.className}`}
-            >
-              <span className={`w-1.5 h-1.5 rounded-full ${translatorChip.dotClass}`} />
-              {translatorChip.label}
-            </span>
+        <div className="px-4 py-4 border-t border-white/6">
+          <div className={`inline-flex items-center gap-2 px-2.5 py-1.5 rounded-full text-[11px] font-medium ${translatorChip.className}`}>
+            <span className={`w-1.5 h-1.5 rounded-full ${translatorChip.dotClass}`} />
+            {translatorChip.label}
           </div>
         </div>
+      </aside>
 
-        {/* Preflight + Toast */}
-        <div className="shrink-0 px-6">
+      <main className="flex-1 overflow-y-auto">
+        <div className="max-w-5xl mx-auto px-8 py-8">
           <PreflightBar />
-          <AnimatePresence>
-            {toast && (
-              <motion.div
-                initial={{ opacity: 0, y: -8 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -8 }}
-                className={`mb-3 px-4 py-2.5 rounded-xl text-sm font-medium shadow-sm ${
-                  toast.ok
-                    ? "bg-primary/10 text-primary border border-primary/20"
-                    : "bg-destructive/10 text-destructive border border-destructive/20"
-                }`}
-              >
-                {toast.text}
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </div>
 
-        {/* Page content */}
-        <div className="flex-1 overflow-y-auto px-6 pb-6">
+          {toast && (
+            <motion.div
+              initial={{ opacity: 0, y: -10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              className={`mb-6 rounded-xl px-4 py-3 text-sm font-medium ${
+                toast.ok
+                  ? "bg-primary/10 text-primary border border-primary/20"
+                  : "bg-red-500/10 text-red-600 border border-red-500/20"
+              }`}
+            >
+              {toast.text}
+            </motion.div>
+          )}
+
+          <div className="mb-6 flex items-center justify-between">
+            <div>
+              <h2 className="text-[24px] font-semibold tracking-tight">
+                {NAV_ITEMS.find((i) => i.key === page)?.label}
+              </h2>
+              <p className="text-sm text-muted-foreground mt-1">
+                {page === "settings" && "调整监听、翻译和浮窗参数"}
+                {page === "history" && "查看消息历史与翻译结果"}
+                {page === "logs" && "查看实时日志与系统输出"}
+              </p>
+            </div>
+
+            <div className="flex items-center gap-3">
+              {(["monitoring", "sidebar"] as const).map((key) => (
+                <div
+                  key={key}
+                  className="inline-flex items-center gap-2 rounded-full px-3 py-1.5 bg-muted/50 text-[11px] font-medium"
+                >
+                  <span
+                    className={`w-1.5 h-1.5 rounded-full ${
+                      taskState[key] ? "bg-primary animate-pulse" : "bg-muted-foreground/30"
+                    }`}
+                  />
+                  {key === "monitoring" ? "监听" : "浮窗"}
+                </div>
+              ))}
+            </div>
+          </div>
+
           <AnimatePresence mode="wait">
             <motion.div
               key={page}
-              initial={{ opacity: 0, y: 12 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -12 }}
+              initial={{ opacity: 0, x: 12 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -12 }}
               transition={{ duration: 0.18 }}
             >
               {page === "settings" && <SettingsPage />}
               {page === "history" && <MessageHistory />}
-              {page === "logs" && <LogsPage />}
+              {page === "logs" && (
+                <div className="space-y-6">
+                  <EventStream />
+                  <ServiceLogs />
+                </div>
+              )}
             </motion.div>
           </AnimatePresence>
         </div>
       </main>
-    </div>
-  );
-}
 
-function LogsPage() {
-  return (
-    <div className="space-y-4">
-      <EventStream />
-      <ServiceLogs />
+      <div className="absolute left-[200px] top-1/2 -translate-y-1/2 -translate-x-1/2 pointer-events-none">
+        <div className="w-8 h-8 rounded-full bg-background border border-border shadow-sm flex items-center justify-center">
+          <ChevronRight className="w-4 h-4 text-muted-foreground" />
+        </div>
+      </div>
     </div>
   );
 }

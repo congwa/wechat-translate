@@ -1,40 +1,20 @@
 import { create } from "zustand";
 import { listen } from "@tauri-apps/api/event";
-import type {
-  ServiceEvent,
-  TaskState,
-  TranslatorServiceStatus,
-} from "@/lib/types";
+import type { ServiceEvent } from "@/lib/types";
 import { useSidebarStore } from "./sidebarStore";
+import { useRuntimeStore } from "./runtimeStore";
 
 const MAX_EVENTS = 500;
 const TRIM_TO = 300;
 
 interface EventStoreState {
   events: ServiceEvent[];
-  taskState: TaskState;
-  translatorStatus: TranslatorServiceStatus;
-  setTaskState: (state: TaskState) => void;
-  setTranslatorStatus: (status: TranslatorServiceStatus) => void;
   addEvent: (event: ServiceEvent) => void;
   initEventListener: () => Promise<() => void>;
 }
 
-const defaultTranslatorStatus: TranslatorServiceStatus = {
-  enabled: false,
-  configured: false,
-  checking: false,
-  healthy: null,
-  last_error: null,
-};
-
 export const useEventStore = create<EventStoreState>((set) => ({
   events: [],
-  taskState: { monitoring: false, sidebar: false },
-  translatorStatus: defaultTranslatorStatus,
-
-  setTaskState: (taskState) => set({ taskState }),
-  setTranslatorStatus: (translatorStatus) => set({ translatorStatus }),
 
   addEvent: (event) =>
     set((state) => {
@@ -53,16 +33,22 @@ export const useEventStore = create<EventStoreState>((set) => ({
       if (event.type === "task_state") {
         const payload = event.payload as Record<string, unknown>;
         const state = payload.state as
-          | TaskState
+          | { monitoring: boolean; sidebar: boolean }
           | undefined;
         const translator = payload.translator as
-          | TranslatorServiceStatus
+          | {
+              enabled: boolean;
+              configured: boolean;
+              checking: boolean;
+              healthy: boolean | null;
+              last_error: string | null;
+            }
           | undefined;
         if (state) {
-          useEventStore.getState().setTaskState(state);
+          useRuntimeStore.getState().setTaskState(state);
         }
         if (translator) {
-          useEventStore.getState().setTranslatorStatus(translator);
+          useRuntimeStore.getState().setTranslatorStatus(translator);
         }
       }
 

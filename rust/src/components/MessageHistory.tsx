@@ -462,13 +462,20 @@ export function MessageHistory() {
                         </span>
                       </div>
                       {msg.image_path ? (
-                        <div className="mt-1">
-                          <img
-                            src={convertFileSrc(msg.image_path)}
-                            alt="chat image"
-                            className="max-w-[200px] max-h-48 rounded-md object-contain bg-black/5 dark:bg-white/5"
-                            loading="lazy"
-                          />
+                        <div className="mt-1 flex justify-start">
+                          <div className="relative w-full max-w-[220px] min-w-[180px] rounded-[30px] border border-white/10 bg-gradient-to-b from-slate-900/80 to-slate-800/60 p-2 shadow-lg shadow-slate-900/30 dark:from-white/10 dark:to-white/5 dark:border-white/5">
+                            <div className="absolute left-1/2 top-2 h-1.5 w-12 -translate-x-1/2 rounded-full bg-white/20" />
+                            <div className="overflow-hidden rounded-[24px] bg-black/90">
+                              <div className="aspect-[9/19.5] min-h-[360px] w-full">
+                                <img
+                                  src={convertFileSrc(msg.image_path)}
+                                  alt="chat image"
+                                  className="h-full w-full object-cover"
+                                  loading="lazy"
+                                />
+                              </div>
+                            </div>
+                          </div>
                         </div>
                       ) : (
                         <p className="text-xs text-muted-foreground leading-relaxed mt-0.5 break-all">
@@ -514,9 +521,8 @@ export function MessageHistory() {
         </div>
       </div>
 
-      {/* Clear DB confirmation dialog */}
       <AnimatePresence>
-        {showClearConfirm && (
+        {showClearConfirm ? (
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
@@ -529,23 +535,21 @@ export function MessageHistory() {
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.95 }}
               transition={{ type: "spring", stiffness: 400, damping: 30 }}
-              className="glass-card rounded-2xl shadow-xl p-6 w-[360px] space-y-4"
-              onClick={(e) => e.stopPropagation()}
+              className="glass-card w-[360px] space-y-4 rounded-2xl p-6 shadow-xl"
+              onClick={(event) => event.stopPropagation()}
             >
               <div className="flex items-start gap-3">
-                <div className="w-10 h-10 rounded-xl bg-destructive/10 flex items-center justify-center shrink-0">
-                  <AlertTriangle className="w-5 h-5 text-destructive" />
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-destructive/10">
+                  <AlertTriangle className="h-5 w-5 text-destructive" />
                 </div>
                 <div>
-                  <h3 className="text-sm font-semibold text-foreground">
-                    清空数据库
-                  </h3>
-                  <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
+                  <h3 className="text-sm font-semibold text-foreground">清空数据库</h3>
+                  <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
                     此操作将删除所有 {stats?.total_messages ?? 0} 条消息记录并重启监听服务，数据不可恢复。
                   </p>
                 </div>
               </div>
-              <div className="flex gap-2 justify-end">
+              <div className="flex justify-end gap-2">
                 <Button
                   variant="ghost"
                   size="sm"
@@ -558,21 +562,21 @@ export function MessageHistory() {
                 <Button
                   variant="destructive"
                   size="sm"
-                  className="h-8 text-xs gap-1.5"
+                  className="h-8 gap-1.5 text-xs"
                   onClick={handleClearRestart}
                   disabled={clearing}
                 >
                   {clearing ? (
-                    <Loader2 className="w-3 h-3 animate-spin" />
+                    <Loader2 className="h-3 w-3 animate-spin" />
                   ) : (
-                    <Trash2 className="w-3 h-3" />
+                    <Trash2 className="h-3 w-3" />
                   )}
                   {clearing ? "清空中..." : "确认清空"}
                 </Button>
               </div>
             </motion.div>
           </motion.div>
-        )}
+        ) : null}
       </AnimatePresence>
     </div>
   );

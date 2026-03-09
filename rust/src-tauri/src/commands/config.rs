@@ -1,3 +1,4 @@
+use crate::app_state;
 use crate::config::{self as app_config, ConfigDir};
 use crate::task_manager::TaskManager;
 use tauri::Emitter;
@@ -26,6 +27,8 @@ pub async fn config_put(
 
     let app_config = app_config::load_app_config(&config_dir.0).map_err(|e| e.to_string())?;
     manager.apply_runtime_config(&app_config).await;
+    app_state::emit_settings_updated(&app, &app_config);
+    app_state::emit_runtime_updated(&app, &manager);
     let _ = app.emit("config-updated", serde_json::to_value(&app_config).unwrap_or_default());
 
     Ok(serde_json::json!({ "ok": true, "message": "config saved", "path": path }))
