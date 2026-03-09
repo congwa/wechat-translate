@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { convertFileSrc } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import * as api from "@/lib/tauri-api";
 import { useToastStore } from "@/stores/toastStore";
 import type { StoredMessage } from "@/lib/types";
@@ -117,6 +118,23 @@ export function MessageHistory() {
   useEffect(() => {
     loadChats();
     loadStats();
+  }, [loadChats, loadStats]);
+
+  useEffect(() => {
+    const unlisten = listen("db-cleared-restart", () => {
+      setShowClearConfirm(false);
+      setSelectedChat(null);
+      setPage(0);
+      setKeyword("");
+      setSenderFilter("");
+      setMessages([]);
+      loadChats();
+      loadStats();
+    });
+
+    return () => {
+      unlisten.then((fn) => fn());
+    };
   }, [loadChats, loadStats]);
 
   useEffect(() => {

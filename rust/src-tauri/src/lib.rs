@@ -16,9 +16,10 @@ use image_cache::WeChatImageCache;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use task_manager::TaskManager;
-use tauri::menu::{CheckMenuItemBuilder, MenuBuilder, MenuItemBuilder};
+use tauri::menu::{CheckMenuItemBuilder, Menu, MenuBuilder, MenuItemBuilder, SubmenuBuilder};
 use tauri::tray::TrayIconBuilder;
 use tauri::Manager;
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
 pub struct CloseToTray(pub Arc<AtomicBool>);
 
@@ -31,6 +32,56 @@ pub struct TrayMenuState {
     pub close_to_tray_check: tauri::menu::CheckMenuItem<tauri::Wry>,
 }
 
+fn build_macos_app_menu<R: tauri::Runtime>(app: &tauri::App<R>) -> tauri::Result<Menu<R>> {
+    let menu = Menu::default(app.handle())?;
+    let data_menu = SubmenuBuilder::with_id(app, "data_menu", "数据")
+        .text("clear_db_restart", "清空数据库并重启")
+        .build()?;
+    menu.append(&data_menu)?;
+    Ok(menu)
+}
+
+fn handle_clear_db_restart_menu(app: &tauri::AppHandle) {
+    let app_handle = app.clone();
+    let mut dialog = app
+        .dialog()
+        .message("此操作将删除所有消息记录并重启监听服务，数据不可恢复。")
+        .title("清空数据库")
+        .kind(MessageDialogKind::Warning)
+        .buttons(MessageDialogButtons::OkCancelCustom(
+            "清空并重启".into(),
+            "取消".into(),
+        ));
+
+    if let Some(window) = app.get_webview_window("main") {
+        dialog = dialog.parent(&window);
+    }
+
+    dialog.show(move |confirmed| {
+        if !confirmed {
+            return;
+        }
+
+        let app = app_handle.clone();
+        tauri::async_runtime::spawn(async move {
+            let db = app.state::<Arc<MessageDb>>().inner().clone();
+            let manager = app.state::<TaskManager>().inner().clone();
+            if let Err(error) = commands::db::clear_restart(app.clone(), db, manager).await {
+                let mut error_dialog = app
+                    .dialog()
+                    .message(format!("清空失败: {error}"))
+                    .title("清空数据库失败")
+                    .kind(MessageDialogKind::Error)
+                    .buttons(MessageDialogButtons::Ok);
+                if let Some(window) = app.get_webview_window("main") {
+                    error_dialog = error_dialog.parent(&window);
+                }
+                error_dialog.show(|_| {});
+            }
+        });
+    });
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let adapter = Arc::new(MacOSAdapter::new());
@@ -38,6 +89,7 @@ pub fn run() {
     let close_to_tray = CloseToTray(Arc::new(AtomicBool::new(true)));
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .manage(adapter.clone())
         .manage(event_store.clone())
@@ -45,6 +97,12 @@ pub fn run() {
         .setup(move |app| {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+
+            #[cfg(target_os = "macos")]
+            {
+                let app_menu = build_macos_app_menu(app)?;
+                let _ = app.set_menu(app_menu)?;
+            }
 
             let data_dir = app.path().app_data_dir().unwrap_or_else(|_| {
                 std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
@@ -198,6 +256,9 @@ pub fn run() {
                         let tray = app.state::<TrayMenuState>();
                         let checked = tray.close_to_tray_check.is_checked().unwrap_or(true);
                         close.0.store(checked, Ordering::Relaxed);
+                    }
+                    "clear_db_restart" => {
+                        handle_clear_db_restart_menu(app);
                     }
                     _ => {}
                 })
