@@ -1128,6 +1128,13 @@ def truncate_target_label(name: str, max_chars: int = TARGET_LABEL_MAX_CHARS) ->
     return text[:max_chars] + "..."
 
 
+def build_sidebar_window_title(chat_name: str) -> str:
+    name = str(chat_name or "").strip()
+    if name:
+        return name
+    return "未选择会话"
+
+
 def pick_ui_font_family(root: tk.Tk) -> str:
     try:
         available = {name.lower(): name for name in tkfont.families(root)}
@@ -1722,7 +1729,7 @@ class SidebarUI:
         tts_auto_read_active_chat: bool = True,
     ):
         self.root = tk.Tk()
-        self.root.title("WeChat Sidebar session-only")
+        self.root.title(build_sidebar_window_title(""))
         self.ui_font_family = pick_ui_font_family(self.root)
         self.root.option_add("*Font", (self.ui_font_family, DEFAULT_META_FONT_SIZE))
         self.topmost_var = tk.BooleanVar(value=False)
@@ -1939,6 +1946,9 @@ class SidebarUI:
         self.target_panel_toggle_text.set("菜单")
         self.target_panel_visible = False
 
+    def _update_window_title(self):
+        self.root.title(build_sidebar_window_title(self.active_chat))
+
     def _ensure_chat(self, chat_name: str):
         name = str(chat_name or "").strip()
         if not name:
@@ -1976,6 +1986,7 @@ class SidebarUI:
             self.chat_order.remove(name)
         if self.active_chat == name:
             self.active_chat = self.chat_order[0] if self.chat_order else ""
+        self._update_window_title()
         self._refresh_target_list()
         self._render_active_chat()
         return self.active_chat
@@ -2073,6 +2084,7 @@ class SidebarUI:
             return
         self.active_chat = name
         self.unread_counts[name] = 0
+        self._update_window_title()
         self._refresh_target_list()
         self._render_active_chat()
 

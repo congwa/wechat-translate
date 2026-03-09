@@ -28,6 +28,10 @@ class SidebarHelpersTest(unittest.TestCase):
         raw = "  hello\u200b   world  "
         self.assertEqual(sidebar.normalize_message_for_dedupe(raw), "hello world")
 
+    def test_build_sidebar_window_title_uses_active_chat_name(self):
+        self.assertEqual(sidebar.build_sidebar_window_title("  三元 AI 俱乐部  "), "三元 AI 俱乐部")
+        self.assertEqual(sidebar.build_sidebar_window_title(""), "未选择会话")
+
     def test_validate_positive_float(self):
         self.assertEqual(sidebar.validate_positive_float("x", 0.5), 0.5)
         with self.assertRaises(RuntimeError):
