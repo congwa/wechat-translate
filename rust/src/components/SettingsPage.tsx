@@ -16,20 +16,18 @@ import {
   Languages,
   Headphones,
   ChevronDown,
-  RotateCcw,
   Image,
   AlertCircle,
   Code2,
-  Save,
   RefreshCcw,
 } from "lucide-react";
+import { SettingsSection } from "@/components/SettingsSection";
 import { motion, AnimatePresence } from "framer-motion";
 import * as api from "@/lib/tauri-api";
 import type { AppSettings } from "@/lib/types";
 import { useToastStore } from "@/stores/toastStore";
 import { useFormStore, type SidebarWindowMode } from "@/stores/formStore";
 import {
-  draftFromSettings,
   settingsFromDraft,
   useSettingsStore,
 } from "@/stores/settingsStore";
@@ -136,19 +134,15 @@ function validateConfigSchema(obj: unknown): ValidationResult {
   return { valid: errors.length === 0, errors };
 }
 
-function isDraftDirty(settings: AppSettings | null, draft: ReturnType<typeof draftFromSettings>) {
-  if (!settings) return false;
-  const baseline = draftFromSettings(settings);
-  return JSON.stringify(baseline) !== JSON.stringify(draft);
-}
-
 export function SettingsPage() {
   const showToast = useToastStore((s) => s.showToast);
   const runtime = useRuntimeStore((s) => s.runtime);
   const settings = useSettingsStore((s) => s.settings);
   const draft = useSettingsStore((s) => s.draft);
+  const sectionDirty = useSettingsStore((s) => s.sectionDirty);
   const updateDraft = useSettingsStore((s) => s.updateDraft);
-  const resetDraft = useSettingsStore((s) => s.resetDraft);
+  const resetSection = useSettingsStore((s) => s.resetSection);
+  const markSectionClean = useSettingsStore((s) => s.markSectionClean);
   const setSettingsSnapshot = useSettingsStore((s) => s.setSettings);
   const setRuntime = useRuntimeStore((s) => s.setRuntime);
   const setTranslatorStatus = useRuntimeStore((s) => s.setTranslatorStatus);
@@ -167,8 +161,6 @@ export function SettingsPage() {
 
   const lastLoadedRef = useRef("");
   const validateTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
-
-  const basicDirty = isDraftDirty(settings, draft);
 
   const canSyncTranslateTestResult =
     !!settings &&
@@ -260,12 +252,16 @@ export function SettingsPage() {
     return true;
   }
 
-  async function handleApplyDraft() {
+  async function handleApplySection(section: "listen" | "translate" | "display") {
     if (!settings) return;
-    setBusy("save");
+    const sectionLabels = { listen: "监听设置", translate: "翻译设置", display: "显示设置" };
+    setBusy(`section_${section}`);
     try {
       const nextSettings = settingsFromDraft(settings, draft);
-      await applySettings(nextSettings, "配置已应用");
+      const success = await applySettings(nextSettings, `${sectionLabels[section]}已应用`);
+      if (success) {
+        markSectionClean(section);
+      }
     } catch (e) {
       showToast(`应用失败: ${e}`, false);
     } finally {
@@ -273,9 +269,10 @@ export function SettingsPage() {
     }
   }
 
-  async function handleRestoreDraft() {
-    resetDraft();
-    showToast("已撤销未应用更改", true);
+  function handleResetSection(section: "listen" | "translate" | "display") {
+    resetSection(section);
+    const sectionLabels = { listen: "监听设置", translate: "翻译设置", display: "显示设置" };
+    showToast(`${sectionLabels[section]}已撤销`, true);
   }
 
   async function handleApplyConfig() {
@@ -400,48 +397,22 @@ export function SettingsPage() {
 
   return (
     <div className="max-w-2xl space-y-6">
-      <section className="glass-card rounded-2xl p-6 shadow-sm space-y-4 border border-primary/10">
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <h3 className="text-sm font-semibold">配置同步</h3>
-            <p className="text-[11px] text-muted-foreground mt-1">
-              表单编辑只修改本地草稿；点击应用后才会写入后端配置并同步到菜单栏和侧边栏。
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            <Button
-              variant="outline"
-              className="rounded-xl"
-              onClick={() => reloadFromBackend(false)}
-              disabled={busy === "reload"}
-            >
-              <RefreshCcw className="w-4 h-4 mr-2" />
-              重新加载
-            </Button>
-            <Button
-              variant="outline"
-              className="rounded-xl"
-              onClick={handleRestoreDraft}
-              disabled={!basicDirty}
-            >
-              <RotateCcw className="w-4 h-4 mr-2" />
-              撤销草稿
-            </Button>
-            <Button
-              className="rounded-xl"
-              onClick={handleApplyDraft}
-              disabled={!basicDirty || busy === "save"}
-            >
-              <Save className="w-4 h-4 mr-2" />
-              {busy === "save" ? "应用中..." : "应用更改"}
-            </Button>
-          </div>
+      <section className="glass-card rounded-2xl p-4 shadow-sm border border-muted/50">
+        <div className="flex items-center justify-between">
+          <p className="text-[11px] text-muted-foreground">
+            每个设置区域修改后会显示"应用"按钮，点击后即时生效。
+          </p>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 text-xs"
+            onClick={() => reloadFromBackend(false)}
+            disabled={busy === "reload"}
+          >
+            <RefreshCcw className="w-3 h-3 mr-1" />
+            重新加载
+          </Button>
         </div>
-        {basicDirty && (
-          <div className="rounded-xl border border-amber-500/30 bg-amber-500/8 px-4 py-3 text-[11px] text-amber-700 dark:text-amber-300">
-            当前有未应用更改。实时浮窗、托盘菜单和监听任务仍使用已提交的配置。
-          </div>
-        )}
       </section>
 
       <section className="glass-card rounded-2xl p-6 shadow-sm space-y-5">
@@ -469,17 +440,16 @@ export function SettingsPage() {
         </div>
       </section>
 
-      <section className="glass-card rounded-2xl p-6 shadow-sm space-y-5">
-        <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-xl bg-emerald-50 flex items-center justify-center">
-            <Headphones className="w-4 h-4 text-emerald-600" />
-          </div>
-          <div>
-            <h3 className="text-sm font-semibold">消息监听</h3>
-            <p className="text-[11px] text-muted-foreground">轮询控制与浮窗联动</p>
-          </div>
-        </div>
-
+      <SettingsSection
+        icon={<Headphones className="w-4 h-4 text-emerald-600" />}
+        iconBg="bg-emerald-50"
+        title="消息监听"
+        description="轮询控制与浮窗联动"
+        isDirty={sectionDirty.listen}
+        isSaving={busy === "section_listen"}
+        onApply={() => handleApplySection("listen")}
+        onReset={() => handleResetSection("listen")}
+      >
         <div className="flex items-center justify-between">
           <div>
             <h4 className="text-sm font-medium">消息监听</h4>
@@ -635,30 +605,18 @@ export function SettingsPage() {
             )}
           </div>
         )}
-      </section>
+      </SettingsSection>
 
-      <section className="glass-card rounded-2xl p-6 shadow-sm space-y-5">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-violet-50 flex items-center justify-center">
-              <Languages className="w-4 h-4 text-violet-600" />
-            </div>
-            <div>
-              <h3 className="text-sm font-semibold">翻译设置</h3>
-              <p className="text-[11px] text-muted-foreground">浮窗翻译参数</p>
-            </div>
-          </div>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-7 w-7"
-            onClick={() => reloadFromBackend(false)}
-            title="从后端重新加载"
-          >
-            <RotateCcw className="w-3.5 h-3.5" />
-          </Button>
-        </div>
-
+      <SettingsSection
+        icon={<Languages className="w-4 h-4 text-violet-600" />}
+        iconBg="bg-violet-50"
+        title="翻译设置"
+        description="浮窗翻译参数"
+        isDirty={sectionDirty.translate}
+        isSaving={busy === "section_translate"}
+        onApply={() => handleApplySection("translate")}
+        onReset={() => handleResetSection("translate")}
+      >
         <div className="flex items-center justify-between">
           <h4 className="text-sm font-medium">启用翻译</h4>
           <Switch
@@ -794,7 +752,7 @@ export function SettingsPage() {
             </>
           )}
         </Button>
-      </section>
+      </SettingsSection>
 
       <section className="glass-card rounded-2xl p-6 shadow-sm space-y-5 border border-amber-200/50 dark:border-amber-700/30">
         <div className="flex items-center gap-3">

@@ -113,29 +113,80 @@ interface SettingsStoreState {
   initSettingsListener: () => Promise<() => void>;
 }
 
+const SECTION_FIELDS: Record<SettingsSection, (keyof SettingsDraft)[]> = {
+  listen: ["pollInterval", "useRightPanelDetails"],
+  translate: [
+    "translateEnabled",
+    "deeplxUrl",
+    "sourceLang",
+    "targetLang",
+    "translateTimeout",
+    "translateMaxConcurrency",
+    "translateMaxRequestsPerSecond",
+  ],
+  display: ["displayWidth"],
+};
+
 export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
   settings: null,
   draft: draftFromSettings(createDefaultSettings()),
+  sectionDirty: { listen: false, translate: false, display: false },
 
   setSettings: (settings) =>
     set({
       settings,
       draft: draftFromSettings(settings),
+      sectionDirty: { listen: false, translate: false, display: false },
     }),
 
-  updateDraft: (patch) =>
-    set((state) => ({
-      draft: {
-        ...state.draft,
-        ...patch,
-      },
-    })),
+  updateDraft: (patch, section) =>
+    set((state) => {
+      const nextDraft = { ...state.draft, ...patch };
+      const nextDirty = { ...state.sectionDirty };
+
+      if (section) {
+        nextDirty[section] = true;
+      } else {
+        // Auto-detect section from patch keys
+        for (const key of Object.keys(patch) as (keyof SettingsDraft)[]) {
+          for (const sec of Object.keys(SECTION_FIELDS) as SettingsSection[]) {
+            if (SECTION_FIELDS[sec].includes(key)) {
+              nextDirty[sec] = true;
+            }
+          }
+        }
+      }
+
+      return { draft: nextDraft, sectionDirty: nextDirty };
+    }),
 
   resetDraft: () => {
     const settings = get().settings;
     if (!settings) return;
-    set({ draft: draftFromSettings(settings) });
+    set({
+      draft: draftFromSettings(settings),
+      sectionDirty: { listen: false, translate: false, display: false },
+    });
   },
+
+  resetSection: (section) => {
+    const settings = get().settings;
+    if (!settings) return;
+    const baseline = draftFromSettings(settings);
+    const patch: Partial<SettingsDraft> = {};
+    for (const key of SECTION_FIELDS[section]) {
+      (patch as Record<string, unknown>)[key] = baseline[key];
+    }
+    set((state) => ({
+      draft: { ...state.draft, ...patch },
+      sectionDirty: { ...state.sectionDirty, [section]: false },
+    }));
+  },
+
+  markSectionClean: (section) =>
+    set((state) => ({
+      sectionDirty: { ...state.sectionDirty, [section]: false },
+    })),
 
   initSettingsListener: async () => {
     const unlisten = await listen<AppSettings>("settings-updated", (event) => {
