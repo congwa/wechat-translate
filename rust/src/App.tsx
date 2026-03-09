@@ -14,6 +14,7 @@ import { EventStream } from "@/components/EventStream";
 import { ServiceLogs } from "@/components/ServiceLogs";
 import { MessageHistory } from "@/components/MessageHistory";
 import { SidebarView } from "@/components/SidebarView";
+import { AboutDialog } from "@/components/AboutDialog";
 import { useEventStore } from "@/stores/eventStore";
 import { useToastStore } from "@/stores/toastStore";
 import { useFormStore } from "@/stores/formStore";
@@ -176,9 +177,8 @@ function MainApp() {
       >
         <div className="px-5 pt-6 pb-3">
           <h1 className="text-[15px] font-semibold text-white tracking-tight leading-tight">
-            WeChat Auto
+            WeChat Translate
           </h1>
-          <p className="text-[11px] mt-1 opacity-50">macOS · Rust + Tauri</p>
         </div>
 
         {liveControlsVisible && (
@@ -259,6 +259,10 @@ function MainApp() {
             );
           })}
         </nav>
+
+        <div className="px-3 py-2 border-t border-white/6">
+          <AboutDialog />
+        </div>
 
         <div className="px-4 py-4 border-t border-white/6">
           <div className={`inline-flex items-center gap-2 px-2.5 py-1.5 rounded-full text-[11px] font-medium ${translatorChip.className}`}>

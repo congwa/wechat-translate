@@ -5084,7 +5084,7 @@ dependencies = [
 
 [[package]]
 name = "wechat-pc-auto"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "accessibility-sys",
  "anyhow",
