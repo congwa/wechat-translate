@@ -115,6 +115,52 @@ struct SidebarConfig {
     image_capture: bool,
 }
 
+/// 悬浮窗运行态：统一维护当前聊天和刷新版本号
+/// 解决"标题切换但内容空"问题的核心状态
+pub struct SidebarRuntime {
+    /// 后端确认的当前聊天名称
+    current_chat: std::sync::Mutex<String>,
+    /// 刷新版本号，每次消息入库或译文写回后递增
+    refresh_version: AtomicU64,
+}
+
+impl SidebarRuntime {
+    fn new() -> Self {
+        Self {
+            current_chat: std::sync::Mutex::new(String::new()),
+            refresh_version: AtomicU64::new(0),
+        }
+    }
+
+    pub fn get_current_chat(&self) -> String {
+        self.current_chat.lock().unwrap().clone()
+    }
+
+    pub fn set_current_chat(&self, chat_name: &str) {
+        *self.current_chat.lock().unwrap() = chat_name.to_string();
+    }
+
+    pub fn get_refresh_version(&self) -> u64 {
+        self.refresh_version.load(Ordering::Relaxed)
+    }
+
+    /// 递增刷新版本号并返回新值
+    pub fn increment_refresh_version(&self) -> u64 {
+        self.refresh_version.fetch_add(1, Ordering::Relaxed) + 1
+    }
+
+    /// 更新当前聊天并递增刷新版本号
+    pub fn update_chat_and_version(&self, chat_name: &str) -> u64 {
+        self.set_current_chat(chat_name);
+        self.increment_refresh_version()
+    }
+
+    pub fn clear(&self) {
+        *self.current_chat.lock().unwrap() = String::new();
+        self.refresh_version.store(0, Ordering::Relaxed);
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 struct MonitorConfig {
     use_right_panel_details: bool,
@@ -190,6 +236,7 @@ pub struct TaskManager {
     monitor_config: Arc<Mutex<MonitorConfig>>,
     sidebar_enabled: Arc<AtomicBool>,
     sidebar_config: Arc<Mutex<SidebarConfig>>,
+    sidebar_runtime: Arc<SidebarRuntime>,
     translator_status: Arc<std::sync::Mutex<TranslatorServiceStatus>>,
     translator_generation: Arc<AtomicU64>,
     app_handle: Arc<Mutex<Option<AppHandle>>>,
@@ -219,6 +266,7 @@ impl TaskManager {
                 target_set: HashSet::new(),
                 image_capture: false,
             })),
+            sidebar_runtime: Arc::new(SidebarRuntime::new()),
             translator_status: Arc::new(std::sync::Mutex::new(TranslatorServiceStatus::disabled())),
             translator_generation: Arc::new(AtomicU64::new(0)),
             app_handle: Arc::new(Mutex::new(None)),
@@ -250,6 +298,10 @@ impl TaskManager {
 
     pub fn get_translator_status(&self) -> TranslatorServiceStatus {
         self.translator_status.lock().unwrap().clone()
+    }
+
+    pub fn get_sidebar_runtime(&self) -> &Arc<SidebarRuntime> {
+        &self.sidebar_runtime
     }
 
     pub fn service_status(&self) -> serde_json::Value {
@@ -458,6 +510,7 @@ impl TaskManager {
         let monitor_config = self.monitor_config.clone();
         let sidebar_enabled = self.sidebar_enabled.clone();
         let sidebar_config = self.sidebar_config.clone();
+        let sidebar_runtime = self.sidebar_runtime.clone();
         let app_handle = app.clone();
         let manager = self.clone();
         let poll_interval = interval_seconds.max(0.4);
@@ -607,6 +660,47 @@ impl TaskManager {
                                     "session_preview",
                                     "low",
                                 );
+
+                                // 会话预览消息入库后也需要通知悬浮窗刷新 + 触发翻译
+                                if sidebar_enabled.load(Ordering::Relaxed)
+                                    && should_forward_sidebar_chat(&snapshot.chat_name)
+                                {
+                                    let refresh_version =
+                                        sidebar_runtime.update_chat_and_version(&snapshot.chat_name);
+                                    events.publish(
+                                        &app_handle,
+                                        EventType::Status,
+                                        "sidebar",
+                                        serde_json::json!({
+                                            "type": "sidebar-refresh",
+                                            "chat_name": snapshot.chat_name,
+                                            "refresh_version": refresh_version,
+                                        }),
+                                    );
+
+                                    // 触发翻译任务
+                                    let (translator, limiter) = {
+                                        let config = sidebar_config.lock().await;
+                                        (config.translator.clone(), config.limiter.clone())
+                                    };
+                                    if let (Some(translator), Some(limiter)) =
+                                        (translator, limiter)
+                                    {
+                                        spawn_sidebar_translation_update(
+                                            manager.clone(),
+                                            events.clone(),
+                                            app_handle.clone(),
+                                            db.clone(),
+                                            translator,
+                                            limiter,
+                                            0, // 会话预览消息没有事件ID
+                                            snapshot.chat_name.clone(),
+                                            sender.clone(),
+                                            snapshot.preview_body.clone(),
+                                            now.clone(),
+                                        );
+                                    }
+                                }
                             }
                         }
 
@@ -633,6 +727,24 @@ impl TaskManager {
                                             "chat_name": chat_name,
                                         }),
                                     );
+
+                                    // 切换聊天时也需要刷新悬浮窗内容（拉取新聊天历史）
+                                    if sidebar_enabled.load(Ordering::Relaxed)
+                                        && should_forward_sidebar_chat(&chat_name)
+                                    {
+                                        let refresh_version =
+                                            sidebar_runtime.update_chat_and_version(&chat_name);
+                                        events.publish(
+                                            &app_handle,
+                                            EventType::Status,
+                                            "sidebar",
+                                            serde_json::json!({
+                                                "type": "sidebar-refresh",
+                                                "chat_name": chat_name,
+                                                "refresh_version": refresh_version,
+                                            }),
+                                        );
+                                    }
                                 }
                             }
                             _ => {
@@ -825,6 +937,11 @@ impl TaskManager {
                                 if sidebar_enabled.load(Ordering::Relaxed)
                                     && should_forward_sidebar_chat(&chat_name)
                                 {
+                                    // 更新后端运行态并获取刷新版本号
+                                    let refresh_version =
+                                        sidebar_runtime.update_chat_and_version(&chat_name);
+
+                                    // 发布 chat_switched 事件（保持兼容）
                                     events.publish(
                                         &app_handle,
                                         EventType::Status,
@@ -834,6 +951,19 @@ impl TaskManager {
                                             "chat_name": chat_name,
                                         }),
                                     );
+
+                                    // 发布 sidebar-refresh 事件（数据库提交成功后）
+                                    events.publish(
+                                        &app_handle,
+                                        EventType::Status,
+                                        "sidebar",
+                                        serde_json::json!({
+                                            "type": "sidebar-refresh",
+                                            "chat_name": chat_name,
+                                            "refresh_version": refresh_version,
+                                        }),
+                                    );
+
                                     let (translator, limiter) = {
                                         let config = sidebar_config.lock().await;
                                         (config.translator.clone(), config.limiter.clone())
@@ -978,6 +1108,8 @@ impl TaskManager {
             config.target_set.clear();
             config.image_capture = false;
         }
+
+        self.sidebar_runtime.clear();
 
         self.set_translator_status(TranslatorServiceStatus::disabled())
             .await;
@@ -1481,6 +1613,20 @@ fn spawn_sidebar_translation_update(
                 &detected_at,
                 &cached.translated_text,
             );
+
+            // 译文写回成功后，递增刷新版本并发布 sidebar-refresh 事件
+            let refresh_version = manager.sidebar_runtime.increment_refresh_version();
+            events.publish(
+                &app_handle,
+                EventType::Status,
+                "sidebar",
+                serde_json::json!({
+                    "type": "sidebar-refresh",
+                    "chat_name": chat_name,
+                    "refresh_version": refresh_version,
+                }),
+            );
+
             events.publish(
                 &app_handle,
                 EventType::Message,
@@ -1514,6 +1660,20 @@ fn spawn_sidebar_translation_update(
                         TranslatorServiceStatus::healthy(),
                     )
                     .await;
+
+                // 译文写回成功后，递增刷新版本并发布 sidebar-refresh 事件
+                let refresh_version = manager.sidebar_runtime.increment_refresh_version();
+                events.publish(
+                    &app_handle,
+                    EventType::Status,
+                    "sidebar",
+                    serde_json::json!({
+                        "type": "sidebar-refresh",
+                        "chat_name": chat_name,
+                        "refresh_version": refresh_version,
+                    }),
+                );
+
                 events.publish(
                     &app_handle,
                     EventType::Message,

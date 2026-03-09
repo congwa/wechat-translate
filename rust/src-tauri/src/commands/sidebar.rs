@@ -146,9 +146,18 @@ pub async fn sidebar_snapshot_get(
     chat_name: Option<String>,
     limit: Option<i64>,
 ) -> Result<serde_json::Value, String> {
-    let selected_chat = match chat_name.as_deref().map(str::trim).filter(|name| !name.is_empty()) {
-        Some(name) => Some(name.to_string()),
-        None => db.latest_chat_name().map_err(|e| e.to_string())?,
+    let runtime = manager.get_sidebar_runtime();
+    let runtime_chat = runtime.get_current_chat();
+    let refresh_version = runtime.get_refresh_version();
+
+    // 优先使用后端运行态的 current_chat，前端传入的 chat_name 作为备选
+    let selected_chat = if !runtime_chat.is_empty() {
+        Some(runtime_chat)
+    } else {
+        match chat_name.as_deref().map(str::trim).filter(|name| !name.is_empty()) {
+            Some(name) => Some(name.to_string()),
+            None => db.latest_chat_name().map_err(|e| e.to_string())?,
+        }
     };
 
     let messages = if let Some(chat) = selected_chat.as_deref() {
@@ -164,6 +173,7 @@ pub async fn sidebar_snapshot_get(
             "current_chat": selected_chat,
             "messages": messages,
             "translator": manager.get_translator_status(),
+            "refresh_version": refresh_version,
         }
     }))
 }

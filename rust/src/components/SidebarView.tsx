@@ -225,7 +225,11 @@ export function SidebarView() {
         limit: 50,
       });
       if (resp.data) {
-        hydrateSnapshot(resp.data.current_chat ?? "", resp.data.messages ?? []);
+        hydrateSnapshot(
+          resp.data.current_chat ?? "",
+          resp.data.messages ?? [],
+          resp.data.refresh_version
+        );
         setTranslatorStatus(resp.data.translator);
       }
     } catch {

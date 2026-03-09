@@ -52,14 +52,18 @@ export const useEventStore = create<EventStoreState>((set) => ({
         }
       }
 
-      if (event.type === "message" && event.source === "sidebar") {
-        const payload = event.payload as Record<string, unknown>;
-        const chatName =
-          typeof payload.chat_name === "string" ? payload.chat_name : undefined;
-        useSidebarStore.getState().requestRefresh(chatName);
+      // sidebar-refresh 事件：数据库提交成功后触发，前端拉取快照
+      if (event.type === "status" && event.source === "sidebar") {
+        const p = event.payload as Record<string, unknown>;
+        if (p.type === "sidebar-refresh") {
+          const chatName = typeof p.chat_name === "string" ? p.chat_name : undefined;
+          const refreshVersion = typeof p.refresh_version === "number" ? p.refresh_version : undefined;
+          useSidebarStore.getState().requestRefresh(chatName, refreshVersion);
+        }
       }
 
-      if (event.type === "status" && (event.source === "monitor" || event.source === "sidebar")) {
+      // chat_switched 事件：更新当前聊天标题（保持兼容）
+      if (event.type === "status" && event.source === "monitor") {
         const p = event.payload as Record<string, unknown>;
         if (p.type === "chat_switched" && typeof p.chat_name === "string") {
           useSidebarStore.getState().setCurrentChat(p.chat_name);

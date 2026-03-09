@@ -93,12 +93,23 @@ export function settingsFromDraft(
   };
 }
 
+export type SettingsSection = "listen" | "translate" | "display";
+
+interface SectionDirtyState {
+  listen: boolean;
+  translate: boolean;
+  display: boolean;
+}
+
 interface SettingsStoreState {
   settings: AppSettings | null;
   draft: SettingsDraft;
+  sectionDirty: SectionDirtyState;
   setSettings: (settings: AppSettings) => void;
-  updateDraft: (patch: Partial<SettingsDraft>) => void;
+  updateDraft: (patch: Partial<SettingsDraft>, section?: SettingsSection) => void;
   resetDraft: () => void;
+  resetSection: (section: SettingsSection) => void;
+  markSectionClean: (section: SettingsSection) => void;
   initSettingsListener: () => Promise<() => void>;
 }
 

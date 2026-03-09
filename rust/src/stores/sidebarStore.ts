@@ -8,17 +8,16 @@ interface SidebarStoreState {
   items: SidebarMessage[];
   currentChat: string;
   refreshVersion: number;
+  remoteRefreshVersion: number;
   setCurrentChat: (chatName: string) => void;
-  requestRefresh: (chatName?: string) => void;
-  hydrateSnapshot: (chatName: string, dbMessages: StoredMessage[]) => void;
+  requestRefresh: (chatName?: string, remoteVersion?: number) => void;
+  hydrateSnapshot: (chatName: string, dbMessages: StoredMessage[], remoteVersion?: number) => void;
   clearMessages: () => void;
 }
 
-let snapshotIdCounter = -100000;
-
 function storedToSidebar(message: StoredMessage): SidebarMessage {
   return {
-    id: snapshotIdCounter--,
+    id: message.id,  // 使用数据库 ID 作为稳定的 key，避免 UI 闪烁
     chatName: message.chat_name,
     sender: message.sender,
     textCn: message.content,
@@ -34,26 +33,35 @@ export const useSidebarStore = create<SidebarStoreState>((set) => ({
   items: [],
   currentChat: "",
   refreshVersion: 0,
+  remoteRefreshVersion: 0,
 
   setCurrentChat: (chatName) =>
     set((state) => {
       if (!chatName || state.currentChat === chatName) {
         return state;
       }
-      return {
-        currentChat: chatName,
-        refreshVersion: state.refreshVersion + 1,
-      };
+      // 只更新标题，不递增 refreshVersion
+      // 快照拉取完全由 sidebar-refresh 事件驱动
+      return { currentChat: chatName };
     }),
 
-  requestRefresh: (chatName) =>
+  requestRefresh: (chatName, remoteVersion) =>
     set((state) => ({
-      currentChat: state.currentChat || chatName || "",
+      currentChat: chatName || state.currentChat,
       refreshVersion: state.refreshVersion + 1,
+      remoteRefreshVersion: remoteVersion ?? state.remoteRefreshVersion,
     })),
 
-  hydrateSnapshot: (chatName, dbMessages) =>
+  hydrateSnapshot: (chatName, dbMessages, remoteVersion) =>
     set((state) => {
+      // 防止"标题变了但内容空"的闪断
+      // 如果返回空列表但当前聊天非空且一致，保留旧列表
+      if (dbMessages.length === 0 && chatName && chatName === state.currentChat && state.items.length > 0) {
+        return {
+          remoteRefreshVersion: remoteVersion ?? state.remoteRefreshVersion,
+        };
+      }
+
       const nextItems = dbMessages
         .slice()
         .reverse()
@@ -65,6 +73,7 @@ export const useSidebarStore = create<SidebarStoreState>((set) => ({
             ? nextItems.slice(nextItems.length - TRIM_TO)
             : nextItems,
         currentChat: chatName || state.currentChat,
+        remoteRefreshVersion: remoteVersion ?? state.remoteRefreshVersion,
       };
     }),
 
@@ -73,5 +82,6 @@ export const useSidebarStore = create<SidebarStoreState>((set) => ({
       items: [],
       currentChat: "",
       refreshVersion: state.refreshVersion + 1,
+      remoteRefreshVersion: 0,
     })),
 }));

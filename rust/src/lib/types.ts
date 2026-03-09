@@ -118,4 +118,5 @@ export interface SidebarSnapshot {
   current_chat?: string | null;
   messages: StoredMessage[];
   translator: TranslatorServiceStatus;
+  refresh_version?: number;
 }

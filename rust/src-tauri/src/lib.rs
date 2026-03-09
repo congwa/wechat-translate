@@ -31,6 +31,7 @@ pub struct TrayMenuState {
     pub translate_status: tauri::menu::MenuItem<tauri::Wry>,
     pub sidebar_toggle: tauri::menu::MenuItem<tauri::Wry>,
     pub listen_toggle: tauri::menu::MenuItem<tauri::Wry>,
+    pub translate_toggle: tauri::menu::CheckMenuItem<tauri::Wry>,
     pub close_to_tray_check: tauri::menu::CheckMenuItem<tauri::Wry>,
 }
 
@@ -69,6 +70,69 @@ fn show_app_message(
     }
 
     dialog.show(|_| {});
+}
+
+fn handle_tray_toggle_translate(app: &tauri::AppHandle) {
+    let desired_enabled = app
+        .try_state::<TrayMenuState>()
+        .and_then(|tray| tray.translate_toggle.is_checked().ok())
+        .unwrap_or(false);
+    let app_handle = app.clone();
+
+    tauri::async_runtime::spawn(async move {
+        let config_dir = ConfigDir(app_handle.state::<ConfigDir>().0.clone());
+        let manager = app_handle.state::<TaskManager>().inner().clone();
+        let close_to_tray = CloseToTray(app_handle.state::<CloseToTray>().0.clone());
+
+        let snapshot = match app_state::load_snapshot(&config_dir, &manager, &close_to_tray) {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                sync_tray_translate_toggle(&app_handle, false);
+                show_app_message(
+                    &app_handle,
+                    "更新翻译设置失败",
+                    format!("读取当前配置失败：{error}"),
+                    MessageDialogKind::Error,
+                );
+                return;
+            }
+        };
+
+        let mut new_settings = serde_json::to_value(&snapshot.settings).unwrap_or_default();
+        if let Some(translate) = new_settings.get_mut("translate") {
+            translate["enabled"] = serde_json::Value::Bool(desired_enabled);
+        }
+
+        match commands::app_state::save_settings(
+            &app_handle,
+            &config_dir,
+            &manager,
+            &close_to_tray,
+            new_settings,
+        )
+        .await
+        {
+            Ok(_) => {
+                sync_tray_translate_toggle(&app_handle, desired_enabled);
+                sync_translate_enabled_menu(&app_handle, desired_enabled);
+            }
+            Err(error) => {
+                sync_tray_translate_toggle(&app_handle, !desired_enabled);
+                show_app_message(
+                    &app_handle,
+                    "更新翻译设置失败",
+                    format!("保存配置失败：{error}"),
+                    MessageDialogKind::Error,
+                );
+            }
+        }
+    });
+}
+
+fn sync_tray_translate_toggle(app: &tauri::AppHandle, enabled: bool) {
+    if let Some(tray) = app.try_state::<TrayMenuState>() {
+        let _ = tray.translate_toggle.set_checked(enabled);
+    }
 }
 
 fn handle_toggle_translate_enabled_menu(app: &tauri::AppHandle) {
@@ -146,6 +210,7 @@ fn handle_toggle_translate_enabled_menu(app: &tauri::AppHandle) {
                     .unwrap_or(false)
                 {
                     sync_translate_enabled_menu(&app_handle, previous_enabled);
+                    sync_tray_translate_toggle(&app_handle, previous_enabled);
                     let detail = result
                         .get("errors")
                         .cloned()
@@ -156,10 +221,13 @@ fn handle_toggle_translate_enabled_menu(app: &tauri::AppHandle) {
                         format!("保存设置失败：{detail}"),
                         MessageDialogKind::Warning,
                     );
+                } else {
+                    sync_tray_translate_toggle(&app_handle, desired_enabled);
                 }
             }
             Err(error) => {
                 sync_translate_enabled_menu(&app_handle, previous_enabled);
+                sync_tray_translate_toggle(&app_handle, previous_enabled);
                 show_app_message(
                     &app_handle,
                     "更新翻译设置失败",
@@ -327,6 +395,17 @@ pub fn run() {
             let sidebar_toggle =
                 MenuItemBuilder::with_id("toggle_sidebar", "开启实时浮窗").build(app)?;
             let listen_toggle = MenuItemBuilder::with_id("toggle_listen", "开启监听").build(app)?;
+            let translate_toggle = CheckMenuItemBuilder::with_id(
+                "tray_toggle_translate",
+                "启用翻译服务",
+            )
+            .checked(
+                startup_config
+                    .as_ref()
+                    .map(|c| c.translate.enabled)
+                    .unwrap_or(false),
+            )
+            .build(app)?;
 
             let show_item = MenuItemBuilder::with_id("show", "显示主窗口").build(app)?;
             let close_to_tray_check =
@@ -344,6 +423,7 @@ pub fn run() {
                 .separator()
                 .item(&sidebar_toggle)
                 .item(&listen_toggle)
+                .item(&translate_toggle)
                 .separator()
                 .item(&show_item)
                 .item(&close_to_tray_check)
@@ -358,6 +438,7 @@ pub fn run() {
                 translate_status,
                 sidebar_toggle,
                 listen_toggle,
+                translate_toggle,
                 close_to_tray_check,
             });
 
@@ -438,6 +519,9 @@ pub fn run() {
                     }
                     "toggle_translate_enabled" => {
                         handle_toggle_translate_enabled_menu(app);
+                    }
+                    "tray_toggle_translate" => {
+                        handle_tray_toggle_translate(app);
                     }
                     "toggle_close_to_tray" => {
                         let close = app.state::<CloseToTray>();

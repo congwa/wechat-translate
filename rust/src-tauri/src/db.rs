@@ -109,7 +109,7 @@ impl MessageDb {
                 image_path   TEXT DEFAULT NULL,
                 source       TEXT NOT NULL DEFAULT 'chat',
                 quality      TEXT NOT NULL DEFAULT 'high',
-                UNIQUE(chat_name, content_hash, detected_at)
+                UNIQUE(chat_name, content_hash)
             );
             CREATE INDEX IF NOT EXISTS idx_chat_time ON messages(chat_name, detected_at);
             CREATE INDEX IF NOT EXISTS idx_sender ON messages(sender);
@@ -232,19 +232,20 @@ impl MessageDb {
         chat_name: &str,
         sender: &str,
         content: &str,
-        detected_at: &str,
+        _detected_at: &str,
         content_en: &str,
     ) -> Result<bool> {
         let hash = content_hash(sender, content);
         let conn = self.conn.lock().unwrap();
+        // 使用 chat_name + content_hash 定位消息（不再依赖 detected_at）
         let rows = conn
             .execute(
                 "UPDATE messages
                  SET content_en = ?1
                  WHERE chat_name = ?2
                    AND content_hash = ?3
-                   AND detected_at = ?4",
-                params![content_en, chat_name, hash, detected_at],
+                   AND content_en = ''",
+                params![content_en, chat_name, hash],
             )
             .context("update message translation")?;
         Ok(rows > 0)
