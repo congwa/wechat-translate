@@ -71,12 +71,5 @@ impl EventStore {
         event
     }
 
-    pub fn list_since(&self, last_id: u64) -> Vec<ServiceEvent> {
-        let history = self.history.lock().unwrap();
-        history.iter().filter(|e| e.id > last_id).cloned().collect()
-    }
 
-    pub fn latest_id(&self) -> u64 {
-        self.counter.load(Ordering::SeqCst)
-    }
 }

@@ -23,29 +23,6 @@ pub async fn listen_stop(
 }
 
 #[tauri::command]
-pub async fn autoreply_start(
-    manager: tauri::State<'_, TaskManager>,
-) -> Result<serde_json::Value, String> {
-    manager
-        .enable_autoreply()
-        .await
-        .map_err(|e| e.to_string())?;
-
-    Ok(serde_json::json!({ "ok": true, "message": "autoreply enabled" }))
-}
-
-#[tauri::command]
-pub async fn autoreply_stop(
-    manager: tauri::State<'_, TaskManager>,
-) -> Result<serde_json::Value, String> {
-    manager
-        .disable_autoreply()
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(serde_json::json!({ "ok": true, "message": "autoreply disabled" }))
-}
-
-#[tauri::command]
 pub async fn get_task_status(
     manager: tauri::State<'_, TaskManager>,
 ) -> Result<serde_json::Value, String> {

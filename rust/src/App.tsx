@@ -4,13 +4,11 @@ import {
   Settings,
   Database,
   Radio,
-  Send,
   ChevronRight,
   MonitorPlay,
   Square,
 } from "lucide-react";
 import { PreflightBar } from "@/components/PreflightBar";
-import { SendCenter } from "@/components/SendCenter";
 import { SettingsPage } from "@/components/SettingsPage";
 import { EventStream } from "@/components/EventStream";
 import { ServiceLogs } from "@/components/ServiceLogs";
@@ -32,7 +30,7 @@ export default function App() {
   return <MainApp />;
 }
 
-type PageKey = "settings" | "history" | "logs" | "send";
+type PageKey = "settings" | "history" | "logs";
 
 interface NavItem {
   key: PageKey;
@@ -45,7 +43,6 @@ interface NavItem {
 const NAV_ITEMS: NavItem[] = [
   { key: "settings", label: "设置", icon: <Settings className="w-[18px] h-[18px]" /> },
   { key: "history", label: "历史", icon: <Database className="w-[18px] h-[18px]" /> },
-  { key: "send", label: "发送", icon: <Send className="w-[18px] h-[18px]" />, beta: true },
   { key: "logs", label: "日志", icon: <Radio className="w-[18px] h-[18px]" /> },
 ];
 
@@ -99,8 +96,7 @@ function MainApp() {
           sourceLang: store.sourceLang,
           targetLang: store.targetLang,
           intervalSeconds: parseFloat(store.pollInterval) || 1,
-          betaImageCapture: store.betaImageCapture,
-          betaAvatarCapture: store.betaAvatarCapture,
+          imageCapture: store.imageCapture,
           windowMode: store.sidebarWindowMode,
         });
         showToast("实时浮窗已开启", true);
@@ -218,7 +214,7 @@ function MainApp() {
             {NAV_ITEMS.find((n) => n.key === page)?.label}
           </h2>
           <div className="flex items-center gap-2">
-            {(["monitoring", "autoreply", "sidebar"] as const).map((key) => (
+            {(["monitoring", "sidebar"] as const).map((key) => (
               <span
                 key={key}
                 className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium transition-colors ${
@@ -232,7 +228,7 @@ function MainApp() {
                     taskState[key] ? "bg-primary animate-pulse" : "bg-muted-foreground/30"
                   }`}
                 />
-                {key === "sidebar" ? "浮窗" : key === "monitoring" ? "监听" : "自动回复"}
+                {key === "sidebar" ? "浮窗" : "监听"}
               </span>
             ))}
           </div>
@@ -271,7 +267,6 @@ function MainApp() {
             >
               {page === "settings" && <SettingsPage />}
               {page === "history" && <MessageHistory />}
-              {page === "send" && <SendCenter />}
               {page === "logs" && <LogsPage />}
             </motion.div>
           </AnimatePresence>

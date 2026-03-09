@@ -12,8 +12,7 @@ pub async fn sidebar_start(
     source_lang: Option<String>,
     target_lang: Option<String>,
     timeout_seconds: Option<f64>,
-    beta_image_capture: Option<bool>,
-    beta_avatar_capture: Option<bool>,
+    image_capture: Option<bool>,
 ) -> Result<serde_json::Value, String> {
     manager
         .enable_sidebar(
@@ -23,8 +22,7 @@ pub async fn sidebar_start(
             source_lang.unwrap_or_else(|| "auto".to_string()),
             target_lang.unwrap_or_else(|| "EN".to_string()),
             timeout_seconds.unwrap_or(8.0),
-            beta_image_capture.unwrap_or(false),
-            beta_avatar_capture.unwrap_or(false),
+            image_capture.unwrap_or(false),
         )
         .await
         .map_err(|e| e.to_string())?;
@@ -53,8 +51,7 @@ pub async fn live_start(
     source_lang: Option<String>,
     target_lang: Option<String>,
     interval_seconds: Option<f64>,
-    beta_image_capture: Option<bool>,
-    beta_avatar_capture: Option<bool>,
+    image_capture: Option<bool>,
     window_mode: Option<String>,
 ) -> Result<serde_json::Value, String> {
     let mode = WindowMode::from_str_opt(window_mode.as_deref());
@@ -76,8 +73,7 @@ pub async fn live_start(
             source_lang.unwrap_or_else(|| "auto".to_string()),
             target_lang.unwrap_or_else(|| "EN".to_string()),
             8.0,
-            beta_image_capture.unwrap_or(false),
-            beta_avatar_capture.unwrap_or(false),
+            image_capture.unwrap_or(false),
         )
         .await
         .map_err(|e| e.to_string())?;

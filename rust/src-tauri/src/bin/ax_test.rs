@@ -39,8 +39,8 @@ fn main() {
         Err(e) => println!("   ❌ {}", e),
     }
 
-    // 2.5 富消息（含 is_self 线索）
-    println!("\n2.5 富消息推断 (read_chat_messages_rich):");
+    // 2.5 富消息正文
+    println!("\n2.5 富消息正文 (read_chat_messages_rich):");
     match ax_reader::read_chat_messages_rich() {
         Ok(messages) => {
             if messages.is_empty() {
@@ -53,10 +53,7 @@ fn main() {
                     } else {
                         ""
                     };
-                    println!(
-                        "   [{}] side_hint={:?} avatar={:?} content={}{}",
-                        i, msg.side_hint, msg.avatar_position, display, suffix
-                    );
+                    println!("   [{}] content={}{}", i, display, suffix);
                 }
             }
         }

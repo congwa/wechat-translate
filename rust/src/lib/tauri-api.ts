@@ -1,14 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { ApiResponse } from "./types";
 
-export async function sendText(who: string, text: string): Promise<ApiResponse> {
-  return invoke("send_text", { who, text });
-}
-
-export async function sendFiles(who: string, filePaths: string[]): Promise<ApiResponse> {
-  return invoke("send_files", { who, filePaths });
-}
-
 export async function getSessions(): Promise<ApiResponse<string[]>> {
   return invoke("get_sessions");
 }
@@ -21,14 +13,6 @@ export async function listenStop(): Promise<ApiResponse> {
   return invoke("listen_stop");
 }
 
-export async function autoreplyStart(): Promise<ApiResponse> {
-  return invoke("autoreply_start");
-}
-
-export async function autoreplyStop(): Promise<ApiResponse> {
-  return invoke("autoreply_stop");
-}
-
 export async function sidebarStart(params: {
   targets?: string[];
   translateEnabled?: boolean;
@@ -36,8 +20,7 @@ export async function sidebarStart(params: {
   sourceLang?: string;
   targetLang?: string;
   timeoutSeconds?: number;
-  betaImageCapture?: boolean;
-  betaAvatarCapture?: boolean;
+  imageCapture?: boolean;
 }): Promise<ApiResponse> {
   return invoke("sidebar_start", params);
 }
@@ -52,8 +35,7 @@ export async function liveStart(params?: {
   sourceLang?: string;
   targetLang?: string;
   intervalSeconds?: number;
-  betaImageCapture?: boolean;
-  betaAvatarCapture?: boolean;
+  imageCapture?: boolean;
   windowMode?: string;
 }): Promise<ApiResponse> {
   return invoke("live_start", params ?? {});

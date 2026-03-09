@@ -1,5 +1,4 @@
 pub mod adapter;
-mod avatar_capture;
 mod commands;
 mod config;
 pub mod db;
@@ -10,7 +9,6 @@ mod task_manager;
 pub mod translator;
 
 use adapter::MacOSAdapter;
-use avatar_capture::AvatarCache;
 use config::ConfigDir;
 use db::MessageDb;
 use events::EventStore;
@@ -52,21 +50,18 @@ pub fn run() {
                 Arc::new(MessageDb::new(&db_path).expect("failed to open message database"));
 
             let image_cache = Arc::new(std::sync::Mutex::new(WeChatImageCache::new()));
-            let avatar_cache = Arc::new(std::sync::Mutex::new(AvatarCache::new(&data_dir)));
 
             let manager = TaskManager::new(
                 adapter.clone(),
                 event_store.clone(),
                 message_db.clone(),
                 image_cache.clone(),
-                avatar_cache.clone(),
             );
             let sidebar_state = sidebar_window::create_state();
 
             app.manage(ConfigDir(data_dir));
             app.manage(message_db);
             app.manage(image_cache);
-            app.manage(avatar_cache);
             app.manage(manager.clone());
             app.manage(sidebar_state);
 
@@ -159,7 +154,6 @@ pub fn run() {
                                         "EN".into(),
                                         8.0,
                                         false,
-                                        false,
                                     )
                                     .await;
                                 let sidebar_ws =
@@ -175,9 +169,7 @@ pub fn run() {
                         tauri::async_runtime::spawn(async move {
                             let manager = app.state::<TaskManager>();
                             let state = manager.get_task_state();
-                            if state.autoreply {
-                                let _ = manager.disable_autoreply().await;
-                            } else if state.monitoring {
+                            if state.monitoring {
                                 manager.stop_all().await;
                             } else {
                                 let _ = manager.start_monitoring(1.0).await;
@@ -216,13 +208,9 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
-            commands::send::send_text,
-            commands::send::send_files,
             commands::sessions::get_sessions,
             commands::listen::listen_start,
             commands::listen::listen_stop,
-            commands::listen::autoreply_start,
-            commands::listen::autoreply_stop,
             commands::listen::get_task_status,
             commands::listen::health_check,
             commands::sidebar::sidebar_start,

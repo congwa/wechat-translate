@@ -23,8 +23,7 @@ interface SettingsFields {
   targets: string;
   lastChatName: string;
 
-  betaImageCapture: boolean;
-  betaAvatarCapture: boolean;
+  imageCapture: boolean;
 }
 
 interface FormStoreState extends SettingsFields {
@@ -53,8 +52,7 @@ export const useFormStore = create<FormStoreState>()(
       targets: "",
       lastChatName: "",
 
-      betaImageCapture: false,
-      betaAvatarCapture: false,
+      imageCapture: false,
 
       setSettings: (patch) => set(patch),
       setLastChatName: (name) => set({ lastChatName: name }),
@@ -76,8 +74,7 @@ export const useFormStore = create<FormStoreState>()(
         collapsedDisplayCount: state.collapsedDisplayCount,
         targets: state.targets,
         lastChatName: state.lastChatName,
-        betaImageCapture: state.betaImageCapture,
-        betaAvatarCapture: state.betaAvatarCapture,
+        imageCapture: state.imageCapture,
       }),
     },
   ),

@@ -16,7 +16,7 @@ interface EventStoreState {
 
 export const useEventStore = create<EventStoreState>((set) => ({
   events: [],
-  taskState: { monitoring: false, autoreply: false, sidebar: false },
+  taskState: { monitoring: false, sidebar: false },
 
   setTaskState: (taskState) => set({ taskState }),
 

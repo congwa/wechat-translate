@@ -9,7 +9,6 @@ import { motion } from "framer-motion";
 
 const taskLabels: { key: keyof TaskState; label: string }[] = [
   { key: "monitoring", label: "监听" },
-  { key: "autoreply", label: "自动回复" },
   { key: "sidebar", label: "浮窗" },
 ];
 

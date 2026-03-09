@@ -2,7 +2,6 @@ pub mod applescript;
 pub mod ax_reader;
 
 use anyhow::Result;
-use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 pub struct MacOSAdapter {
@@ -14,14 +13,6 @@ impl MacOSAdapter {
         Self {
             ui_paused: AtomicBool::new(false),
         }
-    }
-
-    pub fn pause_ui(&self) {
-        self.ui_paused.store(true, Ordering::SeqCst);
-    }
-
-    pub fn resume_ui(&self) {
-        self.ui_paused.store(false, Ordering::SeqCst);
     }
 
     pub fn is_ui_paused(&self) -> bool {
@@ -50,66 +41,6 @@ impl MacOSAdapter {
     pub fn get_current_sessions(&self) -> Result<Vec<String>> {
         self.ensure_supported()?;
         ax_reader::get_current_sessions()
-    }
-
-    pub fn send_text(&self, who: &str, text: &str) -> Result<()> {
-        self.ensure_supported()?;
-        let body = text.trim();
-        if body.is_empty() {
-            anyhow::bail!("消息不能为空");
-        }
-
-        applescript::activate_wechat()?;
-        let who_trimmed = who.trim();
-        if !who_trimmed.is_empty() {
-            applescript::open_chat_by_search(who_trimmed)?;
-        }
-        applescript::copy_text(body)?;
-        applescript::paste_and_send(true)?;
-        Ok(())
-    }
-
-    pub fn send_files(&self, who: &str, file_paths: &[String]) -> Result<()> {
-        self.ensure_supported()?;
-        let files: Vec<String> = file_paths
-            .iter()
-            .filter(|p| !p.trim().is_empty())
-            .map(|p| {
-                let path = Path::new(p.trim());
-                if path.is_absolute() {
-                    p.trim().to_string()
-                } else {
-                    std::fs::canonicalize(path)
-                        .map(|p| p.to_string_lossy().to_string())
-                        .unwrap_or_else(|_| p.trim().to_string())
-                }
-            })
-            .collect();
-
-        if files.is_empty() {
-            anyhow::bail!("file_paths 不能为空");
-        }
-
-        for file_path in &files {
-            if !Path::new(file_path).exists() {
-                anyhow::bail!("文件不存在: {}", file_path);
-            }
-        }
-
-        applescript::activate_wechat()?;
-        let who_trimmed = who.trim();
-        if !who_trimmed.is_empty() {
-            applescript::open_chat_by_search(who_trimmed)?;
-        }
-
-        for file_path in &files {
-            applescript::copy_file(file_path)?;
-            applescript::paste_and_send(false)?;
-            std::thread::sleep(std::time::Duration::from_millis(80));
-        }
-
-        applescript::press_enter()?;
-        Ok(())
     }
 
     pub fn read_latest_message(&self) -> Result<String> {

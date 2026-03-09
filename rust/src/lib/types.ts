@@ -10,7 +10,6 @@ export type EventType = "status" | "message" | "log" | "error" | "task_state";
 
 export interface TaskState {
   monitoring: boolean;
-  autoreply: boolean;
   sidebar: boolean;
 }
 
@@ -39,7 +38,6 @@ export interface SidebarMessage {
   timestamp: string;
   isSelf: boolean;
   imagePath?: string;
-  avatarPath?: string;
 }
 
 export interface StoredMessage {

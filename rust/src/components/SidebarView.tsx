@@ -103,15 +103,7 @@ function renderMessageCard(msg: SidebarMessage, displayMode: DisplayMode) {
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />
               ) : hasSender ? (
                 <>
-                  {msg.avatarPath ? (
-                    <img
-                      src={convertFileSrc(msg.avatarPath)}
-                      className="w-4 h-4 rounded-full object-cover shrink-0"
-                      alt=""
-                    />
-                  ) : (
-                    <span className={`w-1.5 h-1.5 rounded-full ${color} shrink-0`} />
-                  )}
+                  <span className={`w-1.5 h-1.5 rounded-full ${color} shrink-0`} />
                 </>
               ) : (
                 <MessageCircle className="w-2.5 h-2.5 text-gray-400 dark:text-gray-500 shrink-0" />

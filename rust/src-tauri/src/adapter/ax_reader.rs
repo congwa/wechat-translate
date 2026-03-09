@@ -375,15 +375,6 @@ struct CGSize {
 
 const AX_VALUE_CG_POINT_TYPE: u32 = 1;
 const AX_VALUE_CG_SIZE_TYPE: u32 = 2;
-const HIT_TEST_INSET_X: f64 = 18.0;
-
-#[derive(Debug, Clone, Default)]
-struct HitProbe {
-    role: String,
-    identifier: String,
-    title: String,
-}
-
 unsafe fn ax_element_position(element: core_foundation_sys::base::CFTypeRef) -> Option<CGPoint> {
     let ax_element = element as accessibility_sys::AXUIElementRef;
     let attr_name = CFString::new("AXPosition");
@@ -442,54 +433,13 @@ unsafe fn ax_element_size(element: core_foundation_sys::base::CFTypeRef) -> Opti
     }
 }
 
-unsafe fn ax_hit_test_element(
-    element: core_foundation_sys::base::CFTypeRef,
-    x: f64,
-    y: f64,
-) -> Option<core_foundation_sys::base::CFTypeRef> {
-    let mut hit: accessibility_sys::AXUIElementRef = std::ptr::null_mut();
-    let err = accessibility_sys::AXUIElementCopyElementAtPosition(
-        element as accessibility_sys::AXUIElementRef,
-        x as f32,
-        y as f32,
-        &mut hit,
-    );
-    if err != 0 || hit.is_null() {
-        None
-    } else {
-        Some(hit as core_foundation_sys::base::CFTypeRef)
-    }
-}
 
-unsafe fn hit_probe_at(
-    element: core_foundation_sys::base::CFTypeRef,
-    x: f64,
-    y: f64,
-) -> Option<HitProbe> {
-    let hit = ax_hit_test_element(element, x, y)?;
-    let role = ax_element_attribute(hit, "AXRole").unwrap_or_default();
-    let identifier = ax_element_attribute(hit, "AXIdentifier").unwrap_or_default();
-    let title = ax_element_attribute(hit, "AXTitle")
-        .or_else(|| ax_element_attribute(hit, "AXValue"))
-        .unwrap_or_default();
-    core_foundation_sys::base::CFRelease(hit);
-    Some(HitProbe {
-        role,
-        identifier,
-        title: clean_text(&title),
-    })
-}
 
 #[derive(Debug, Clone)]
 pub struct ChatMessage {
     pub sender: String,
     pub content: String,
     pub is_self: bool,
-    /// Self/other hint inferred from bubble horizontal side.
-    /// Some(true)=self/right, Some(false)=other/left, None=unknown.
-    pub side_hint: Option<bool>,
-    /// Screen position of the avatar AXImage element (if found)
-    pub avatar_position: Option<(f64, f64)>,
 }
 
 #[derive(Debug, Clone)]
@@ -505,128 +455,12 @@ pub struct SessionItemSnapshot {
     pub is_group: bool,
 }
 
-const BUBBLE_SIDE_THRESHOLD: f64 = 6.0;
 
-fn side_hint_from_bounds(
-    list_center_x: f64,
-    bubble_left_x: f64,
-    bubble_width: f64,
-) -> Option<bool> {
-    if bubble_width <= 0.0 {
-        return None;
-    }
-    let bubble_right_x = bubble_left_x + bubble_width;
 
-    if bubble_right_x < list_center_x - BUBBLE_SIDE_THRESHOLD {
-        Some(false)
-    } else if bubble_left_x > list_center_x + BUBBLE_SIDE_THRESHOLD {
-        Some(true)
-    } else {
-        let right_span = bubble_right_x - list_center_x;
-        let left_span = list_center_x - bubble_left_x;
-        if right_span - left_span > BUBBLE_SIDE_THRESHOLD {
-            Some(true)
-        } else if left_span - right_span > BUBBLE_SIDE_THRESHOLD {
-            Some(false)
-        } else {
-            None
-        }
-    }
-}
 
-fn side_hint_from_position_x(list_center_x: f64, bubble_left_x: f64) -> Option<bool> {
-    if bubble_left_x > list_center_x + BUBBLE_SIDE_THRESHOLD {
-        Some(true)
-    } else if bubble_left_x < list_center_x - BUBBLE_SIDE_THRESHOLD {
-        Some(false)
-    } else {
-        None
-    }
-}
 
-fn choose_side_reference_center(
-    list_center_x: Option<f64>,
-    bubble_geometries: &[(f64, f64)],
-) -> Option<f64> {
-    if bubble_geometries.is_empty() {
-        return list_center_x;
-    }
 
-    let mut min_center = f64::INFINITY;
-    let mut max_center = f64::NEG_INFINITY;
-    for (left_x, width) in bubble_geometries {
-        if *width <= 0.0 {
-            continue;
-        }
-        let center = *left_x + *width * 0.5;
-        if center < min_center {
-            min_center = center;
-        }
-        if center > max_center {
-            max_center = center;
-        }
-    }
-    if !min_center.is_finite() || !max_center.is_finite() {
-        return list_center_x;
-    }
 
-    let spread = max_center - min_center;
-    let center_from_distribution = if spread >= BUBBLE_SIDE_THRESHOLD * 4.0 {
-        Some((min_center + max_center) * 0.5)
-    } else {
-        None
-    };
-
-    match list_center_x {
-        Some(center) => {
-            if center < min_center - BUBBLE_SIDE_THRESHOLD * 2.0
-                || center > max_center + BUBBLE_SIDE_THRESHOLD * 2.0
-            {
-                center_from_distribution.or(Some(center))
-            } else {
-                Some(center)
-            }
-        }
-        None => center_from_distribution,
-    }
-}
-
-fn contains_avatar_hint(value: &str) -> bool {
-    let v = value.to_ascii_lowercase();
-    v.contains("avatar") || v.contains("head") || v.contains("profile")
-}
-
-fn is_avatar_probe(probe: &HitProbe) -> bool {
-    probe.role == "AXImage"
-        || contains_avatar_hint(&probe.identifier)
-        || contains_avatar_hint(&probe.title)
-}
-
-fn is_probe_text_match(probe: &HitProbe, message_content: &str) -> bool {
-    !probe.title.is_empty()
-        && normalize_for_match(&probe.title) == normalize_for_match(message_content)
-}
-
-fn side_hint_from_hit_probes(
-    message_content: &str,
-    left_probe: &HitProbe,
-    right_probe: &HitProbe,
-) -> Option<bool> {
-    let left_match = is_probe_text_match(left_probe, message_content);
-    let right_match = is_probe_text_match(right_probe, message_content);
-
-    if left_match ^ right_match {
-        return Some(right_match);
-    }
-
-    let left_avatar = is_avatar_probe(left_probe);
-    let right_avatar = is_avatar_probe(right_probe);
-    if left_avatar ^ right_avatar {
-        return Some(right_avatar);
-    }
-
-    None
-}
 
 fn clean_text(raw: &str) -> String {
     raw.replace('\u{200b}', "")
@@ -1023,13 +857,6 @@ pub fn read_chat_messages_rich() -> Result<Vec<ChatMessage>> {
 
     unsafe {
         if let Some(list) = find_element_by_id(win, "chat_message_list", 0) {
-            let (list_left_x, list_width, list_center_x) =
-                match (ax_element_position(list), ax_element_size(list)) {
-                    (Some(p), Some(s)) => (Some(p.x), Some(s.width), Some(p.x + s.width * 0.5)),
-                    _ => (None, None, None),
-                };
-            let mut side_inputs: Vec<(Option<f64>, Option<f64>, Option<f64>)> = Vec::new();
-            let mut bubble_geometries: Vec<(f64, f64)> = Vec::new();
             let children = ax_element_children(list);
             for child in &children {
                 let id = ax_element_attribute(*child, "AXIdentifier").unwrap_or_default();
@@ -1037,81 +864,15 @@ pub fn read_chat_messages_rich() -> Result<Vec<ChatMessage>> {
                     let content = ax_element_attribute(*child, "AXTitle")
                         .map(|t| clean_text(&t))
                         .unwrap_or_default();
-                    if content.is_empty() {
-                        core_foundation_sys::base::CFRelease(*child);
-                        continue;
-                    }
-
-                    let bubble_pos = ax_element_position(*child);
-                    let bubble_size = ax_element_size(*child);
-                    let bubble_position_x = bubble_pos.map(|p| p.x);
-                    let bubble_width = bubble_size.map(|s| s.width);
-                    let bubble_center_y = match (bubble_pos, bubble_size) {
-                        (Some(p), Some(s)) if s.height > 0.0 => Some(p.y + s.height * 0.5),
-                        (Some(p), _) => Some(p.y + 20.0),
-                        _ => None,
-                    };
-                    if let (Some(left_x), Some(width)) = (bubble_position_x, bubble_width) {
-                        if width > 0.0 {
-                            bubble_geometries.push((left_x, width));
-                        }
-                    }
-                    side_inputs.push((bubble_position_x, bubble_width, bubble_center_y));
-
-                    messages.push(ChatMessage {
-                        sender: String::new(),
-                        content,
-                        is_self: false,
-                        side_hint: None,
-                        avatar_position: None,
-                    });
-                }
-                core_foundation_sys::base::CFRelease(*child);
-            }
-            let side_reference_center =
-                choose_side_reference_center(list_center_x, &bubble_geometries);
-            if let Some(center_x) = side_reference_center {
-                for (msg, (position_x, width, _)) in messages.iter_mut().zip(side_inputs.iter()) {
-                    msg.side_hint = match (position_x, width, list_width) {
-                        // Skip bounds-based side_hint when bubble width ≈ list width
-                        // (WeChat AX tree exposes full-row elements, not visual bubbles)
-                        (Some(left_x), Some(w), Some(lw))
-                            if *w > 0.0 && (*w - lw).abs() > BUBBLE_SIDE_THRESHOLD =>
-                        {
-                            side_hint_from_bounds(center_x, *left_x, *w)
-                        }
-                        (Some(left_x), Some(w), None) if *w > 0.0 => {
-                            side_hint_from_bounds(center_x, *left_x, *w)
-                        }
-                        (Some(left_x), _, _) => side_hint_from_position_x(center_x, *left_x),
-                        _ => None,
-                    };
-                }
-            }
-
-            if let (Some(list_x), Some(list_w)) = (list_left_x, list_width) {
-                let left_probe_x = list_x + HIT_TEST_INSET_X.min((list_w * 0.2).max(0.0));
-                let right_probe_x = list_x + list_w - HIT_TEST_INSET_X.min((list_w * 0.2).max(0.0));
-                for (msg, (_, _, bubble_center_y)) in messages.iter_mut().zip(side_inputs.iter()) {
-                    if msg.side_hint.is_some() {
-                        continue;
-                    }
-                    let Some(y) = bubble_center_y else {
-                        continue;
-                    };
-                    let left_probe = hit_probe_at(win, left_probe_x, *y).unwrap_or_default();
-                    let right_probe = hit_probe_at(win, right_probe_x, *y).unwrap_or_default();
-                    if let Some(side_hint) =
-                        side_hint_from_hit_probes(&msg.content, &left_probe, &right_probe)
-                    {
-                        msg.side_hint = Some(side_hint);
-                        msg.avatar_position = Some(if side_hint {
-                            (right_probe_x, *y)
-                        } else {
-                            (left_probe_x, *y)
+                    if !content.is_empty() {
+                        messages.push(ChatMessage {
+                            sender: String::new(),
+                            content,
+                            is_self: false,
                         });
                     }
                 }
+                core_foundation_sys::base::CFRelease(*child);
             }
             core_foundation_sys::base::CFRelease(list);
         }
@@ -1121,6 +882,7 @@ pub fn read_chat_messages_rich() -> Result<Vec<ChatMessage>> {
 
     Ok(messages)
 }
+
 
 /// Read the latest message from the active chat.
 /// Reads from chat_bubble_item_view elements in chat_message_list.
@@ -1387,9 +1149,8 @@ unsafe fn collect_static_texts(
 #[cfg(test)]
 mod tests {
     use super::{
-        choose_side_reference_center, is_same_message_prefix8, parse_session_preview_line,
-        parse_session_unread_count, prefix8_key, side_hint_from_bounds, side_hint_from_hit_probes,
-        side_hint_from_position_x, HitProbe,
+        is_same_message_prefix8, parse_session_preview_line, parse_session_unread_count,
+        prefix8_key,
     };
 
     #[test]
@@ -1461,71 +1222,9 @@ mod tests {
         assert_eq!(key, "hello wo");
     }
 
-    #[test]
-    fn side_hint_from_bounds_should_detect_right_left_and_center_band() {
-        // Right edge still on left side -> other
-        assert_eq!(side_hint_from_bounds(100.0, 40.0, 30.0), Some(false));
-        // Left edge beyond center -> self
-        assert_eq!(side_hint_from_bounds(100.0, 120.0, 30.0), Some(true));
-        // Crosses center and center near threshold -> unknown
-        assert_eq!(side_hint_from_bounds(100.0, 95.0, 10.0), None);
+    
+    
+    
+    
+    
     }
-
-    #[test]
-    fn side_hint_from_bounds_should_classify_wide_crossing_bubble_by_span() {
-        // Bubble crosses center but extends more to right -> self
-        assert_eq!(side_hint_from_bounds(100.0, 70.0, 80.0), Some(true));
-        // Bubble crosses center but extends more to left -> other
-        assert_eq!(side_hint_from_bounds(100.0, 50.0, 80.0), Some(false));
-    }
-
-    #[test]
-    fn side_hint_from_position_x_should_work_when_only_position_available() {
-        assert_eq!(side_hint_from_position_x(100.0, 120.0), Some(true));
-        assert_eq!(side_hint_from_position_x(100.0, 80.0), Some(false));
-        assert_eq!(side_hint_from_position_x(100.0, 103.0), None);
-    }
-
-    #[test]
-    fn choose_side_reference_center_should_fallback_to_distribution_when_out_of_range() {
-        let geometries = vec![(20.0, 80.0), (320.0, 80.0)];
-        let chosen = choose_side_reference_center(Some(800.0), &geometries).unwrap();
-        assert!((chosen - 210.0).abs() < 0.1);
-    }
-
-    #[test]
-    fn side_hint_from_hit_probes_should_prefer_single_side_text_match() {
-        let left = HitProbe {
-            role: "AXStaticText".to_string(),
-            identifier: "".to_string(),
-            title: "对方消息".to_string(),
-        };
-        let right = HitProbe {
-            role: "AXStaticText".to_string(),
-            identifier: "".to_string(),
-            title: "".to_string(),
-        };
-        assert_eq!(
-            side_hint_from_hit_probes("对方消息", &left, &right),
-            Some(false)
-        );
-    }
-
-    #[test]
-    fn side_hint_from_hit_probes_should_use_avatar_probe_when_text_ambiguous() {
-        let left = HitProbe {
-            role: "AXImage".to_string(),
-            identifier: "avatar_img".to_string(),
-            title: "".to_string(),
-        };
-        let right = HitProbe {
-            role: "AXStaticText".to_string(),
-            identifier: "".to_string(),
-            title: "".to_string(),
-        };
-        assert_eq!(
-            side_hint_from_hit_probes("任意内容", &left, &right),
-            Some(false)
-        );
-    }
-}

@@ -15,13 +15,10 @@ import {
   Monitor,
   Languages,
   Headphones,
-  MessageSquareReply,
   ChevronDown,
   Upload,
   RotateCcw,
-  FlaskConical,
   Image,
-  UserCircle,
   Eye,
   EyeOff,
   AlertCircle,
@@ -156,8 +153,7 @@ export function SettingsPage() {
   const displayWidth = useFormStore((s) => s.displayWidth);
   const sidebarWindowMode = useFormStore((s) => s.sidebarWindowMode);
   const collapsedDisplayCount = useFormStore((s) => s.collapsedDisplayCount);
-  const betaImageCapture = useFormStore((s) => s.betaImageCapture);
-  const betaAvatarCapture = useFormStore((s) => s.betaAvatarCapture);
+  const imageCapture = useFormStore((s) => s.imageCapture);
 
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [configRaw, setConfigRaw] = useState("");
@@ -399,23 +395,6 @@ export function SettingsPage() {
     }
   }
 
-  async function handleAutoreplyToggle(checked: boolean) {
-    setBusy("autoreply");
-    try {
-      if (checked) {
-        await api.autoreplyStart();
-        showToast("自动回复已开启", true);
-      } else {
-        await api.autoreplyStop();
-        showToast("自动回复已关闭", true);
-      }
-    } catch (e) {
-      showToast(`${e}`, false);
-    } finally {
-      setBusy(null);
-    }
-  }
-
   async function handleTranslateTest() {
     setBusy("translate_test");
     try {
@@ -470,7 +449,7 @@ export function SettingsPage() {
           </div>
           <div>
             <h3 className="text-sm font-semibold">消息监听</h3>
-            <p className="text-[11px] text-muted-foreground">轮询与自动回复</p>
+            <p className="text-[11px] text-muted-foreground">轮询与浮窗显示</p>
           </div>
         </div>
 
@@ -485,30 +464,6 @@ export function SettingsPage() {
             checked={taskState.monitoring}
             onCheckedChange={handleMonitoringToggle}
             disabled={busy === "monitoring"}
-          />
-        </div>
-
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-7 h-7 rounded-lg bg-blue-50 flex items-center justify-center">
-              <MessageSquareReply className="w-3.5 h-3.5 text-blue-600" />
-            </div>
-            <div>
-              <h4 className="text-sm font-medium">
-                自动回复
-                <span className="ml-1.5 inline-block px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 text-[9px] font-bold uppercase leading-none align-middle">
-                  Beta
-                </span>
-              </h4>
-              <p className="text-[11px] text-muted-foreground mt-0.5">
-                监听到新消息时自动生成回复
-              </p>
-            </div>
-          </div>
-          <Switch
-            checked={taskState.autoreply}
-            onCheckedChange={handleAutoreplyToggle}
-            disabled={busy === "autoreply"}
           />
         </div>
 
@@ -790,16 +745,16 @@ export function SettingsPage() {
         </Button>
       </section>
 
-      {/* Section: Beta Features */}
+      {/* Section: Image Features */}
       <section className="glass-card rounded-2xl p-6 shadow-sm space-y-5 border border-amber-200/50 dark:border-amber-700/30">
         <div className="flex items-center gap-3">
           <div className="w-9 h-9 rounded-xl bg-amber-50 dark:bg-amber-900/30 flex items-center justify-center">
-            <FlaskConical className="w-4 h-4 text-amber-600 dark:text-amber-400" />
+            <Image className="w-4 h-4 text-amber-600 dark:text-amber-400" />
           </div>
           <div>
-            <h3 className="text-sm font-semibold">实验功能 (Beta)</h3>
+            <h3 className="text-sm font-semibold">图片缩略图</h3>
             <p className="text-[11px] text-muted-foreground">
-              这些功能正在测试中，可能不稳定。仅支持 macOS。
+              读取微信本地缓存中的聊天图片缩略图，仅支持 macOS。
             </p>
           </div>
         </div>
@@ -808,11 +763,11 @@ export function SettingsPage() {
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <Image className="w-4 h-4 text-amber-600 dark:text-amber-400" />
-              <h4 className="text-sm font-medium">聊天图片抓取</h4>
+              <h4 className="text-sm font-medium">聊天图片缩略图</h4>
             </div>
             <Switch
-              checked={betaImageCapture}
-              onCheckedChange={(v) => set({ betaImageCapture: v })}
+              checked={imageCapture}
+              onCheckedChange={(v) => set({ imageCapture: v })}
             />
           </div>
           <p className="text-[11px] text-muted-foreground">
@@ -835,36 +790,7 @@ export function SettingsPage() {
           </div>
         </div>
 
-        <div className="bg-amber-50/50 dark:bg-amber-900/10 rounded-xl p-4 space-y-3">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <UserCircle className="w-4 h-4 text-amber-600 dark:text-amber-400" />
-              <h4 className="text-sm font-medium">头像抓取</h4>
-            </div>
-            <Switch
-              checked={betaAvatarCapture}
-              onCheckedChange={(v) => set({ betaAvatarCapture: v })}
-            />
-          </div>
-          <p className="text-[11px] text-muted-foreground">
-            自动截取微信聊天界面中的头像，替换默认的首字母头像。
-          </p>
-          <div className="text-[11px] text-muted-foreground/80 space-y-1">
-            <p className="font-medium text-muted-foreground">工作原理</p>
-            <p>
-              通过截取微信窗口并根据消息气泡位置裁剪对应的头像区域，缓存后供浮窗和历史页面使用。
-            </p>
-          </div>
-          <div className="text-[11px] text-muted-foreground/80 space-y-1">
-            <p className="font-medium text-muted-foreground">注意事项</p>
-            <ul className="list-disc pl-4 space-y-0.5">
-              <li>仅支持 macOS，需要辅助功能和屏幕录制权限</li>
-              <li>微信窗口必须可见（不能被完全遮挡）</li>
-              <li>不同窗口尺寸下头像裁剪位置可能有偏差</li>
-              <li>头像会按发送者名称缓存，同一人只截取一次</li>
-            </ul>
-          </div>
-        </div>
+
       </section>
 
       {/* Section: Advanced (collapsible) */}

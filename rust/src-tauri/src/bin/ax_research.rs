@@ -4,7 +4,7 @@
 /// 1. 聊天标题区域全属性（current_chat_name_label / big_title_line_h_view）
 /// 2. 聊天标题栏附近的所有兄弟元素（寻找成员数等）
 /// 3. 会话列表预览对比（sender_prefix 分析）
-/// 4. 消息气泡几何与 side_hint 详情
+/// 4. 消息气泡几何详情
 /// 5. 消息列表中非气泡子元素（时间提示、系统消息等）
 use anyhow::{Context, Result};
 use core_foundation::array::CFArray;
@@ -615,35 +615,10 @@ fn main() -> Result<()> {
             for &bi in &bubble_indices[start..] {
                 let bubble = children[bi];
                 let raw_title = ax_attr(bubble, "AXTitle").unwrap_or_default();
-                let pos = ax_pos(bubble);
-                let size = ax_size(bubble);
                 let geo = pos_size_str(bubble);
 
-                // 计算 side_hint
-                let side = match (pos, size) {
-                    (Some(p), Some(s)) if s.width > 0.0 => {
-                        let bubble_right = p.x + s.width;
-                        if bubble_right < midpoint_x - 6.0 {
-                            "LEFT (他人)"
-                        } else if p.x > midpoint_x + 6.0 {
-                            "RIGHT(自己)"
-                        } else {
-                            let right_span = bubble_right - midpoint_x;
-                            let left_span = midpoint_x - p.x;
-                            if right_span - left_span > 6.0 {
-                                "RIGHT(自己)"
-                            } else if left_span - right_span > 6.0 {
-                                "LEFT (他人)"
-                            } else {
-                                "CENTER(?)"
-                            }
-                        }
-                    }
-                    _ => "UNKNOWN",
-                };
-
                 let content: String = escape(&raw_title).chars().take(50).collect();
-                println!("  [{}] {} {} => \"{}\"", bi, geo, side, content);
+                println!("  [{}] {} => \"{}\"", bi, geo, content);
 
                 // 也输出该气泡的所有属性
                 let all_attrs = ax_attr_names(bubble);

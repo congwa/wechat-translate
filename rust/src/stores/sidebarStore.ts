@@ -49,7 +49,6 @@ export const useSidebarStore = create<SidebarStoreState>((set) => ({
       timestamp: event.timestamp,
       isSelf: (p.is_self as boolean) || false,
       imagePath: (p.image_path as string) || undefined,
-      avatarPath: (p.avatar_path as string) || undefined,
     };
 
     set((state) => {
