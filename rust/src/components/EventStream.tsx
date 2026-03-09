@@ -2,6 +2,7 @@ import { useRef, useEffect } from "react";
 import { Badge } from "@/components/ui/badge";
 import { motion, AnimatePresence } from "framer-motion";
 import { useEventStore } from "@/stores/eventStore";
+import { LogCardTitle } from "@/components/LogCardTitle";
 
 const typeStyles: Record<string, string> = {
   status: "bg-blue-100 text-blue-700",
@@ -26,7 +27,15 @@ export function EventStream() {
   return (
     <div className="glass-card rounded-2xl shadow-sm overflow-hidden">
       <div className="px-5 py-4 border-b flex items-center justify-between">
-        <h3 className="text-sm font-semibold">事件流</h3>
+        <LogCardTitle
+          title="事件流"
+          summary="这里展示前端收到的实时事件总线，适合快速判断监听链路、侧边栏推送和任务状态切换是否正在正常流动。"
+          highlights={[
+            "会混合展示 status、message、log、error、task_state 等不同事件类型。",
+            "更偏运行态监控入口，适合先看系统有没有在动、哪一段开始异常。",
+            "如果要看服务层输出和错误详情，配合下方“服务日志”一起判断更准确。",
+          ]}
+        />
         <Badge variant="secondary" className="text-[10px] font-normal">
           {events.length}
         </Badge>
