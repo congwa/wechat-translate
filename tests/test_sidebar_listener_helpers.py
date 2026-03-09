@@ -248,32 +248,32 @@ class SidebarHelpersTest(unittest.TestCase):
         self.assertEqual(int.from_bytes(normalized[data_offset + 4 : data_offset + 8], "little"), 4)
 
     def test_create_tts_player_doubao_uses_external_config(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            config_path = pathlib.Path(tmpdir) / "doubao_tts.json"
-            config_path.write_text(
-                json.dumps(
-                    {
-                        "provider": "doubao",
-                        "appid": "appid-1",
-                        "access_token": "token-1",
-                        "resource_id": "seed-tts-2.0",
-                        "speaker": "zh_female_yingyujiaoxue_uranus_bigtts",
-                        "audio_format": "wav",
-                        "sample_rate": 32000,
-                        "speech_rate": -15,
-                        "loudness_rate": 0,
-                        "use_cache": False,
-                    }
-                ),
-                encoding="utf-8",
-            )
-
+        settings = sidebar.DoubaoTTSSettings(
+            endpoint="wss://example.invalid/tts",
+            appid="appid-1",
+            access_token="token-1",
+            resource_id="seed-tts-2.0",
+            speaker="zh_female_yingyujiaoxue_uranus_bigtts",
+            sample_rate=32000,
+            speech_rate=-15,
+            loudness_rate=0,
+            use_cache=False,
+        )
+        with mock.patch.object(sidebar, "load_doubao_tts_settings", return_value=settings), mock.patch.object(
+            sidebar,
+            "resolve_config_file_path",
+            return_value="D:\\mock\\config\\doubao_tts.json",
+        ), mock.patch.object(
+            sidebar,
+            "probe_doubao_websocket_runtime",
+            return_value="",
+        ):
             player, runtime_text = sidebar.create_tts_player(
                 {
                     "provider": "doubao",
-                    "config_path": str(config_path),
+                    "config_path": "config/doubao_tts.json",
                 },
-                config_dir=tmpdir,
+                config_dir="D:\\mock",
             )
 
         self.assertIsInstance(player, sidebar.DoubaoWebsocketTTS)
@@ -283,6 +283,47 @@ class SidebarHelpersTest(unittest.TestCase):
         self.assertIn("speech_rate=-15", runtime_text)
         self.assertIn("loudness_rate=0", runtime_text)
         self.assertIn("use_cache=False", runtime_text)
+
+    def test_create_tts_player_doubao_returns_unavailable_when_websockets_missing(self):
+        settings = sidebar.DoubaoTTSSettings(
+            endpoint="wss://example.invalid/tts",
+            appid="appid-1",
+            access_token="token-1",
+            resource_id="seed-tts-2.0",
+            speaker="zh_female_yingyujiaoxue_uranus_bigtts",
+        )
+        with mock.patch.object(sidebar, "load_doubao_tts_settings", return_value=settings), mock.patch.object(
+            sidebar,
+            "resolve_config_file_path",
+            return_value="D:\\mock\\config\\doubao_tts.json",
+        ), mock.patch.object(
+            sidebar,
+            "probe_doubao_websocket_runtime",
+            return_value="missing Python module 'websockets': No module named 'websockets'",
+        ):
+            player, runtime_text = sidebar.create_tts_player(
+                {
+                    "provider": "doubao",
+                    "config_path": "config/doubao_tts.json",
+                },
+                config_dir="D:\\mock",
+            )
+
+        self.assertIsNone(player)
+        self.assertIn("tts unavailable backend=doubao", runtime_text)
+        self.assertIn("missing Python module 'websockets'", runtime_text)
+
+    def test_check_tts_dependency_packaging_reports_missing_websockets(self):
+        with mock.patch.object(
+            sidebar,
+            "probe_doubao_websocket_runtime",
+            return_value="missing Python module 'websockets': No module named 'websockets'",
+        ):
+            ok, detail = sidebar.check_tts_dependency_packaging({"provider": "doubao"})
+
+        self.assertFalse(ok)
+        self.assertIn("tts dependency check failed backend=doubao", detail)
+        self.assertIn("missing Python module 'websockets'", detail)
 
     def test_doubao_run_blocking_emits_failure_log(self):
         settings = sidebar.DoubaoTTSSettings(

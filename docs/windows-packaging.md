@@ -67,6 +67,16 @@ group_listener_worker.exe --help
 这不是多余动作，而是最小冒烟验证。
 PyInstaller 显示“Build completed”不代表 onefile worker 一定能正常解压和启动；`--help` 过了，至少说明打包产物本身没当场炸。
 
+现在还会额外跑一次：
+
+```powershell
+wechat_sidebar.exe --check-tts-deps
+```
+
+这一步专门盯豆包朗读链路的打包回归。
+原因很直接：`websockets` 是豆包 TTS 的运行时依赖，而且代码里是函数内动态导入；如果不显式收集，PyInstaller 很容易把主程序打出来了，但朗读一触发就报 `No module named 'websockets'`。
+这不是“可选优化”，而是你这次没声音的直接成因。
+
 ## 运行约束
 
 - 只启动 `wechat_sidebar.exe`
@@ -118,6 +128,31 @@ config\listener.json
 主程序不再读源码目录下的 `.env.local`。
 要把 `.env.local` 放到 `wechat_sidebar.exe` 同目录。
 如果只是本机自用包，也可以在打包时直接传 `-CopyDotEnvLocal`。
+
+### 3.1) 打包后消息能进侧边栏，但朗读没声音
+
+先看日志里有没有这类行：
+
+```text
+tts failed backend=doubao error=No module named 'websockets'
+```
+
+如果有，问题不是豆包鉴权，也不是你没点到正文。
+是打包时没把 `websockets` 带进主程序，朗读在导入阶段就死了。
+
+当前构建脚本已经显式加了：
+
+```text
+--collect-submodules websockets
+```
+
+并且会在构建后自动跑：
+
+```powershell
+wechat_sidebar.exe --check-tts-deps
+```
+
+这一步不过，就不要把包当成“可用产物”。
 
 ### 4) 双击 `wechat_sidebar.exe` 没反应
 

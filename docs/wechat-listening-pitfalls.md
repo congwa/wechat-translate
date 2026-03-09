@@ -325,6 +325,20 @@
 - 豆包音频进入 Windows 播放器前，必须先按实际字节数重写 `RIFF` / `data` chunk size，再交给 `winsound`；不能把流式占位头直接落盘播放。
 - 这类问题的判断标准不是“豆包有没有回包”，而是“回包是不是标准 WAV”；曾复现过未修正头部时被标准库解析成异常超长时长，修正后才恢复正常播放。
 
+### 25) 打包后自动朗读被触发了，但完全没声音
+现象：
+- 侧边栏里能看到 `tts auto queued` / `tts body click queued`，说明朗读入口已经触发。
+- 但后面立刻跟着 `tts failed backend=doubao error=No module named 'websockets'`，完全听不到声音。
+
+根因：
+- 豆包 TTS 运行时依赖 `websockets`。
+- 当前代码在真正合成时才 `import websockets`；如果 PyInstaller 没显式收集这个包，主程序照样能启动，但一到朗读分支才现场崩。
+
+处理：
+- 打包脚本对主程序显式加 `--collect-submodules websockets`，不能继续赌 PyInstaller 会自动猜中函数内动态导入。
+- 主程序启动创建 TTS 时，会先做一次豆包依赖探测；若缺依赖，不再伪装成 `tts configured ...`，而是直接记成 `tts unavailable ... reason=missing Python module 'websockets' ...`。
+- 构建后额外执行 `wechat_sidebar.exe --check-tts-deps` 做最小冒烟；这一步失败，说明产物里的豆包朗读链路根本不完整，不该继续分发。
+
 ## 推荐运行命令
 
 ### 低干扰稳定方案（推荐）

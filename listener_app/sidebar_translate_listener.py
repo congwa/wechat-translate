@@ -3,6 +3,7 @@ import asyncio
 import atexit
 import ctypes
 import hashlib
+import importlib
 import json
 import math
 import os
@@ -528,6 +529,22 @@ def list_windows_tts_voices() -> list[dict[str, str]]:
     return voices
 
 
+def probe_python_module(module_name: str, *, required_attr: str = "") -> str:
+    try:
+        module = importlib.import_module(module_name)
+    except Exception as e:
+        return f"missing Python module '{module_name}': {e}"
+    if required_attr:
+        attr = getattr(module, required_attr, None)
+        if not callable(attr):
+            return f"Python module '{module_name}' missing callable '{required_attr}'"
+    return ""
+
+
+def probe_doubao_websocket_runtime() -> str:
+    return probe_python_module("websockets", required_attr="connect")
+
+
 class WindowsSystemTTS:
     def __init__(self, voice_name: str = ""):
         self.voice_name = str(voice_name or "").strip()
@@ -779,6 +796,15 @@ def build_doubao_tts_request_payload(settings: DoubaoTTSSettings, text: str) -> 
     }
 
 
+def build_doubao_tts_runtime_fields(settings: DoubaoTTSSettings, config_path: str) -> str:
+    return (
+        f"backend=doubao config={config_path} "
+        f"resource_id={settings.resource_id} speaker={settings.speaker} format={settings.audio_format} "
+        f"sample_rate={settings.sample_rate} speech_rate={settings.speech_rate} "
+        f"loudness_rate={settings.loudness_rate} use_cache={settings.use_cache}"
+    )
+
+
 def build_doubao_full_client_request_frame(payload: bytes) -> bytes:
     return DOUBAO_HEADER_FIXED + struct.pack(">I", len(payload)) + payload
 
@@ -1028,18 +1054,29 @@ def create_tts_player(
         return None, "tts unavailable: no english system voice detected"
 
     config_path = str(tts_cfg.get("config_path") or DOUBAO_TTS_DEFAULT_CONFIG_PATH).strip()
-    player = DoubaoWebsocketTTS.create_from_config(config_path, base_dir=config_dir)
-    settings = player.settings
+    resolved_config_path = resolve_config_file_path(config_path, base_dir=config_dir)
+    settings = load_doubao_tts_settings(config_path, base_dir=config_dir)
+    runtime_fields = build_doubao_tts_runtime_fields(settings, resolved_config_path)
+    dependency_error = probe_doubao_websocket_runtime()
+    if dependency_error:
+        return None, f"tts unavailable {runtime_fields} reason={dependency_error}"
+    player = DoubaoWebsocketTTS(settings)
     return (
         player,
-        (
-            "tts configured "
-            f"backend=doubao config={resolve_config_file_path(config_path, base_dir=config_dir)} "
-            f"resource_id={settings.resource_id} speaker={settings.speaker} format={settings.audio_format} "
-            f"sample_rate={settings.sample_rate} speech_rate={settings.speech_rate} "
-            f"loudness_rate={settings.loudness_rate} use_cache={settings.use_cache}"
-        ),
+        f"tts configured {runtime_fields}",
     )
+
+
+def check_tts_dependency_packaging(
+    tts_cfg: dict[str, Any],
+) -> tuple[bool, str]:
+    provider = normalize_tts_provider(tts_cfg.get("provider", DEFAULT_TTS_PROVIDER))
+    if provider == "windows_system":
+        return True, "tts dependency check passed backend=windows_system"
+    dependency_error = probe_doubao_websocket_runtime()
+    if dependency_error:
+        return False, f"tts dependency check failed backend=doubao reason={dependency_error}"
+    return True, "tts dependency check passed backend=doubao module=websockets"
 
 
 def cleanup_dedupe_cache(cache: Dict[str, float], now_ts: float):
@@ -1677,7 +1714,6 @@ def build_translate_fallback(cn_text: str, err: Exception, behavior: str) -> str
 class SidebarUI:
     def __init__(
         self,
-        title: str,
         width: int,
         side: str,
         targets: list[str],
@@ -1686,7 +1722,7 @@ class SidebarUI:
         tts_auto_read_active_chat: bool = True,
     ):
         self.root = tk.Tk()
-        self.root.title(title)
+        self.root.title("WeChat Sidebar session-only")
         self.ui_font_family = pick_ui_font_family(self.root)
         self.root.option_add("*Font", (self.ui_font_family, DEFAULT_META_FONT_SIZE))
         self.topmost_var = tk.BooleanVar(value=False)
@@ -2340,6 +2376,11 @@ def main():
         description="Sidebar listener: monitor target chats in session-only mode and show translated output."
     )
     parser.add_argument("--config", default=DEFAULT_CONFIG_PATH, help="JSON config path")
+    parser.add_argument(
+        "--check-tts-deps",
+        action="store_true",
+        help="Validate packaged TTS Python dependencies and exit",
+    )
     parser.add_argument("--target", default="", help=argparse.SUPPRESS)
     args = parser.parse_args()
 
@@ -2357,6 +2398,16 @@ def main():
     display_cfg = config.get("display", {}) if isinstance(config.get("display", {}), dict) else {}
     tts_cfg = config.get("tts", {}) if isinstance(config.get("tts", {}), dict) else {}
     logging_cfg = config.get("logging", {}) if isinstance(config.get("logging", {}), dict) else {}
+
+    if args.check_tts_deps:
+        try:
+            ok, detail = check_tts_dependency_packaging(tts_cfg)
+        except RuntimeError as e:
+            print(f"[sidebar] tts dependency check failed: {e}", file=sys.stderr)
+            raise SystemExit(2)
+        stream = sys.stdout if ok else sys.stderr
+        print(f"[sidebar] {detail}", file=stream, flush=True)
+        raise SystemExit(0 if ok else 2)
 
     targets = normalize_targets(listen_cfg.get("targets"))
     if not targets:
@@ -2461,7 +2512,6 @@ def main():
     atexit.register(release_target_lock)
 
     ui = SidebarUI(
-        title="WeChat Sidebar session-only",
         width=width,
         side=side,
         targets=running_targets,

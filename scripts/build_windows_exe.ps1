@@ -238,6 +238,7 @@ $mainArgs = @(
     "--workpath", $MainWorkRoot,
     "--specpath", $SpecRoot,
     "--paths", $RepoRoot,
+    "--collect-submodules", "websockets",
     "--add-data", $ConfigData,
     $MainSource
 )
@@ -256,6 +257,13 @@ Invoke-SmokeTestCommand `
     -StepName "Worker smoke test (--help)" `
     -FilePath $WorkerExe `
     -Arguments @("--help")
+
+$MainExe = Join-Path $MainAppRoot "$MainName.exe"
+Write-Host "Smoke testing sidebar TTS dependencies..."
+Invoke-SmokeTestCommand `
+    -StepName "Sidebar TTS dependency smoke test" `
+    -FilePath $MainExe `
+    -Arguments @("--check-tts-deps")
 
 Copy-Item $WorkerExe (Join-Path $MainAppRoot "$WorkerName.exe") -Force
 
