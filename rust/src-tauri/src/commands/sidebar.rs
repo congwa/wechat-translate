@@ -1,0 +1,136 @@
+use crate::sidebar_window::{SidebarWindowState, WindowMode};
+use crate::task_manager::TaskManager;
+use crate::translator::DeepLXTranslator;
+use std::sync::Arc;
+
+#[tauri::command]
+pub async fn sidebar_start(
+    manager: tauri::State<'_, TaskManager>,
+    targets: Option<Vec<String>>,
+    translate_enabled: Option<bool>,
+    deeplx_url: Option<String>,
+    source_lang: Option<String>,
+    target_lang: Option<String>,
+    timeout_seconds: Option<f64>,
+    beta_image_capture: Option<bool>,
+    beta_avatar_capture: Option<bool>,
+) -> Result<serde_json::Value, String> {
+    manager
+        .enable_sidebar(
+            targets.unwrap_or_default(),
+            translate_enabled.unwrap_or(false),
+            deeplx_url.unwrap_or_default(),
+            source_lang.unwrap_or_else(|| "auto".to_string()),
+            target_lang.unwrap_or_else(|| "EN".to_string()),
+            timeout_seconds.unwrap_or(8.0),
+            beta_image_capture.unwrap_or(false),
+            beta_avatar_capture.unwrap_or(false),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok(serde_json::json!({ "ok": true, "message": "sidebar enabled" }))
+}
+
+#[tauri::command]
+pub async fn sidebar_stop(
+    app: tauri::AppHandle,
+    manager: tauri::State<'_, TaskManager>,
+    sidebar_state: tauri::State<'_, Arc<SidebarWindowState>>,
+) -> Result<serde_json::Value, String> {
+    manager.disable_sidebar().await.map_err(|e| e.to_string())?;
+    let _ = sidebar_state.close(&app).await;
+    Ok(serde_json::json!({ "ok": true, "message": "sidebar disabled" }))
+}
+
+#[tauri::command]
+pub async fn live_start(
+    app: tauri::AppHandle,
+    manager: tauri::State<'_, TaskManager>,
+    sidebar_state: tauri::State<'_, Arc<SidebarWindowState>>,
+    translate_enabled: Option<bool>,
+    deeplx_url: Option<String>,
+    source_lang: Option<String>,
+    target_lang: Option<String>,
+    interval_seconds: Option<f64>,
+    beta_image_capture: Option<bool>,
+    beta_avatar_capture: Option<bool>,
+    window_mode: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let mode = WindowMode::from_str_opt(window_mode.as_deref());
+
+    let state = manager.get_task_state();
+    if !state.monitoring {
+        let interval = interval_seconds.unwrap_or(1.0);
+        manager
+            .start_monitoring(interval)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+
+    manager
+        .enable_sidebar(
+            vec![],
+            translate_enabled.unwrap_or(false),
+            deeplx_url.unwrap_or_default(),
+            source_lang.unwrap_or_else(|| "auto".to_string()),
+            target_lang.unwrap_or_else(|| "EN".to_string()),
+            8.0,
+            beta_image_capture.unwrap_or(false),
+            beta_avatar_capture.unwrap_or(false),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let _ = sidebar_state.open(&app, None, mode).await;
+
+    Ok(serde_json::json!({ "ok": true, "message": "live started" }))
+}
+
+#[tauri::command]
+pub async fn sidebar_window_open(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<SidebarWindowState>>,
+    width: Option<f64>,
+    window_mode: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let mode = WindowMode::from_str_opt(window_mode.as_deref());
+    state
+        .open(&app, width, mode)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(serde_json::json!({ "ok": true, "message": "sidebar window opened" }))
+}
+
+#[tauri::command]
+pub async fn sidebar_window_close(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<SidebarWindowState>>,
+) -> Result<serde_json::Value, String> {
+    state.close(&app).await.map_err(|e| e.to_string())?;
+    Ok(serde_json::json!({ "ok": true, "message": "sidebar window closed" }))
+}
+
+#[tauri::command]
+pub async fn translate_test(
+    deeplx_url: String,
+    source_lang: Option<String>,
+    target_lang: Option<String>,
+    timeout_seconds: Option<f64>,
+) -> Result<serde_json::Value, String> {
+    if deeplx_url.is_empty() {
+        return Err("DeepLX 地址不能为空".to_string());
+    }
+
+    let translator = DeepLXTranslator::new(
+        &deeplx_url,
+        &source_lang.unwrap_or_else(|| "auto".to_string()),
+        &target_lang.unwrap_or_else(|| "EN".to_string()),
+        timeout_seconds.unwrap_or(8.0),
+    );
+
+    match translator.translate("你好，世界").await {
+        Ok(result) => Ok(serde_json::json!({ "ok": true, "data": result })),
+        Err(e) => Err(format!("{}", e)),
+    }
+}

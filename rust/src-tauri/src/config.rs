@@ -1,0 +1,304 @@
+use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::path::{Path, PathBuf};
+
+/// Wrapper around the resolved config base directory, registered as Tauri managed state.
+pub struct ConfigDir(pub PathBuf);
+
+fn config_path(base: &Path) -> PathBuf {
+    base.join("config").join("listener.json")
+}
+
+fn ensure_config_dir(base: &Path) {
+    let path = config_path(base);
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Typed config structs
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ListenConfig {
+    #[serde(default = "default_mode")]
+    pub mode: String,
+    #[serde(default)]
+    pub targets: Vec<String>,
+    #[serde(default = "default_interval")]
+    pub interval_seconds: f64,
+    #[serde(default = "default_dedupe")]
+    pub dedupe_window_seconds: f64,
+    #[serde(default = "default_session_preview_dedupe")]
+    pub session_preview_dedupe_window_seconds: f64,
+    #[serde(default = "default_cross_source_merge")]
+    pub cross_source_merge_window_seconds: f64,
+    #[serde(default)]
+    pub focus_refresh: bool,
+    #[serde(default)]
+    pub worker_debug: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TranslateConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_provider")]
+    pub provider: String,
+    #[serde(default = "default_source_lang")]
+    pub source_lang: String,
+    #[serde(default = "default_target_lang")]
+    pub target_lang: String,
+    #[serde(default = "default_timeout")]
+    pub timeout_seconds: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DisplayConfig {
+    #[serde(default = "default_true")]
+    pub english_only: bool,
+    #[serde(default = "default_on_translate_fail")]
+    pub on_translate_fail: String,
+    #[serde(default = "default_width")]
+    pub width: u32,
+    #[serde(default = "default_side")]
+    pub side: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoggingConfig {
+    #[serde(default = "default_log_file")]
+    pub file: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AppConfig {
+    #[serde(default)]
+    pub listen: ListenConfig,
+    #[serde(default)]
+    pub translate: TranslateConfig,
+    #[serde(default)]
+    pub display: DisplayConfig,
+    #[serde(default)]
+    pub logging: LoggingConfig,
+}
+
+// ---------------------------------------------------------------------------
+// Default helpers
+// ---------------------------------------------------------------------------
+
+fn default_mode() -> String {
+    "session".into()
+}
+fn default_interval() -> f64 {
+    1.0
+}
+fn default_dedupe() -> f64 {
+    2.5
+}
+fn default_session_preview_dedupe() -> f64 {
+    20.0
+}
+fn default_cross_source_merge() -> f64 {
+    3.0
+}
+fn default_true() -> bool {
+    true
+}
+fn default_provider() -> String {
+    "deeplx".into()
+}
+fn default_source_lang() -> String {
+    "auto".into()
+}
+fn default_target_lang() -> String {
+    "EN".into()
+}
+fn default_timeout() -> f64 {
+    8.0
+}
+fn default_on_translate_fail() -> String {
+    "show_cn_with_reason".into()
+}
+fn default_width() -> u32 {
+    420
+}
+fn default_side() -> String {
+    "right".into()
+}
+fn default_log_file() -> String {
+    "logs/sidebar_listener.log".into()
+}
+
+impl Default for ListenConfig {
+    fn default() -> Self {
+        Self {
+            mode: default_mode(),
+            targets: vec![],
+            interval_seconds: default_interval(),
+            dedupe_window_seconds: default_dedupe(),
+            session_preview_dedupe_window_seconds: default_session_preview_dedupe(),
+            cross_source_merge_window_seconds: default_cross_source_merge(),
+            focus_refresh: false,
+            worker_debug: false,
+        }
+    }
+}
+
+impl Default for TranslateConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            provider: default_provider(),
+            source_lang: default_source_lang(),
+            target_lang: default_target_lang(),
+            timeout_seconds: default_timeout(),
+        }
+    }
+}
+
+impl Default for DisplayConfig {
+    fn default() -> Self {
+        Self {
+            english_only: true,
+            on_translate_fail: default_on_translate_fail(),
+            width: default_width(),
+            side: default_side(),
+        }
+    }
+}
+
+impl Default for LoggingConfig {
+    fn default() -> Self {
+        Self {
+            file: default_log_file(),
+        }
+    }
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        Self {
+            listen: ListenConfig::default(),
+            translate: TranslateConfig::default(),
+            display: DisplayConfig::default(),
+            logging: LoggingConfig::default(),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Validation
+// ---------------------------------------------------------------------------
+
+impl AppConfig {
+    pub fn validate(&self) -> Vec<String> {
+        let mut errors = Vec::new();
+
+        if self.listen.mode != "session" {
+            errors.push(format!(
+                "listen.mode 只允许 \"session\"，当前值: \"{}\"",
+                self.listen.mode
+            ));
+        }
+        if self.listen.interval_seconds < 0.3 {
+            errors.push(format!(
+                "listen.interval_seconds 不能小于 0.3，当前值: {}",
+                self.listen.interval_seconds
+            ));
+        }
+        if self.listen.dedupe_window_seconds <= 0.0 {
+            errors.push(format!(
+                "listen.dedupe_window_seconds 必须大于 0，当前值: {}",
+                self.listen.dedupe_window_seconds
+            ));
+        }
+        if self.listen.session_preview_dedupe_window_seconds <= 0.0 {
+            errors.push(format!(
+                "listen.session_preview_dedupe_window_seconds 必须大于 0，当前值: {}",
+                self.listen.session_preview_dedupe_window_seconds
+            ));
+        }
+        if self.listen.cross_source_merge_window_seconds <= 0.0 {
+            errors.push(format!(
+                "listen.cross_source_merge_window_seconds 必须大于 0，当前值: {}",
+                self.listen.cross_source_merge_window_seconds
+            ));
+        }
+
+        if self.translate.timeout_seconds < 1.0 {
+            errors.push(format!(
+                "translate.timeout_seconds 不能小于 1.0，当前值: {}",
+                self.translate.timeout_seconds
+            ));
+        }
+
+        if !(200..=1200).contains(&self.display.width) {
+            errors.push(format!(
+                "display.width 须在 200–1200 之间，当前值: {}",
+                self.display.width
+            ));
+        }
+        if self.display.side != "left" && self.display.side != "right" {
+            errors.push(format!(
+                "display.side 只允许 \"left\" 或 \"right\"，当前值: \"{}\"",
+                self.display.side
+            ));
+        }
+        if self.display.on_translate_fail != "show_cn_with_reason"
+            && self.display.on_translate_fail != "hide"
+        {
+            errors.push(format!(
+                "display.on_translate_fail 只允许 \"show_cn_with_reason\" 或 \"hide\"，当前值: \"{}\"",
+                self.display.on_translate_fail
+            ));
+        }
+
+        errors
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Read / Write / Default
+// ---------------------------------------------------------------------------
+
+/// Read config from disk. Missing fields are filled with defaults.
+pub fn read_config(base: &Path) -> Result<Value> {
+    let path = config_path(base);
+    let app_config: AppConfig = if path.exists() {
+        let content = std::fs::read_to_string(&path)
+            .context(format!("cannot read config: {}", path.display()))?;
+        serde_json::from_str(&content).context("config JSON parse failed")?
+    } else {
+        AppConfig::default()
+    };
+    serde_json::to_value(&app_config).context("config serialize failed")
+}
+
+/// Validate and write config. Returns list of validation errors (empty = success).
+pub fn validate_and_write_config(
+    base: &Path,
+    raw: &Value,
+) -> Result<(Vec<String>, Option<String>)> {
+    let app_config: AppConfig =
+        serde_json::from_value(raw.clone()).context("配置格式不正确，无法解析为有效配置结构")?;
+
+    let errors = app_config.validate();
+    if !errors.is_empty() {
+        return Ok((errors, None));
+    }
+
+    let canonical = serde_json::to_value(&app_config)?;
+    ensure_config_dir(base);
+    let path = config_path(base);
+    let content = serde_json::to_string_pretty(&canonical)?;
+    std::fs::write(&path, content).context(format!("cannot write config: {}", path.display()))?;
+    Ok((vec![], Some(path.display().to_string())))
+}
+
+/// Returns the default config as JSON Value.
+pub fn default_config_value() -> Value {
+    serde_json::to_value(AppConfig::default()).unwrap()
+}
