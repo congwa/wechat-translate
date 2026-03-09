@@ -19,8 +19,6 @@ import {
   Upload,
   RotateCcw,
   Image,
-  Eye,
-  EyeOff,
   AlertCircle,
   Code2,
 } from "lucide-react";
@@ -145,7 +143,6 @@ export function SettingsPage() {
   const closeToTray = useFormStore((s) => s.closeToTray);
   const translateEnabled = useFormStore((s) => s.translateEnabled);
   const deeplxUrl = useFormStore((s) => s.deeplxUrl);
-  const deeplxApiKey = useFormStore((s) => s.deeplxApiKey);
   const sourceLang = useFormStore((s) => s.sourceLang);
   const targetLang = useFormStore((s) => s.targetLang);
   const translateTimeout = useFormStore((s) => s.translateTimeout);
@@ -162,14 +159,30 @@ export function SettingsPage() {
   const [configDirty, setConfigDirty] = useState(false);
   const [configLoading, setConfigLoading] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
-  const [showToken, setShowToken] = useState(false);
 
   const lastLoadedRef = useRef("");
   const validateTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
 
-  function composeDeeplxUrl(base: string, token: string): string {
-    const trimmed = base.replace(/\/+$/, "");
-    return token ? `${trimmed}/${token}/translate` : `${trimmed}/translate`;
+  function getTranslateConfigStatus() {
+    if (!translateEnabled) {
+      return {
+        tone: "warn" as const,
+        title: "翻译已禁用",
+        detail: "配置仍会保留，但当前不会调用翻译接口。",
+      };
+    }
+    if (!deeplxUrl.trim()) {
+      return {
+        tone: "error" as const,
+        title: "翻译接口未配置",
+        detail: "缺少 DeepLX 地址；当前运行时无法构造翻译接口。",
+      };
+    }
+    return {
+      tone: "ok" as const,
+      title: "翻译接口已配置并会写入配置文件",
+      detail: "重启应用后会从 /rust 配置文件恢复当前完整翻译接口 URL。",
+    };
   }
 
   // --- Config sync: load from backend on mount (one-time for form fields) ---
@@ -194,13 +207,19 @@ export function SettingsPage() {
       const patch: Record<string, string | boolean | number> = {};
       const stored = useFormStore.getState();
 
-      if (translate?.source_lang && typeof translate.source_lang === "string" && stored.sourceLang === "auto") {
+      if (typeof translate?.enabled === "boolean") {
+        patch.translateEnabled = translate.enabled;
+      }
+      if (typeof translate?.deeplx_url === "string") {
+        patch.deeplxUrl = translate.deeplx_url;
+      }
+      if (typeof translate?.source_lang === "string") {
         patch.sourceLang = translate.source_lang;
       }
-      if (translate?.target_lang && typeof translate.target_lang === "string" && stored.targetLang === "EN") {
+      if (typeof translate?.target_lang === "string") {
         patch.targetLang = translate.target_lang;
       }
-      if (translate?.timeout_seconds && typeof translate.timeout_seconds === "number" && stored.translateTimeout === "8") {
+      if (typeof translate?.timeout_seconds === "number") {
         patch.translateTimeout = String(translate.timeout_seconds);
       }
       if (listen?.interval_seconds && typeof listen.interval_seconds === "number" && stored.pollInterval === "1") {
@@ -300,10 +319,11 @@ export function SettingsPage() {
     const display = parsed.display as Record<string, unknown> | undefined;
 
     if (translate) {
+      if (typeof translate.enabled === "boolean") patch.translateEnabled = translate.enabled;
+      if (typeof translate.deeplx_url === "string") patch.deeplxUrl = translate.deeplx_url;
       if (typeof translate.source_lang === "string") patch.sourceLang = translate.source_lang;
       if (typeof translate.target_lang === "string") patch.targetLang = translate.target_lang;
       if (typeof translate.timeout_seconds === "number") patch.translateTimeout = String(translate.timeout_seconds);
-      if (typeof translate.enabled === "boolean") patch.translateEnabled = translate.enabled;
     }
     if (listen) {
       if (typeof listen.interval_seconds === "number") patch.pollInterval = String(listen.interval_seconds);
@@ -398,9 +418,8 @@ export function SettingsPage() {
   async function handleTranslateTest() {
     setBusy("translate_test");
     try {
-      const fullUrl = composeDeeplxUrl(deeplxUrl, deeplxApiKey);
       const resp = (await api.translateTest({
-        deeplxUrl: fullUrl,
+        deeplxUrl: deeplxUrl.trim(),
         sourceLang,
         targetLang,
         timeoutSeconds: parseFloat(translateTimeout) || 8,
@@ -628,10 +647,13 @@ export function SettingsPage() {
           <Input
             placeholder="https://api.deeplx.org"
             value={deeplxUrl}
-            onChange={(e) => set({ deeplxUrl: e.target.value })}
+            onChange={(e) => {
+              const val = e.target.value;
+              setAndSync({ deeplxUrl: val }, "translate.deeplx_url", val);
+            }}
           />
           <p className="text-[11px] text-muted-foreground/70">
-            只填域名，Token 填在下方。前往{" "}
+            填写完整翻译接口 URL。前往{" "}
             <a
               href="https://connect.linux.do/dash/deeplx"
               target="_blank"
@@ -640,33 +662,23 @@ export function SettingsPage() {
             >
               connect.linux.do/dash/deeplx
             </a>
-            {" "}获取
+            {" "}获取完整 URL
           </p>
         </div>
 
-        <div className="space-y-2">
-          <Label className="text-xs text-muted-foreground">Access Token</Label>
-          <div className="relative">
-            <Input
-              type={showToken ? "text" : "password"}
-              placeholder="从 linux.do 获取的 Token"
-              value={deeplxApiKey}
-              onChange={(e) => set({ deeplxApiKey: e.target.value })}
-              className="pr-9"
-            />
-            <button
-              type="button"
-              onClick={() => setShowToken((v) => !v)}
-              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
-            >
-              {showToken ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-            </button>
-          </div>
-          {showToken && deeplxUrl.trim() && (
-            <p className="text-[11px] text-muted-foreground/70 break-all font-mono">
-              {composeDeeplxUrl(deeplxUrl, deeplxApiKey)}
-            </p>
-          )}
+
+
+        <div
+          className={`rounded-xl border px-3 py-2 text-[11px] ${
+            getTranslateConfigStatus().tone === "ok"
+              ? "border-emerald-200 bg-emerald-50/70 text-emerald-700 dark:border-emerald-800/50 dark:bg-emerald-950/20 dark:text-emerald-300"
+              : getTranslateConfigStatus().tone === "warn"
+                ? "border-amber-200 bg-amber-50/70 text-amber-700 dark:border-amber-800/50 dark:bg-amber-950/20 dark:text-amber-300"
+                : "border-red-200 bg-red-50/70 text-red-700 dark:border-red-800/50 dark:bg-red-950/20 dark:text-red-300"
+          }`}
+        >
+          <div className="font-medium">{getTranslateConfigStatus().title}</div>
+          <div className="mt-1 opacity-90">{getTranslateConfigStatus().detail}</div>
         </div>
 
         <div className="grid grid-cols-3 gap-4">

@@ -86,15 +86,19 @@ function MainApp() {
         showToast("浮窗已关闭", true);
       } else {
         const store = useFormStore.getState();
-        const base = store.deeplxUrl.replace(/\/+$/, "");
-        const fullUrl = store.deeplxApiKey
-          ? `${base}/${store.deeplxApiKey}/translate`
-          : `${base}/translate`;
+        const resp = (await api.configGet()) as unknown as Record<string, unknown>;
+        const data = (resp.data ?? {}) as Record<string, unknown>;
+        const translate = (data.translate ?? {}) as Record<string, unknown>;
+        const savedUrl = typeof translate.deeplx_url === "string" ? translate.deeplx_url : store.deeplxUrl;
+        const savedEnabled = typeof translate.enabled === "boolean" ? translate.enabled : store.translateEnabled;
+        const savedSource = typeof translate.source_lang === "string" ? translate.source_lang : store.sourceLang;
+        const savedTarget = typeof translate.target_lang === "string" ? translate.target_lang : store.targetLang;
+        const fullUrl = savedUrl.trim();
         await api.liveStart({
-          translateEnabled: store.translateEnabled,
+          translateEnabled: savedEnabled,
           deeplxUrl: fullUrl,
-          sourceLang: store.sourceLang,
-          targetLang: store.targetLang,
+          sourceLang: savedSource,
+          targetLang: savedTarget,
           intervalSeconds: parseFloat(store.pollInterval) || 1,
           imageCapture: store.imageCapture,
           windowMode: store.sidebarWindowMode,

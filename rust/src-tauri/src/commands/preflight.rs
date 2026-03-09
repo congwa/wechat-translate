@@ -22,7 +22,6 @@ fn check_wechat_pid() -> Option<i32> {
     ax_reader::resolve_wechat_pid().ok()
 }
 
-
 fn check_wechat_accessibility(pid: i32) -> bool {
     unsafe {
         let app = accessibility_sys::AXUIElementCreateApplication(pid);
@@ -248,10 +247,23 @@ mod tests {
         let obj = value
             .as_object()
             .expect("preflight result should return json object");
-        assert_eq!(obj.get("accessibility_ok").and_then(|v| v.as_bool()), Some(true));
-        assert_eq!(obj.get("wechat_accessible").and_then(|v| v.as_bool()), Some(false));
-        assert_eq!(obj.get("wechat_has_window").and_then(|v| v.as_bool()), Some(false));
-        assert_eq!(obj.get("can_prompt_accessibility").and_then(|v| v.as_bool()), Some(false));
+        assert_eq!(
+            obj.get("accessibility_ok").and_then(|v| v.as_bool()),
+            Some(true)
+        );
+        assert_eq!(
+            obj.get("wechat_accessible").and_then(|v| v.as_bool()),
+            Some(false)
+        );
+        assert_eq!(
+            obj.get("wechat_has_window").and_then(|v| v.as_bool()),
+            Some(false)
+        );
+        assert_eq!(
+            obj.get("can_prompt_accessibility")
+                .and_then(|v| v.as_bool()),
+            Some(false)
+        );
     }
 
     #[test]
@@ -260,8 +272,15 @@ mod tests {
         let obj = value
             .as_object()
             .expect("preflight result should return json object");
-        assert_eq!(obj.get("accessibility_ok").and_then(|v| v.as_bool()), Some(false));
-        assert_eq!(obj.get("can_prompt_accessibility").and_then(|v| v.as_bool()), Some(true));
+        assert_eq!(
+            obj.get("accessibility_ok").and_then(|v| v.as_bool()),
+            Some(false)
+        );
+        assert_eq!(
+            obj.get("can_prompt_accessibility")
+                .and_then(|v| v.as_bool()),
+            Some(true)
+        );
     }
 
     #[test]

@@ -9,7 +9,6 @@ interface SettingsFields {
 
   translateEnabled: boolean;
   deeplxUrl: string;
-  deeplxApiKey: string;
   sourceLang: string;
   targetLang: string;
   translateTimeout: string;
@@ -38,7 +37,6 @@ export const useFormStore = create<FormStoreState>()(
 
       translateEnabled: true,
       deeplxUrl: "",
-      deeplxApiKey: "",
       sourceLang: "auto",
       targetLang: "EN",
       translateTimeout: "8",
@@ -63,7 +61,6 @@ export const useFormStore = create<FormStoreState>()(
         closeToTray: state.closeToTray,
         translateEnabled: state.translateEnabled,
         deeplxUrl: state.deeplxUrl,
-        deeplxApiKey: state.deeplxApiKey,
         sourceLang: state.sourceLang,
         targetLang: state.targetLang,
         translateTimeout: state.translateTimeout,

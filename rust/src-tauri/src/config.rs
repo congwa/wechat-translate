@@ -47,6 +47,12 @@ pub struct TranslateConfig {
     pub enabled: bool,
     #[serde(default = "default_provider")]
     pub provider: String,
+    #[serde(default = "default_deeplx_url")]
+    pub deeplx_url: String,
+    #[serde(default, skip_serializing)]
+    pub deeplx_base_url: String,
+    #[serde(default, skip_serializing)]
+    pub deeplx_access_token: String,
     #[serde(default = "default_source_lang")]
     pub source_lang: String,
     #[serde(default = "default_target_lang")]
@@ -110,6 +116,9 @@ fn default_true() -> bool {
 fn default_provider() -> String {
     "deeplx".into()
 }
+fn default_deeplx_url() -> String {
+    "".into()
+}
 fn default_source_lang() -> String {
     "auto".into()
 }
@@ -152,10 +161,31 @@ impl Default for TranslateConfig {
         Self {
             enabled: true,
             provider: default_provider(),
+            deeplx_url: default_deeplx_url(),
+            deeplx_base_url: String::new(),
+            deeplx_access_token: String::new(),
             source_lang: default_source_lang(),
             target_lang: default_target_lang(),
             timeout_seconds: default_timeout(),
         }
+    }
+}
+
+impl TranslateConfig {
+    fn normalize_legacy(&mut self) {
+        if self.deeplx_url.trim().is_empty() {
+            let base = self.deeplx_base_url.trim().trim_end_matches('/');
+            let token = self.deeplx_access_token.trim();
+            if !base.is_empty() {
+                self.deeplx_url = if token.is_empty() {
+                    format!("{base}/translate")
+                } else {
+                    format!("{base}/{token}/translate")
+                };
+            }
+        }
+        self.deeplx_base_url.clear();
+        self.deeplx_access_token.clear();
     }
 }
 
@@ -194,6 +224,10 @@ impl Default for AppConfig {
 // ---------------------------------------------------------------------------
 
 impl AppConfig {
+    fn normalize(&mut self) {
+        self.translate.normalize_legacy();
+    }
+
     pub fn validate(&self) -> Vec<String> {
         let mut errors = Vec::new();
 
@@ -267,13 +301,14 @@ impl AppConfig {
 /// Read config from disk. Missing fields are filled with defaults.
 pub fn read_config(base: &Path) -> Result<Value> {
     let path = config_path(base);
-    let app_config: AppConfig = if path.exists() {
+    let mut app_config: AppConfig = if path.exists() {
         let content = std::fs::read_to_string(&path)
             .context(format!("cannot read config: {}", path.display()))?;
         serde_json::from_str(&content).context("config JSON parse failed")?
     } else {
         AppConfig::default()
     };
+    app_config.normalize();
     serde_json::to_value(&app_config).context("config serialize failed")
 }
 
@@ -282,8 +317,9 @@ pub fn validate_and_write_config(
     base: &Path,
     raw: &Value,
 ) -> Result<(Vec<String>, Option<String>)> {
-    let app_config: AppConfig =
+    let mut app_config: AppConfig =
         serde_json::from_value(raw.clone()).context("配置格式不正确，无法解析为有效配置结构")?;
+    app_config.normalize();
 
     let errors = app_config.validate();
     if !errors.is_empty() {
@@ -301,4 +337,62 @@ pub fn validate_and_write_config(
 /// Returns the default config as JSON Value.
 pub fn default_config_value() -> Value {
     serde_json::to_value(AppConfig::default()).unwrap()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{default_config_value, read_config, validate_and_write_config};
+    use serde_json::json;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_base() -> PathBuf {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let base = std::env::temp_dir().join(format!("wechat-pc-auto-config-{suffix}"));
+        let _ = std::fs::create_dir_all(&base);
+        base
+    }
+
+    #[test]
+    fn default_config_should_include_translate_endpoint_fields() {
+        let value = default_config_value();
+        let translate = value.get("translate").expect("translate section");
+        assert_eq!(
+            translate.get("deeplx_url").and_then(|v| v.as_str()),
+            Some("")
+        );
+        assert_eq!(translate.get("deeplx_base_url"), None);
+    }
+
+    #[test]
+    fn validate_and_write_config_should_persist_translate_endpoint_fields() {
+        let base = temp_base();
+        let raw = json!({
+            "listen": { "mode": "session", "interval_seconds": 1.0 },
+            "translate": {
+                "enabled": true,
+                "provider": "deeplx",
+                "deeplx_url": "https://api.deeplx.org/Pte_wVKtHoepysL2Q94Mq2LEZHE2Vnnl02tG-IogwGM/translate",
+                "source_lang": "auto",
+                "target_lang": "EN",
+                "timeout_seconds": 8.0
+            },
+            "display": { "english_only": true, "on_translate_fail": "show_cn_with_reason", "width": 420, "side": "right" },
+            "logging": { "file": "logs/sidebar_listener.log" }
+        });
+
+        let (errors, _) = validate_and_write_config(&base, &raw).expect("write config");
+        assert!(errors.is_empty());
+
+        let saved = read_config(&base).expect("read config");
+        let translate = saved.get("translate").expect("translate section");
+        assert_eq!(
+            translate.get("deeplx_url").and_then(|v| v.as_str()),
+            Some("https://api.deeplx.org/Pte_wVKtHoepysL2Q94Mq2LEZHE2Vnnl02tG-IogwGM/translate")
+        );
+        assert_eq!(translate.get("deeplx_base_url"), None);
+    }
 }

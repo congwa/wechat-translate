@@ -23,7 +23,6 @@ const CG_WINDOW_LIST_EXCLUDE_DESKTOP: u32 = 1 << 4;
 const CG_NULL_WINDOW_ID: u32 = 0;
 const MIN_MAIN_WINDOW_SIZE: f64 = 200.0;
 
-
 static TIME_HINT_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^(?:昨天|今天|星期[一二三四五六日天])?\s*\d{1,2}:\d{2}$").unwrap()
 });
@@ -60,7 +59,11 @@ unsafe fn cg_dict_get_f64(
         core_foundation_sys::number::kCFNumberFloat64Type,
         &mut value as *mut f64 as *mut std::ffi::c_void,
     );
-    if ok { Some(value) } else { None }
+    if ok {
+        Some(value)
+    } else {
+        None
+    }
 }
 
 unsafe fn cg_dict_get_i32(
@@ -81,7 +84,11 @@ unsafe fn cg_dict_get_i32(
         core_foundation_sys::number::kCFNumberSInt32Type,
         &mut value as *mut i32 as *mut std::ffi::c_void,
     );
-    if ok { Some(value) } else { None }
+    if ok {
+        Some(value)
+    } else {
+        None
+    }
 }
 
 fn get_wechat_pid_from_process_list() -> Option<i32> {
@@ -105,11 +112,17 @@ fn get_wechat_pid_from_process_list() -> Option<i32> {
             if pid <= 0 {
                 continue;
             }
-            let len = proc_name(pid, buf.as_mut_ptr() as *mut std::ffi::c_void, buf.len() as u32);
+            let len = proc_name(
+                pid,
+                buf.as_mut_ptr() as *mut std::ffi::c_void,
+                buf.len() as u32,
+            );
             if len <= 0 {
                 continue;
             }
-            let name = String::from_utf8_lossy(&buf[..len as usize]).trim().to_string();
+            let name = String::from_utf8_lossy(&buf[..len as usize])
+                .trim()
+                .to_string();
             if WECHAT_PROCESS_NAMES.contains(&name.as_str()) {
                 return Some(pid);
             }
@@ -144,9 +157,8 @@ fn get_wechat_pid_from_cg_window_list() -> Option<i32> {
             if name_ptr.is_null() {
                 continue;
             }
-            let name_cf = CFString::wrap_under_get_rule(
-                name_ptr as core_foundation_sys::string::CFStringRef,
-            );
+            let name_cf =
+                CFString::wrap_under_get_rule(name_ptr as core_foundation_sys::string::CFStringRef);
             let name = name_cf.to_string();
             if !WECHAT_PROCESS_NAMES.contains(&name.as_str()) {
                 continue;
@@ -181,7 +193,10 @@ fn get_wechat_pid_from_cg_window_list() -> Option<i32> {
                 continue;
             };
             let area = w * h;
-            if best.as_ref().map_or(true, |(_, best_area)| area > *best_area) {
+            if best
+                .as_ref()
+                .map_or(true, |(_, best_area)| area > *best_area)
+            {
                 best = Some((pid, area));
             }
         }
@@ -246,7 +261,6 @@ fn get_wechat_pid() -> Result<i32> {
 pub fn resolve_wechat_pid() -> Result<i32> {
     get_wechat_pid()
 }
-
 
 unsafe fn ax_element_attribute(
     element: core_foundation_sys::base::CFTypeRef,
@@ -433,8 +447,6 @@ unsafe fn ax_element_size(element: core_foundation_sys::base::CFTypeRef) -> Opti
     }
 }
 
-
-
 #[derive(Debug, Clone)]
 pub struct ChatMessage {
     pub sender: String,
@@ -454,13 +466,6 @@ pub struct SessionItemSnapshot {
     /// true = likely group chat, false = likely private chat.
     pub is_group: bool,
 }
-
-
-
-
-
-
-
 
 fn clean_text(raw: &str) -> String {
     raw.replace('\u{200b}', "")
@@ -883,7 +888,6 @@ pub fn read_chat_messages_rich() -> Result<Vec<ChatMessage>> {
     Ok(messages)
 }
 
-
 /// Read the latest message from the active chat.
 /// Reads from chat_bubble_item_view elements in chat_message_list.
 pub fn read_latest_message() -> Result<String> {
@@ -1221,10 +1225,4 @@ mod tests {
         let key = prefix8_key("  hello   world \u{200b} ");
         assert_eq!(key, "hello wo");
     }
-
-    
-    
-    
-    
-    
-    }
+}

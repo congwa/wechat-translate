@@ -50,7 +50,11 @@ unsafe fn cg_dict_get_f64(
         core_foundation_sys::number::kCFNumberFloat64Type,
         &mut value as *mut f64 as *mut std::ffi::c_void,
     );
-    if ok { Some(value) } else { None }
+    if ok {
+        Some(value)
+    } else {
+        None
+    }
 }
 
 fn find_main_wechat_window_cg() -> Option<(f64, f64, f64, f64)> {

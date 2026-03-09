@@ -8,7 +8,7 @@ use anyhow::Result;
 use log::debug;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager};
@@ -30,6 +30,91 @@ impl TaskState {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TranslatorServiceStatus {
+    pub enabled: bool,
+    pub configured: bool,
+    pub checking: bool,
+    pub healthy: Option<bool>,
+    pub last_error: Option<String>,
+}
+
+impl TranslatorServiceStatus {
+    fn disabled() -> Self {
+        Self {
+            enabled: false,
+            configured: false,
+            checking: false,
+            healthy: None,
+            last_error: None,
+        }
+    }
+
+    fn unconfigured() -> Self {
+        Self {
+            enabled: true,
+            configured: false,
+            checking: false,
+            healthy: None,
+            last_error: None,
+        }
+    }
+
+    fn checking() -> Self {
+        Self {
+            enabled: true,
+            configured: true,
+            checking: true,
+            healthy: None,
+            last_error: None,
+        }
+    }
+
+    fn healthy() -> Self {
+        Self {
+            enabled: true,
+            configured: true,
+            checking: false,
+            healthy: Some(true),
+            last_error: None,
+        }
+    }
+
+    fn error(message: impl Into<String>) -> Self {
+        Self {
+            enabled: true,
+            configured: true,
+            checking: false,
+            healthy: Some(false),
+            last_error: Some(short_error_text(&message.into())),
+        }
+    }
+
+    fn menu_text(&self) -> &'static str {
+        if !self.enabled {
+            "○ 翻译未启用"
+        } else if !self.configured {
+            "○ 翻译未配置"
+        } else if self.checking {
+            "◐ 翻译检测中"
+        } else if self.healthy == Some(true) {
+            "● 翻译服务可用"
+        } else {
+            "⚠ 翻译服务异常"
+        }
+    }
+
+    fn as_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "enabled": self.enabled,
+            "configured": self.configured,
+            "checking": self.checking,
+            "healthy": self.healthy,
+            "last_error": self.last_error,
+        })
+    }
+}
+
 struct SidebarConfig {
     translator: Option<Arc<DeepLXTranslator>>,
     target_set: HashSet<String>,
@@ -46,6 +131,8 @@ pub struct TaskManager {
     monitoring_active: Arc<AtomicBool>,
     sidebar_enabled: Arc<AtomicBool>,
     sidebar_config: Arc<Mutex<SidebarConfig>>,
+    translator_status: Arc<std::sync::Mutex<TranslatorServiceStatus>>,
+    translator_generation: Arc<AtomicU64>,
     app_handle: Arc<Mutex<Option<AppHandle>>>,
 }
 
@@ -55,7 +142,7 @@ impl TaskManager {
         events: Arc<EventStore>,
         db: Arc<MessageDb>,
         image_cache: Arc<std::sync::Mutex<WeChatImageCache>>,
-        ) -> Self {
+    ) -> Self {
         Self {
             adapter,
             events,
@@ -69,6 +156,8 @@ impl TaskManager {
                 target_set: HashSet::new(),
                 image_capture: false,
             })),
+            translator_status: Arc::new(std::sync::Mutex::new(TranslatorServiceStatus::disabled())),
+            translator_generation: Arc::new(AtomicU64::new(0)),
             app_handle: Arc::new(Mutex::new(None)),
         }
     }
@@ -92,6 +181,10 @@ impl TaskManager {
         }
     }
 
+    pub fn get_translator_status(&self) -> TranslatorServiceStatus {
+        self.translator_status.lock().unwrap().clone()
+    }
+
     pub fn service_status(&self) -> serde_json::Value {
         let state = self.get_task_state();
         serde_json::json!({
@@ -101,7 +194,54 @@ impl TaskManager {
                 "reason": self.adapter.support_reason(),
             },
             "tasks": state,
+            "translator": self.get_translator_status().as_json(),
         })
+    }
+
+    fn next_translator_generation(&self) -> u64 {
+        self.translator_generation.fetch_add(1, Ordering::Relaxed) + 1
+    }
+
+    async fn set_translator_status(&self, status: TranslatorServiceStatus) {
+        {
+            let mut current = self.translator_status.lock().unwrap();
+            *current = status.clone();
+        }
+
+        if let Ok(app) = self.get_app_handle().await {
+            let task_state = self.get_task_state();
+            update_tray_menu(&app, &task_state, &status);
+        }
+    }
+
+    async fn set_translator_status_if_current(
+        &self,
+        generation: u64,
+        status: TranslatorServiceStatus,
+    ) {
+        if self.translator_generation.load(Ordering::Relaxed) != generation {
+            return;
+        }
+
+        {
+            let mut current = self.translator_status.lock().unwrap();
+            if self.translator_generation.load(Ordering::Relaxed) != generation {
+                return;
+            }
+            *current = status.clone();
+        }
+
+        if self.translator_generation.load(Ordering::Relaxed) != generation {
+            return;
+        }
+
+        if let Ok(app) = self.get_app_handle().await {
+            if self.translator_generation.load(Ordering::Relaxed) != generation {
+                return;
+            }
+            let task_state = self.get_task_state();
+            update_tray_menu(&app, &task_state, &status);
+        }
     }
 
     pub async fn start_monitoring(&self, interval_seconds: f64) -> Result<()> {
@@ -118,6 +258,7 @@ impl TaskManager {
 
         let app = self.get_app_handle().await?;
         let state = self.get_task_state();
+        let translator_status = self.get_translator_status();
         self.events.publish(
             &app,
             EventType::TaskState,
@@ -128,7 +269,7 @@ impl TaskManager {
                 "state": &state,
             }),
         );
-        update_tray_menu(&app, &state);
+        update_tray_menu(&app, &state, &translator_status);
 
         let adapter = self.adapter.clone();
         let events = self.events.clone();
@@ -139,6 +280,7 @@ impl TaskManager {
         let sidebar_enabled = self.sidebar_enabled.clone();
         let sidebar_config = self.sidebar_config.clone();
         let app_handle = app.clone();
+        let manager = self.clone();
         let poll_interval = interval_seconds.max(0.4);
 
         tokio::spawn(async move {
@@ -323,7 +465,8 @@ impl TaskManager {
                         }
 
                         if let Some(snapshot) = snapshot_map.get(&chat_name) {
-                            let prev_unread = prev_unread_counts.get(&chat_name).copied().unwrap_or(0);
+                            let prev_unread =
+                                prev_unread_counts.get(&chat_name).copied().unwrap_or(0);
                             let unread_increased = snapshot.unread_count > prev_unread;
                             apply_session_preview_sender_hint(
                                 &mut messages,
@@ -424,7 +567,9 @@ impl TaskManager {
                                         )
                                     };
 
-                                    if image_capture && image_cache::is_image_placeholder(&msg.content) {
+                                    if image_capture
+                                        && image_cache::is_image_placeholder(&msg.content)
+                                    {
                                         let now_ts = std::time::SystemTime::now()
                                             .duration_since(std::time::UNIX_EPOCH)
                                             .unwrap()
@@ -448,6 +593,9 @@ impl TaskManager {
                                         if let Some(ref translator) = translator {
                                             let t = translator.clone();
                                             let text = msg.content.clone();
+                                            let translator_generation = manager
+                                                .translator_generation
+                                                .load(Ordering::Relaxed);
                                             match tokio::runtime::Handle::try_current() {
                                                 Ok(handle) => {
                                                     let result = std::thread::spawn(move || {
@@ -455,20 +603,52 @@ impl TaskManager {
                                                     })
                                                     .join();
                                                     match result {
-                                                        Ok(Ok(translated)) => text_en = translated,
+                                                        Ok(Ok(translated)) => {
+                                                            text_en = translated;
+                                                            manager
+                                                                .set_translator_status_if_current(
+                                                                    translator_generation,
+                                                                    TranslatorServiceStatus::healthy(),
+                                                                )
+                                                                .await;
+                                                        }
                                                         Ok(Err(e)) => {
-                                                            translate_error = e.to_string()
+                                                            translate_error = e.to_string();
+                                                            manager
+                                                                .set_translator_status_if_current(
+                                                                    translator_generation,
+                                                                    TranslatorServiceStatus::error(
+                                                                        &translate_error,
+                                                                    ),
+                                                                )
+                                                                .await;
                                                         }
                                                         Err(_) => {
                                                             translate_error =
                                                                 "translate thread panicked"
-                                                                    .to_string()
+                                                                    .to_string();
+                                                            manager
+                                                                .set_translator_status_if_current(
+                                                                    translator_generation,
+                                                                    TranslatorServiceStatus::error(
+                                                                        &translate_error,
+                                                                    ),
+                                                                )
+                                                                .await;
                                                         }
                                                     }
                                                 }
                                                 Err(_) => {
                                                     translate_error =
                                                         "no tokio runtime available".to_string();
+                                                    manager
+                                                        .set_translator_status_if_current(
+                                                            translator_generation,
+                                                            TranslatorServiceStatus::error(
+                                                                &translate_error,
+                                                            ),
+                                                        )
+                                                        .await;
                                                 }
                                             }
                                         }
@@ -554,6 +734,10 @@ impl TaskManager {
             *monitor_token_ref.lock().await = None;
             monitoring_active.store(false, Ordering::Relaxed);
             sidebar_enabled.store(false, Ordering::Relaxed);
+            manager.next_translator_generation();
+            manager
+                .set_translator_status(TranslatorServiceStatus::disabled())
+                .await;
 
             let stopped_state = TaskState::empty();
             events.publish(
@@ -566,7 +750,11 @@ impl TaskManager {
                     "state": &stopped_state,
                 }),
             );
-            update_tray_menu(&app_handle, &stopped_state);
+            update_tray_menu(
+                &app_handle,
+                &stopped_state,
+                &TranslatorServiceStatus::disabled(),
+            );
         });
 
         Ok(())
@@ -590,6 +778,7 @@ impl TaskManager {
         timeout_seconds: f64,
         image_capture: bool,
     ) -> Result<()> {
+        let translator_generation = self.next_translator_generation();
         let translator = if translate_enabled && !deeplx_url.is_empty() {
             Some(Arc::new(DeepLXTranslator::new(
                 &deeplx_url,
@@ -600,6 +789,7 @@ impl TaskManager {
         } else {
             None
         };
+        let translator_for_check = translator.clone();
 
         let target_set: HashSet<String> = targets.into_iter().filter(|t| !t.is_empty()).collect();
 
@@ -611,6 +801,15 @@ impl TaskManager {
         }
 
         self.sidebar_enabled.store(true, Ordering::Relaxed);
+
+        let translator_status = if !translate_enabled {
+            TranslatorServiceStatus::disabled()
+        } else if deeplx_url.is_empty() {
+            TranslatorServiceStatus::unconfigured()
+        } else {
+            TranslatorServiceStatus::checking()
+        };
+        self.set_translator_status(translator_status.clone()).await;
 
         let app = self.get_app_handle().await?;
         let state = self.get_task_state();
@@ -624,19 +823,37 @@ impl TaskManager {
                 "state": &state,
             }),
         );
-        update_tray_menu(&app, &state);
+        update_tray_menu(&app, &state, &translator_status);
+
+        if let Some(translator) = translator_for_check {
+            let manager = self.clone();
+            tokio::spawn(async move {
+                let next_status = match translator.check_health().await {
+                    Ok(_) => TranslatorServiceStatus::healthy(),
+                    Err(error) => TranslatorServiceStatus::error(error.to_string()),
+                };
+                manager
+                    .set_translator_status_if_current(translator_generation, next_status)
+                    .await;
+            });
+        }
 
         Ok(())
     }
 
     pub async fn disable_sidebar(&self) -> Result<()> {
+        self.next_translator_generation();
         self.sidebar_enabled.store(false, Ordering::Relaxed);
 
         {
             let mut config = self.sidebar_config.lock().await;
             config.translator = None;
             config.target_set.clear();
+            config.image_capture = false;
         }
+
+        self.set_translator_status(TranslatorServiceStatus::disabled())
+            .await;
 
         let app = self.get_app_handle().await?;
         let state = self.get_task_state();
@@ -650,7 +867,8 @@ impl TaskManager {
                 "state": &state,
             }),
         );
-        update_tray_menu(&app, &state);
+        let translator_status = self.get_translator_status();
+        update_tray_menu(&app, &state, &translator_status);
 
         Ok(())
     }
@@ -1071,8 +1289,21 @@ fn bag_diff(old: &[ChatMessage], new: &[ChatMessage]) -> Vec<ChatMessage> {
     result
 }
 
+fn short_error_text(message: &str) -> String {
+    const MAX_CHARS: usize = 120;
+    let shortened: String = message.chars().take(MAX_CHARS).collect();
+    if message.chars().count() > MAX_CHARS {
+        format!("{shortened}...")
+    } else {
+        shortened
+    }
+}
 
-fn update_tray_menu(app: &AppHandle, state: &TaskState) {
+fn update_tray_menu(
+    app: &AppHandle,
+    state: &TaskState,
+    translator_status: &TranslatorServiceStatus,
+) {
     if let Some(tray) = app.try_state::<crate::TrayMenuState>() {
         let _ = tray.sidebar_status.set_text(if state.sidebar {
             "● 浮窗运行中"
@@ -1095,5 +1326,58 @@ fn update_tray_menu(app: &AppHandle, state: &TaskState) {
         } else {
             "开启监听"
         });
+        let _ = tray
+            .translate_status
+            .set_text(translator_status.menu_text());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{short_error_text, TranslatorServiceStatus};
+
+    #[test]
+    fn translator_status_menu_text_matches_state() {
+        assert_eq!(
+            TranslatorServiceStatus::disabled().menu_text(),
+            "○ 翻译未启用"
+        );
+        assert_eq!(
+            TranslatorServiceStatus::unconfigured().menu_text(),
+            "○ 翻译未配置"
+        );
+        assert_eq!(
+            TranslatorServiceStatus::checking().menu_text(),
+            "◐ 翻译检测中"
+        );
+        assert_eq!(
+            TranslatorServiceStatus::healthy().menu_text(),
+            "● 翻译服务可用"
+        );
+        assert_eq!(
+            TranslatorServiceStatus::error("boom").menu_text(),
+            "⚠ 翻译服务异常"
+        );
+    }
+
+    #[test]
+    fn translator_status_json_contains_expected_fields() {
+        let status = TranslatorServiceStatus::error("request failed");
+        let json = status.as_json();
+
+        assert_eq!(json["enabled"], true);
+        assert_eq!(json["configured"], true);
+        assert_eq!(json["checking"], false);
+        assert_eq!(json["healthy"], false);
+        assert_eq!(json["last_error"], "request failed");
+    }
+
+    #[test]
+    fn short_error_text_truncates_long_messages() {
+        let message = "x".repeat(140);
+        let shortened = short_error_text(&message);
+
+        assert_eq!(shortened.len(), 123);
+        assert!(shortened.ends_with("..."));
     }
 }

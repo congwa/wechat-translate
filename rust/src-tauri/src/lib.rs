@@ -25,6 +25,7 @@ pub struct CloseToTray(pub Arc<AtomicBool>);
 pub struct TrayMenuState {
     pub sidebar_status: tauri::menu::MenuItem<tauri::Wry>,
     pub listen_status: tauri::menu::MenuItem<tauri::Wry>,
+    pub translate_status: tauri::menu::MenuItem<tauri::Wry>,
     pub sidebar_toggle: tauri::menu::MenuItem<tauri::Wry>,
     pub listen_toggle: tauri::menu::MenuItem<tauri::Wry>,
     pub close_to_tray_check: tauri::menu::CheckMenuItem<tauri::Wry>,
@@ -42,6 +43,9 @@ pub fn run() {
         .manage(event_store.clone())
         .manage(close_to_tray)
         .setup(move |app| {
+            #[cfg(target_os = "macos")]
+            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+
             let data_dir = app.path().app_data_dir().unwrap_or_else(|_| {
                 std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
             });
@@ -82,6 +86,9 @@ pub fn run() {
             let listen_status = MenuItemBuilder::with_id("listen_status", "○ 监听未运行")
                 .enabled(false)
                 .build(app)?;
+            let translate_status = MenuItemBuilder::with_id("translate_status", "○ 翻译未启用")
+                .enabled(false)
+                .build(app)?;
 
             let sidebar_toggle =
                 MenuItemBuilder::with_id("toggle_sidebar", "开启实时浮窗").build(app)?;
@@ -99,6 +106,7 @@ pub fn run() {
                 .separator()
                 .item(&sidebar_status)
                 .item(&listen_status)
+                .item(&translate_status)
                 .separator()
                 .item(&sidebar_toggle)
                 .item(&listen_toggle)
@@ -112,6 +120,7 @@ pub fn run() {
             app.manage(TrayMenuState {
                 sidebar_status,
                 listen_status,
+                translate_status,
                 sidebar_toggle,
                 listen_toggle,
                 close_to_tray_check,

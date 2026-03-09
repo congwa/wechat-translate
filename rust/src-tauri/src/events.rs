@@ -70,6 +70,4 @@ impl EventStore {
         let _ = app.emit("wechat-event", &event);
         event
     }
-
-
 }
