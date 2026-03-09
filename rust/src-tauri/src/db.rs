@@ -208,6 +208,29 @@ impl MessageDb {
         Ok(rows > 0)
     }
 
+    pub fn update_message_translation(
+        &self,
+        chat_name: &str,
+        sender: &str,
+        content: &str,
+        detected_at: &str,
+        content_en: &str,
+    ) -> Result<bool> {
+        let hash = content_hash(sender, content);
+        let conn = self.conn.lock().unwrap();
+        let rows = conn
+            .execute(
+                "UPDATE messages
+                 SET content_en = ?1
+                 WHERE chat_name = ?2
+                   AND content_hash = ?3
+                   AND detected_at = ?4",
+                params![content_en, chat_name, hash, detected_at],
+            )
+            .context("update message translation")?;
+        Ok(rows > 0)
+    }
+
     /// Try updating a recent low-quality session_preview row into a corrected high-quality row.
     /// Matching key: same chat + prefix8(content) + short time window.
     pub fn try_correct_preview_row(
@@ -277,16 +300,18 @@ impl MessageDb {
              SET sender = ?1,
                  content = ?2,
                  content_hash = ?3,
-                 content_en = ?4,
-                 is_self = ?5,
-                 image_path = ?6,
+                 detected_at = ?4,
+                 content_en = ?5,
+                 is_self = ?6,
+                 image_path = ?7,
                  source = 'session_corrected',
                  quality = 'high'
-             WHERE id = ?7",
+             WHERE id = ?8",
             params![
                 sender,
                 content,
                 hash,
+                detected_at,
                 content_en,
                 is_self as i32,
                 image_path,
@@ -563,6 +588,38 @@ mod tests {
         assert_eq!(rows[0].sender, "花姐");
         assert_eq!(rows[0].source.as_deref(), Some("session_corrected"));
         assert_eq!(rows[0].quality.as_deref(), Some("high"));
+
+        drop(db);
+        cleanup_db(&path);
+    }
+
+    #[test]
+    fn update_message_translation_should_fill_content_en_for_existing_row() {
+        let path = temp_db_path("update_translation");
+        let db = MessageDb::new(&path).expect("create db");
+        db.insert_message_with_meta(
+            "chat-a",
+            "Alice",
+            "你好",
+            "",
+            false,
+            "2026-03-09 10:00:00",
+            None,
+            "chat",
+            "high",
+        )
+        .expect("insert row");
+
+        let updated = db
+            .update_message_translation("chat-a", "Alice", "你好", "2026-03-09 10:00:00", "Hello")
+            .expect("update translation");
+        assert!(updated);
+
+        let rows = db
+            .query_messages(Some("chat-a"), None, None, 20, 0)
+            .expect("query messages");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].content_en, "Hello");
 
         drop(db);
         cleanup_db(&path);

@@ -14,11 +14,14 @@ pub async fn sidebar_start(
     timeout_seconds: Option<f64>,
     image_capture: Option<bool>,
 ) -> Result<serde_json::Value, String> {
+    let translate_enabled = translate_enabled.unwrap_or(false);
+    let deeplx_url = deeplx_url.unwrap_or_default();
+
     manager
         .enable_sidebar(
             targets.unwrap_or_default(),
-            translate_enabled.unwrap_or(false),
-            deeplx_url.unwrap_or_default(),
+            translate_enabled,
+            deeplx_url,
             source_lang.unwrap_or_else(|| "auto".to_string()),
             target_lang.unwrap_or_else(|| "EN".to_string()),
             timeout_seconds.unwrap_or(8.0),
@@ -56,6 +59,9 @@ pub async fn live_start(
 ) -> Result<serde_json::Value, String> {
     let mode = WindowMode::from_str_opt(window_mode.as_deref());
 
+    let translate_enabled = translate_enabled.unwrap_or(false);
+    let deeplx_url = deeplx_url.unwrap_or_default();
+
     let state = manager.get_task_state();
     if !state.monitoring {
         let interval = interval_seconds.unwrap_or(1.0);
@@ -68,8 +74,8 @@ pub async fn live_start(
     manager
         .enable_sidebar(
             vec![],
-            translate_enabled.unwrap_or(false),
-            deeplx_url.unwrap_or_default(),
+            translate_enabled,
+            deeplx_url,
             source_lang.unwrap_or_else(|| "auto".to_string()),
             target_lang.unwrap_or_else(|| "EN".to_string()),
             8.0,

@@ -33,23 +33,56 @@ function msgFingerprint(m: SidebarMessage): string {
   return `${m.chatName}\x00${m.sender}\x00${m.textCn}\x00${m.timestamp}`;
 }
 
+function parseSidebarMessage(event: ServiceEvent): SidebarMessage {
+  const p = event.payload as Record<string, unknown>;
+  return {
+    id: event.id,
+    chatName: (p.chat_name as string) || "",
+    sender: (p.sender as string) || "",
+    textCn: (p.text_cn as string) || "",
+    textEn: (p.text_en as string) || "",
+    translateError: (p.translate_error as string) || "",
+    timestamp: event.timestamp,
+    isSelf: (p.is_self as boolean) || false,
+    imagePath: (p.image_path as string) || undefined,
+  };
+}
+
 export const useSidebarStore = create<SidebarStoreState>((set) => ({
   items: [],
   currentChat: "",
 
   addMessage: (event) => {
     const p = event.payload as Record<string, unknown>;
-    const msg: SidebarMessage = {
-      id: event.id,
-      chatName: (p.chat_name as string) || "",
-      sender: (p.sender as string) || "",
-      textCn: (p.text_cn as string) || "",
-      textEn: (p.text_en as string) || "",
-      translateError: (p.translate_error as string) || "",
-      timestamp: event.timestamp,
-      isSelf: (p.is_self as boolean) || false,
-      imagePath: (p.image_path as string) || undefined,
-    };
+    const kind = p.kind as string | undefined;
+    const messageId = p.message_id as number | undefined;
+
+    if (kind === "update" && typeof messageId === "number") {
+      set((state) => {
+        const index = state.items.findIndex((item) => item.id === messageId);
+        if (index < 0) {
+          return state;
+        }
+
+        const current = state.items[index];
+        const nextItems = [...state.items];
+        nextItems[index] = {
+          ...current,
+          textEn: typeof p.text_en === "string" ? p.text_en : current.textEn,
+          translateError:
+            typeof p.translate_error === "string"
+              ? p.translate_error
+              : current.translateError,
+          imagePath:
+            typeof p.image_path === "string" ? p.image_path : current.imagePath,
+        };
+
+        return { items: nextItems };
+      });
+      return;
+    }
+
+    const msg = parseSidebarMessage(event);
 
     set((state) => {
       const next = [...state.items, msg];

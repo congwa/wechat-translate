@@ -524,7 +524,7 @@ impl TaskManager {
                                 chat_kinds.insert(chat_name.clone(), chat_kind);
                             }
                             for msg in &new_msgs {
-                                let mut content_en = String::new();
+                                let content_en = String::new();
                                 let mut found_image_path: Option<String> = None;
                                 events.publish(
                                     &app_handle,
@@ -558,7 +558,7 @@ impl TaskManager {
                                 );
 
                                 if sidebar_enabled.load(Ordering::Relaxed) {
-                                    let (translator, target_set, image_capture) = {
+                                    let (_translator, _target_set, image_capture) = {
                                         let config = sidebar_config.lock().await;
                                         (
                                             config.translator.clone(),
@@ -584,100 +584,6 @@ impl TaskManager {
                                                     Some(path.to_string_lossy().to_string());
                                             }
                                         }
-                                    }
-
-                                    if target_set.is_empty() || target_set.contains(&chat_name) {
-                                        let mut text_en = msg.content.clone();
-                                        let mut translate_error = String::new();
-
-                                        if let Some(ref translator) = translator {
-                                            let t = translator.clone();
-                                            let text = msg.content.clone();
-                                            let translator_generation = manager
-                                                .translator_generation
-                                                .load(Ordering::Relaxed);
-                                            match tokio::runtime::Handle::try_current() {
-                                                Ok(handle) => {
-                                                    let result = std::thread::spawn(move || {
-                                                        handle.block_on(t.translate(&text))
-                                                    })
-                                                    .join();
-                                                    match result {
-                                                        Ok(Ok(translated)) => {
-                                                            text_en = translated;
-                                                            manager
-                                                                .set_translator_status_if_current(
-                                                                    translator_generation,
-                                                                    TranslatorServiceStatus::healthy(),
-                                                                )
-                                                                .await;
-                                                        }
-                                                        Ok(Err(e)) => {
-                                                            translate_error = e.to_string();
-                                                            manager
-                                                                .set_translator_status_if_current(
-                                                                    translator_generation,
-                                                                    TranslatorServiceStatus::error(
-                                                                        &translate_error,
-                                                                    ),
-                                                                )
-                                                                .await;
-                                                        }
-                                                        Err(_) => {
-                                                            translate_error =
-                                                                "translate thread panicked"
-                                                                    .to_string();
-                                                            manager
-                                                                .set_translator_status_if_current(
-                                                                    translator_generation,
-                                                                    TranslatorServiceStatus::error(
-                                                                        &translate_error,
-                                                                    ),
-                                                                )
-                                                                .await;
-                                                        }
-                                                    }
-                                                }
-                                                Err(_) => {
-                                                    translate_error =
-                                                        "no tokio runtime available".to_string();
-                                                    manager
-                                                        .set_translator_status_if_current(
-                                                            translator_generation,
-                                                            TranslatorServiceStatus::error(
-                                                                &translate_error,
-                                                            ),
-                                                        )
-                                                        .await;
-                                                }
-                                            }
-                                        }
-
-                                        content_en = text_en.clone();
-
-                                        let mut sidebar_payload = serde_json::json!({
-                                            "chat_name": chat_name,
-                                            "chat_type": chat_type_label.clone(),
-                                            "self_source": self_source_label(msg),
-                                            "source": "chat",
-                                            "quality": "high",
-                                            "sender": msg.sender,
-                                            "text_cn": msg.content,
-                                            "text_en": text_en,
-                                            "translate_error": translate_error,
-                                            "is_self": msg.is_self,
-                                        });
-                                        if let Some(ref ip) = found_image_path {
-                                            sidebar_payload["image_path"] =
-                                                serde_json::Value::String(ip.clone());
-                                        }
-
-                                        events.publish(
-                                            &app_handle,
-                                            EventType::Message,
-                                            "sidebar",
-                                            sidebar_payload,
-                                        );
                                     }
                                 }
 
@@ -717,6 +623,55 @@ impl TaskManager {
                                             "text_preview": trim_for_log(&msg.content, 24),
                                         }),
                                     );
+                                }
+
+                                if sidebar_enabled.load(Ordering::Relaxed) {
+                                    let (translator, target_set) = {
+                                        let config = sidebar_config.lock().await;
+                                        (config.translator.clone(), config.target_set.clone())
+                                    };
+
+                                    if target_set.is_empty() || target_set.contains(&chat_name) {
+                                        let mut sidebar_payload = serde_json::json!({
+                                            "kind": "append",
+                                            "chat_name": chat_name,
+                                            "chat_type": chat_type_label.clone(),
+                                            "self_source": self_source_label(msg),
+                                            "source": "chat",
+                                            "quality": "high",
+                                            "sender": msg.sender,
+                                            "text_cn": msg.content,
+                                            "text_en": "",
+                                            "translate_error": "",
+                                            "is_self": msg.is_self,
+                                        });
+                                        if let Some(ref ip) = found_image_path {
+                                            sidebar_payload["image_path"] =
+                                                serde_json::Value::String(ip.clone());
+                                        }
+
+                                        let sidebar_event = events.publish(
+                                            &app_handle,
+                                            EventType::Message,
+                                            "sidebar",
+                                            sidebar_payload,
+                                        );
+
+                                        if let Some(translator) = translator {
+                                            spawn_sidebar_translation_update(
+                                                manager.clone(),
+                                                events.clone(),
+                                                app_handle.clone(),
+                                                db.clone(),
+                                                translator,
+                                                sidebar_event.id,
+                                                chat_name.clone(),
+                                                msg.sender.clone(),
+                                                msg.content.clone(),
+                                                now.clone(),
+                                            );
+                                        }
+                                    }
                                 }
                             }
 
@@ -1287,6 +1242,73 @@ fn bag_diff(old: &[ChatMessage], new: &[ChatMessage]) -> Vec<ChatMessage> {
         }
     }
     result
+}
+
+fn spawn_sidebar_translation_update(
+    manager: TaskManager,
+    events: Arc<EventStore>,
+    app_handle: AppHandle,
+    db: Arc<MessageDb>,
+    translator: Arc<DeepLXTranslator>,
+    message_id: u64,
+    chat_name: String,
+    sender: String,
+    content: String,
+    detected_at: String,
+) {
+    tokio::spawn(async move {
+        let translator_generation = manager.translator_generation.load(Ordering::Relaxed);
+        match translator.translate(&content).await {
+            Ok(translated) => {
+                let _ = db.update_message_translation(
+                    &chat_name,
+                    &sender,
+                    &content,
+                    &detected_at,
+                    &translated,
+                );
+                manager
+                    .set_translator_status_if_current(
+                        translator_generation,
+                        TranslatorServiceStatus::healthy(),
+                    )
+                    .await;
+                events.publish(
+                    &app_handle,
+                    EventType::Message,
+                    "sidebar",
+                    serde_json::json!({
+                        "kind": "update",
+                        "message_id": message_id,
+                        "chat_name": chat_name,
+                        "text_en": translated,
+                        "translate_error": "",
+                    }),
+                );
+            }
+            Err(error) => {
+                let translate_error = error.to_string();
+                manager
+                    .set_translator_status_if_current(
+                        translator_generation,
+                        TranslatorServiceStatus::error(&translate_error),
+                    )
+                    .await;
+                events.publish(
+                    &app_handle,
+                    EventType::Message,
+                    "sidebar",
+                    serde_json::json!({
+                        "kind": "update",
+                        "message_id": message_id,
+                        "chat_name": chat_name,
+                        "text_en": "",
+                        "translate_error": translate_error,
+                    }),
+                );
+            }
+        }
+    });
 }
 
 fn short_error_text(message: &str) -> String {

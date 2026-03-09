@@ -94,6 +94,12 @@ function MainApp() {
         const savedSource = typeof translate.source_lang === "string" ? translate.source_lang : store.sourceLang;
         const savedTarget = typeof translate.target_lang === "string" ? translate.target_lang : store.targetLang;
         const fullUrl = savedUrl.trim();
+
+        if (savedEnabled && !fullUrl) {
+          showToast("翻译接口未配置，不能启用翻译", false);
+          return;
+        }
+
         await api.liveStart({
           translateEnabled: savedEnabled,
           deeplxUrl: fullUrl,

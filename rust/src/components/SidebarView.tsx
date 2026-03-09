@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { listen } from "@tauri-apps/api/event";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
-import { X, Trash2, MessageCircle, Languages, AlertCircle, ChevronUp, ChevronDown } from "lucide-react";
+import { X, MessageCircle, Languages, AlertCircle, ChevronUp, ChevronDown } from "lucide-react";
 import { useSidebarStore } from "@/stores/sidebarStore";
 import type { SidebarMessage, StoredMessage } from "@/lib/types";
 import { useEventStore } from "@/stores/eventStore";
@@ -167,15 +167,18 @@ export function SidebarView() {
 
   const items = useSidebarStore((s) => s.items);
   const currentChat = useSidebarStore((s) => s.currentChat);
-  const clearMessages = useSidebarStore((s) => s.clearMessages);
   const loadHistory = useSidebarStore((s) => s.loadHistory);
   const displayMode = useFormStore((s) => s.displayMode);
   const setSettings = useFormStore((s) => s.setSettings);
+  const translateEnabled = useFormStore((s) => s.translateEnabled);
+  const deeplxUrl = useFormStore((s) => s.deeplxUrl);
   const collapsedCount = parseInt(useFormStore((s) => s.collapsedDisplayCount) || "0", 10);
   const bottomRef = useRef<HTMLDivElement>(null);
   const [visible, setVisible] = useState(true);
   const [collapsed, setCollapsed] = useState(false);
   const expandedSizeRef = useRef({ w: 380, h: 600 });
+  const canSwitchDisplayMode = translateEnabled && deeplxUrl.trim() !== "";
+  const effectiveDisplayMode: DisplayMode = canSwitchDisplayMode ? displayMode : "original";
 
   const fetchHistory = useCallback(
     async (chatName: string) => {
@@ -232,7 +235,7 @@ export function SidebarView() {
   }, [items.length]);
 
   function handleClose() {
-    api.sidebarWindowClose().catch(() => {});
+    api.sidebarStop().catch(() => {});
   }
 
   async function handleToggleCollapse() {
@@ -273,50 +276,44 @@ export function SidebarView() {
           </span>
         </div>
         <div className="flex items-center gap-1 shrink-0">
-          <div className="flex items-center h-5 rounded-md bg-black/[0.04] dark:bg-white/[0.06] p-0.5">
-            {DISPLAY_MODES.map((mode) => (
-              <button
-                key={mode.value}
-                onClick={() => setSettings({ displayMode: mode.value })}
-                title={mode.title}
-                className={`px-1.5 h-4 rounded text-[9px] font-medium transition-all duration-150 ${
-                  displayMode === mode.value
-                    ? "bg-white dark:bg-white/[0.15] text-gray-700 dark:text-gray-200 shadow-sm"
-                    : "text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300"
-                }`}
-              >
-                {mode.label}
-              </button>
-            ))}
-          </div>
-          {!collapsed && (
-            <button
-              onClick={clearMessages}
-              className="w-6 h-6 flex items-center justify-center rounded-md hover:bg-black/[0.05] dark:hover:bg-white/[0.08] transition-colors"
-              title="清空"
-            >
-              <Trash2 className="w-3 h-3 text-gray-400 dark:text-gray-500" />
-            </button>
+          {canSwitchDisplayMode && (
+            <div className="flex items-center h-5 rounded-md bg-black/[0.04] dark:bg-white/[0.06] p-0.5">
+              {DISPLAY_MODES.map((mode) => (
+                <button
+                  key={mode.value}
+                  onClick={() => setSettings({ displayMode: mode.value })}
+                  title={mode.title}
+                  className={`px-1.5 h-4 rounded text-[9px] font-medium transition-all duration-150 ${
+                    effectiveDisplayMode === mode.value
+                      ? "bg-white dark:bg-white/[0.15] text-gray-700 dark:text-gray-200 shadow-sm"
+                      : "text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300"
+                  }`}
+                >
+                  {mode.label}
+                </button>
+              ))}
+            </div>
           )}
-          {isIndependent ? (
+          {isIndependent && (
             <button
               onClick={handleToggleCollapse}
               className="w-6 h-6 flex items-center justify-center rounded-md hover:bg-black/[0.05] dark:hover:bg-white/[0.08] transition-colors"
               title={collapsed ? "展开" : "折叠"}
             >
-              {collapsed
-                ? <ChevronDown className="w-3 h-3 text-gray-400 dark:text-gray-500" />
-                : <ChevronUp className="w-3 h-3 text-gray-400 dark:text-gray-500" />}
-            </button>
-          ) : (
-            <button
-              onClick={handleClose}
-              className="w-6 h-6 flex items-center justify-center rounded-md hover:bg-red-500/10 transition-colors group"
-              title="关闭"
-            >
-              <X className="w-3 h-3 text-gray-400 dark:text-gray-500 group-hover:text-red-500" />
+              {collapsed ? (
+                <ChevronDown className="w-3 h-3 text-gray-400 dark:text-gray-500" />
+              ) : (
+                <ChevronUp className="w-3 h-3 text-gray-400 dark:text-gray-500" />
+              )}
             </button>
           )}
+          <button
+            onClick={handleClose}
+            className="w-6 h-6 flex items-center justify-center rounded-md hover:bg-red-500/10 transition-colors group"
+            title="关闭"
+          >
+            <X className="w-3 h-3 text-gray-400 dark:text-gray-500 group-hover:text-red-500" />
+          </button>
         </div>
       </div>
 
@@ -324,7 +321,9 @@ export function SidebarView() {
       {collapsed && collapsedCount > 0 && items.length > 0 && (
         <div className="px-2.5 pt-1 pb-2 overflow-hidden">
           <div className="flex flex-col gap-1.5">
-            {items.slice(-collapsedCount).map((msg) => renderMessageCard(msg, displayMode))}
+            {items
+              .slice(-collapsedCount)
+              .map((msg) => renderMessageCard(msg, effectiveDisplayMode))}
           </div>
         </div>
       )}
@@ -357,7 +356,7 @@ export function SidebarView() {
 
           <div className="flex flex-col gap-1.5">
             <AnimatePresence initial={false}>
-              {items.map((msg) => renderMessageCard(msg, displayMode))}
+              {items.map((msg) => renderMessageCard(msg, effectiveDisplayMode))}
             </AnimatePresence>
           </div>
           <div ref={bottomRef} />
