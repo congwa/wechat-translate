@@ -415,7 +415,7 @@ pub fn run() {
             )
             .build(app)?;
 
-            let show_item = MenuItemBuilder::with_id("show", "显示主窗口").build(app)?;
+            let show_item = MenuItemBuilder::with_id("show", "设置").build(app)?;
             let close_to_tray_check =
                 CheckMenuItemBuilder::with_id("toggle_close_to_tray", "关闭时最小化到托盘")
                     .checked(true)
