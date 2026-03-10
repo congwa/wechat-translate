@@ -40,6 +40,15 @@ powershell -ExecutionPolicy Bypass -File .\scripts\build_windows_exe.ps1 -CopyDo
 默认不复制。这个开关是故意做成显式的，不是忘了做自动化。
 原因很简单：`.env.local` 里通常放的是本机私密配置，自动塞进产物等于顺手把密钥打包出去。
 
+脚本在真正调用 PyInstaller 之前，还会先跑一次源码态 TTS 依赖预检：
+
+```powershell
+python .\listener_app\sidebar_translate_listener.py --config .\config\listener.json --check-tts-deps
+```
+
+这一步失败就别继续打包。当前默认 `tts.provider=tencent_cloud`，没先装 `requirements.txt` 里的腾讯云 SDK 时，这里就会直接拦下。
+这是对的，不是脚本多事；继续打包只会得到一个默认配置下朗读必坏的残废产物。
+
 ## 产物位置
 
 默认输出目录：
@@ -150,6 +159,9 @@ tts failed backend=doubao error=No module named 'websockets'
 --collect-submodules websockets
 --collect-submodules tencentcloud
 ```
+
+并且在真正打包前就会先跑源码态 `--check-tts-deps` 预检。
+如果这一步已经报 `No module named 'tencentcloud'`，别再怀疑 PyInstaller；先把运行时依赖装对。
 
 并且会在构建后自动跑：
 
