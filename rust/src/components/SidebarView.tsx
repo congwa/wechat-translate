@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { listen } from "@tauri-apps/api/event";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
-import { X, MessageCircle, Languages, AlertCircle, ChevronUp, ChevronDown } from "lucide-react";
+import { X, MessageCircle, Languages, AlertCircle, ChevronUp, ChevronDown, BookOpen } from "lucide-react";
 import { useSidebarStore } from "@/stores/sidebarStore";
 import type { SidebarMessage } from "@/lib/types";
 import { useFormStore, type DisplayMode } from "@/stores/formStore";
@@ -11,6 +11,7 @@ import { useRuntimeStore } from "@/stores/runtimeStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { SegmentedText } from "@/components/SegmentedText";
 import { WordPopover } from "@/components/WordPopover";
+import { WordBook } from "@/components/WordBook";
 import * as api from "@/lib/tauri-api";
 
 type WindowMode = "follow" | "independent";
@@ -214,6 +215,7 @@ export function SidebarView() {
   const [visible, setVisible] = useState(true);
   const [collapsed, setCollapsed] = useState(false);
   const [snapshotLoading, setSnapshotLoading] = useState(false);
+  const [showWordBook, setShowWordBook] = useState(false);
   const expandedSizeRef = useRef({ w: 380, h: 600 });
   const translateEnabled = settings?.translate.enabled ?? false;
   const deeplxUrl = settings?.translate.deeplx_url ?? "";
@@ -322,6 +324,18 @@ export function SidebarView() {
               ))}
             </div>
           )}
+          {/* 单词本按钮 */}
+          <button
+            onClick={() => setShowWordBook(!showWordBook)}
+            className={`w-6 h-6 flex items-center justify-center rounded-md transition-colors ${
+              showWordBook
+                ? "bg-primary/10 text-primary"
+                : "hover:bg-black/[0.05] dark:hover:bg-white/[0.08]"
+            }`}
+            title="单词本"
+          >
+            <BookOpen className={`w-3 h-3 ${showWordBook ? "text-primary" : "text-gray-400 dark:text-gray-500"}`} />
+          </button>
           {isIndependent && (
             <button
               onClick={handleToggleCollapse}
@@ -356,8 +370,15 @@ export function SidebarView() {
         </div>
       )}
 
+      {/* 单词本视图 */}
+      {showWordBook && !collapsed && (
+        <div className="flex-1 overflow-hidden bg-background">
+          <WordBook />
+        </div>
+      )}
+
       {/* Full message list (expanded) */}
-      {!collapsed && (
+      {!collapsed && !showWordBook && (
         <div className="sidebar-scroll flex-1 overflow-y-auto px-2.5 pt-1 pb-4">
           {items.length === 0 && (
             <div className="flex flex-col items-center justify-center h-full gap-3">

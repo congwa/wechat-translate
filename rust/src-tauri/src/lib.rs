@@ -606,6 +606,11 @@ pub fn run() {
             commands::dictionary::update_favorite_note,
             commands::dictionary::record_review,
             commands::dictionary::count_favorites,
+            commands::dictionary::get_words_for_review,
+            commands::dictionary::start_review_session,
+            commands::dictionary::record_review_feedback,
+            commands::dictionary::finish_review_session,
+            commands::dictionary::get_review_stats,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

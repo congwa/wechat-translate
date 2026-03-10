@@ -1,6 +1,6 @@
 use crate::dictionary::api::DictionaryApiClient;
 use crate::dictionary::db::hash_text;
-use crate::dictionary::{DictionaryDb, FavoriteWord, WordEntry};
+use crate::dictionary::{DictionaryDb, FavoriteWord, ReviewSession, ReviewStats, WordEntry};
 use crate::task_manager::TaskManager;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -221,5 +221,66 @@ pub async fn count_favorites(
 ) -> Result<u32, String> {
     dict_db
         .count_favorites()
+        .map_err(|e| e.to_string())
+}
+
+// ========== 复习功能 ==========
+
+/// 获取待复习单词
+#[tauri::command]
+pub async fn get_words_for_review(
+    dict_db: tauri::State<'_, Arc<DictionaryDb>>,
+    limit: Option<u32>,
+) -> Result<Vec<FavoriteWord>, String> {
+    let limit = limit.unwrap_or(20);
+    dict_db
+        .get_words_for_review(limit)
+        .map_err(|e| e.to_string())
+}
+
+/// 开始复习会话
+#[tauri::command]
+pub async fn start_review_session(
+    dict_db: tauri::State<'_, Arc<DictionaryDb>>,
+    mode: String,
+    word_count: i32,
+) -> Result<i64, String> {
+    dict_db
+        .start_review_session(&mode, word_count)
+        .map_err(|e| e.to_string())
+}
+
+/// 记录复习反馈
+#[tauri::command]
+pub async fn record_review_feedback(
+    dict_db: tauri::State<'_, Arc<DictionaryDb>>,
+    session_id: i64,
+    word: String,
+    feedback: i32,
+    response_time_ms: Option<i32>,
+) -> Result<FavoriteWord, String> {
+    dict_db
+        .record_review_feedback(session_id, &word, feedback, response_time_ms.unwrap_or(0))
+        .map_err(|e| e.to_string())
+}
+
+/// 结束复习会话
+#[tauri::command]
+pub async fn finish_review_session(
+    dict_db: tauri::State<'_, Arc<DictionaryDb>>,
+    session_id: i64,
+) -> Result<ReviewSession, String> {
+    dict_db
+        .finish_review_session(session_id)
+        .map_err(|e| e.to_string())
+}
+
+/// 获取复习统计
+#[tauri::command]
+pub async fn get_review_stats(
+    dict_db: tauri::State<'_, Arc<DictionaryDb>>,
+) -> Result<ReviewStats, String> {
+    dict_db
+        .get_review_stats()
         .map_err(|e| e.to_string())
 }

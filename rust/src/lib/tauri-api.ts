@@ -233,6 +233,31 @@ export interface FavoriteWord {
   review_count: number;
   last_review_at?: string;
   created_at: string;
+  mastery_level: number;
+  next_review_at?: string;
+  last_feedback?: number;
+  consecutive_correct: number;
+}
+
+export interface ReviewSession {
+  id: number;
+  started_at: string;
+  finished_at?: string;
+  mode: string;
+  total_words: number;
+  completed_words: number;
+  correct_count: number;
+  wrong_count: number;
+  fuzzy_count: number;
+}
+
+export interface ReviewStats {
+  total_favorites: number;
+  mastered_count: number;
+  reviewing_count: number;
+  pending_count: number;
+  today_reviewed: number;
+  total_reviews: number;
 }
 
 export async function toggleFavorite(
@@ -272,4 +297,36 @@ export async function recordReview(word: string): Promise<boolean> {
 
 export async function countFavorites(): Promise<number> {
   return invoke("count_favorites", {});
+}
+
+// ==================== Review API ====================
+
+export async function getWordsForReview(limit?: number): Promise<FavoriteWord[]> {
+  return invoke("get_words_for_review", { limit });
+}
+
+export async function startReviewSession(
+  mode: string,
+  wordCount: number
+): Promise<number> {
+  return invoke("start_review_session", { mode, wordCount });
+}
+
+export async function recordReviewFeedback(params: {
+  sessionId: number;
+  word: string;
+  feedback: number;
+  responseTimeMs?: number;
+}): Promise<FavoriteWord> {
+  return invoke("record_review_feedback", params);
+}
+
+export async function finishReviewSession(
+  sessionId: number
+): Promise<ReviewSession> {
+  return invoke("finish_review_session", { sessionId });
+}
+
+export async function getReviewStats(): Promise<ReviewStats> {
+  return invoke("get_review_stats", {});
 }
