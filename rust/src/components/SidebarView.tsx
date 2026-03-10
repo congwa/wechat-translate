@@ -10,6 +10,7 @@ import { useFormStore, type DisplayMode } from "@/stores/formStore";
 import { useRuntimeStore } from "@/stores/runtimeStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { SegmentedText } from "@/components/SegmentedText";
+import { WordPopover } from "@/components/WordPopover";
 import * as api from "@/lib/tauri-api";
 
 type WindowMode = "follow" | "independent";
@@ -400,6 +401,9 @@ export function SidebarView() {
           <div ref={bottomRef} />
         </div>
       )}
+      
+      {/* 单词查词弹窗 */}
+      <WordPopover />
     </motion.div>
   );
 }

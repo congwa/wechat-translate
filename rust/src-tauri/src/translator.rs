@@ -41,14 +41,18 @@ impl DeepLXTranslator {
     }
 
     pub async fn translate(&self, text: &str) -> Result<String> {
+        self.translate_with_langs(text, &self.source_lang, &self.target_lang).await
+    }
+
+    pub async fn translate_with_langs(&self, text: &str, source_lang: &str, target_lang: &str) -> Result<String> {
         if self.base_url.is_empty() {
             return Ok(text.to_string());
         }
 
         let req_body = TranslateRequest {
             text: text.to_string(),
-            source_lang: self.source_lang.clone(),
-            target_lang: self.target_lang.clone(),
+            source_lang: source_lang.to_string(),
+            target_lang: target_lang.to_string(),
         };
 
         let mut request = self

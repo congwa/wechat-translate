@@ -3,6 +3,7 @@ mod app_state;
 mod commands;
 mod config;
 pub mod db;
+pub mod dictionary;
 mod events;
 mod image_cache;
 pub mod sidebar_window;
@@ -341,6 +342,12 @@ pub fn run() {
             let message_db =
                 Arc::new(MessageDb::new(&db_path).expect("failed to open message database"));
 
+            let dict_db_path = data_dir.join("dictionary.db");
+            let dict_db = Arc::new(
+                dictionary::DictionaryDb::open(&dict_db_path)
+                    .expect("failed to open dictionary database"),
+            );
+
             let image_cache = Arc::new(std::sync::Mutex::new(WeChatImageCache::new()));
 
             let manager = TaskManager::new(
@@ -351,8 +358,9 @@ pub fn run() {
             );
             let sidebar_state = sidebar_window::create_state();
 
-            app.manage(ConfigDir(data_dir));
+            app.manage(ConfigDir(data_dir.clone()));
             app.manage(message_db);
+            app.manage(dict_db);
             app.manage(image_cache);
             app.manage(manager.clone());
             app.manage(sidebar_state);
@@ -588,6 +596,9 @@ pub fn run() {
             commands::preflight::preflight_check,
             commands::preflight::accessibility_request_access,
             commands::preflight::accessibility_open_settings,
+            commands::dictionary::word_lookup,
+            commands::dictionary::translate_cached,
+            commands::dictionary::translate_batch,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

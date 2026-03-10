@@ -172,3 +172,53 @@ export async function translateTest(params: {
 }): Promise<ApiResponse> {
   return invoke("translate_test", params);
 }
+
+// ==================== Dictionary API ====================
+
+export interface Phonetic {
+  text?: string;
+  audio_url?: string;
+  region?: string;
+}
+
+export interface Definition {
+  english: string;
+  chinese?: string;
+  example?: string;
+  example_chinese?: string;
+}
+
+export interface Meaning {
+  part_of_speech: string;
+  part_of_speech_zh: string;
+  definitions: Definition[];
+  synonyms: string[];
+  antonyms: string[];
+}
+
+export interface WordEntry {
+  word: string;
+  phonetics: Phonetic[];
+  meanings: Meaning[];
+  fetched_at: string;
+}
+
+export async function wordLookup(word: string): Promise<WordEntry> {
+  return invoke("word_lookup", { word });
+}
+
+export async function translateCached(params: {
+  text: string;
+  sourceLang?: string;
+  targetLang?: string;
+}): Promise<string> {
+  return invoke("translate_cached", params);
+}
+
+export async function translateBatch(params: {
+  texts: string[];
+  sourceLang?: string;
+  targetLang?: string;
+}): Promise<(string | null)[]> {
+  return invoke("translate_batch", params);
+}

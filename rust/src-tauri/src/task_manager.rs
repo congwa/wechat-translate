@@ -357,6 +357,11 @@ impl TaskManager {
         self.first_poll_signal.wait_ready(timeout).await
     }
 
+    /// 获取当前配置的翻译器
+    pub async fn get_translator(&self) -> Option<Arc<DeepLXTranslator>> {
+        self.sidebar_config.lock().await.translator.clone()
+    }
+
     pub fn service_status(&self) -> serde_json::Value {
         let state = self.get_task_state();
         serde_json::json!({

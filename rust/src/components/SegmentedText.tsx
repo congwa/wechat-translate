@@ -1,11 +1,12 @@
 import { useState, useMemo, useCallback } from "react";
 import { motion } from "framer-motion";
 import { useWordSegmenter, isSegmenterSupported } from "@/hooks/useWordSegmenter";
+import { useDictionaryStore } from "@/stores/dictionaryStore";
 
 interface WordSpanProps {
   word: string;
   isActive: boolean;
-  onClick: () => void;
+  onClick: (e: React.MouseEvent) => void;
 }
 
 function WordSpan({ word, isActive, onClick }: WordSpanProps) {
@@ -20,10 +21,7 @@ function WordSpan({ word, isActive, onClick }: WordSpanProps) {
       `}
       whileTap={{ scale: 0.96 }}
       transition={{ type: "spring", stiffness: 400, damping: 25 }}
-      onClick={(e) => {
-        e.stopPropagation();
-        onClick();
-      }}
+      onClick={onClick}
     >
       {word}
     </motion.span>
@@ -40,13 +38,20 @@ export function SegmentedText({ text, className, onWordClick }: SegmentedTextPro
   const { segment, supported } = useWordSegmenter("en");
   const segments = useMemo(() => segment(text), [text, segment]);
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
+  const lookupWord = useDictionaryStore((s) => s.lookupWord);
 
   const handleWordClick = useCallback(
-    (word: string, segIndex: number, arrayIndex: number) => {
+    (e: React.MouseEvent, word: string, arrayIndex: number) => {
+      e.stopPropagation();
       setActiveIndex(arrayIndex);
-      onWordClick?.(word, segIndex);
+      
+      // 触发查词弹窗
+      const rect = (e.target as HTMLElement).getBoundingClientRect();
+      lookupWord(word, { x: rect.left, y: rect.bottom });
+      
+      onWordClick?.(word, arrayIndex);
     },
-    [onWordClick]
+    [onWordClick, lookupWord]
   );
 
   const handleContainerClick = useCallback(() => {
@@ -70,7 +75,7 @@ export function SegmentedText({ text, className, onWordClick }: SegmentedTextPro
             key={`${i}-${seg.index}`}
             word={seg.text}
             isActive={activeIndex === i}
-            onClick={() => handleWordClick(seg.text, seg.index, i)}
+            onClick={(e) => handleWordClick(e, seg.text, i)}
           />
         ) : (
           <span key={`${i}-${seg.index}`}>{seg.text}</span>
