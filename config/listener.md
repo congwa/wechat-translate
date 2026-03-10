@@ -33,8 +33,8 @@
     "side": "right"
   },
   "tts": {
-    "provider": "doubao",
-    "config_path": "config/doubao_tts.json"
+    "provider": "tencent_cloud",
+    "config_path": "config/tencent_tts.json"
   },
   "logging": {
     "file": "logs/sidebar_listener.log"
@@ -100,12 +100,12 @@
 - “朗读”通过侧边栏头部开关手动切换，配置项 `tts_auto_read_active_chat` 仅决定启动默认值。
 
 ### `tts`
-- `provider`：TTS 后端选择。当前支持 `windows_system` / `doubao`，默认 `doubao`。
+- `provider`：TTS 后端选择。当前支持 `windows_system` / `doubao` / `tencent_cloud`，默认 `tencent_cloud`。
   - `windows_system`：继续走本机 `System.Speech`，不依赖云接口。
   - `doubao`：走豆包单向流式 WebSocket，大模型合成结果回到本机播放。
   - `tencent_cloud`：走腾讯云 `TextToVoice` 基础语音合成 API（官方 Python SDK），返回 `wav` 后在本机播放。
-- 若保持默认 `doubao`，启动前必须准备好 `config/doubao_tts.json` 对应凭证（推荐通过 `.env.local` 注入），否则启动阶段会直接报错退出。
-- 若切到 `tencent_cloud`，启动前必须准备好 `config/tencent_tts.json` 对应凭证和音色 ID；这个 provider 当前也只允许 `wav`，不会顺手放开 `mp3/pcm`。
+- 若保持默认 `tencent_cloud`，启动前必须准备好 `config/tencent_tts.json` 对应凭证和音色 ID；这个 provider 当前也只允许 `wav`，不会顺手放开 `mp3/pcm`。
+- 若切到 `doubao`，启动前必须准备好 `config/doubao_tts.json` 对应凭证（推荐通过 `.env.local` 注入），否则启动阶段会直接报错退出。
 - `config_path`：provider 私有配置文件路径。
   - 当前给 `doubao` / `tencent_cloud` 使用。
   - 相对路径优先按当前 `listener.json` 所在目录解析；找不到时再按项目根目录解析。
@@ -164,11 +164,13 @@
 ```json
 {
   "provider": "tencent_cloud",
+  "secret_id": "",
+  "secret_key": "",
   "secret_id_env": "TENCENTCLOUD_SECRET_ID",
   "secret_key_env": "TENCENTCLOUD_SECRET_KEY",
   "endpoint": "tts.tencentcloudapi.com",
   "region": "",
-  "voice_type": 0,
+  "voice_type": 501008,
   "codec": "wav",
   "sample_rate": 16000,
   "speed": 0.0,
@@ -184,16 +186,21 @@
 
 ### `tencent_tts.json` 字段说明
 - `provider`：固定为 `tencent_cloud`，用于防止把错误 JSON 指给腾讯云后端。
+- `secret_id` / `secret_key`：腾讯云密钥本体。
+  - 示例里故意留空，避免把真实凭证写进仓库。
+  - 当前实现里只要这里是空字符串，就会继续按 `secret_id_env` / `secret_key_env` 去读环境变量。
 - `secret_id_env` / `secret_key_env`：从环境变量读取腾讯云密钥名。推荐把真实值放到 `.env.local`，不要硬写进仓库。
 - `secret_id` / `secret_key`：也支持直接写死，但不推荐；只有当对应 `_env` 未提供或环境变量为空时才会使用字面值。
 - `endpoint`：腾讯云 TTS API 域名，默认 `tts.tencentcloudapi.com`。
 - `region`：可选地域。基础语音合成文档允许省略；留空时当前实现不会额外带 `X-TC-Region`。
 - `voice_type`：音色 ID，必须是正整数。
-  - 示例里的 `0` 只是强提醒占位，不是可用值；真要切腾讯云 provider，必须先换成你实际要用的音色 ID。
+  - 当前默认示例直接落成 `WeJames`，也就是 `VoiceType=501008`。
+  - `501008` 是音色代号，不是 `sample_rate`；别把 `VoiceType` 和采样率写混。
   - 音色列表看腾讯云官方文档，不要拍脑袋填。
 - `codec`：当前必须是 `wav`。
   - 腾讯云文档虽然支持 `wav/mp3/pcm`，但当前本机播放链路只收 `wav`；继续放开 `mp3/pcm` 只会把兼容性问题拖回运行时。
 - `sample_rate`：采样率。当前只接受腾讯云基础语音合成文档明确支持的 `8000 / 16000 / 24000`。
+  - `WeJames` 当前示例默认配 `16000`；如果要换成 `8000` 或 `24000`，也必须保持在这三个官方支持值里。
 - `speed`：语速，允许范围 `-2.0 ~ 6.0`；支持小数。
 - `volume`：音量，允许范围 `-10.0 ~ 10.0`；支持小数。
 - `primary_language`：主语言类型，仅允许：

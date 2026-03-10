@@ -94,7 +94,7 @@ class SidebarHelpersTest(unittest.TestCase):
     def test_normalize_tts_provider_rejects_invalid_value(self):
         self.assertEqual(sidebar.normalize_tts_provider("DOUBAO"), "doubao")
         self.assertEqual(sidebar.normalize_tts_provider("TENCENT_CLOUD"), "tencent_cloud")
-        self.assertEqual(sidebar.normalize_tts_provider(""), "doubao")
+        self.assertEqual(sidebar.normalize_tts_provider(""), "tencent_cloud")
         with self.assertRaises(RuntimeError):
             sidebar.normalize_tts_provider("unknown")
 

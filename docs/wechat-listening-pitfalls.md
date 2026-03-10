@@ -281,13 +281,14 @@
 - 当前正文支持“轻点朗读”：按下后小位移松开会播放；若形成拖拽选区，或触发双击/三击选词，则不会播放。
 - 正文点击范围只覆盖正文字符，不包括时间、发送人和空白区。
 - TTS provider 现在走独立配置：`listener.json` 只负责选择 `tts.provider`，provider 私有参数拆到独立 JSON（例如 `config/doubao_tts.json`、`config/tencent_tts.json`）。
-- 当前默认 provider 已切到 `doubao`；这会让启动默认依赖豆包凭证，不再像旧版那样天然只依赖本机系统语音。
+- 当前默认 provider 已切到 `tencent_cloud`；这会让启动默认依赖腾讯云凭证和 `config/tencent_tts.json`，不再像旧版那样天然只依赖本机系统语音。
 - `tts.provider=windows_system` 时，仍走 Windows 系统 `System.Speech`，默认优先选 `Microsoft Zira Desktop`，不存在时再回退到其他英文 voice。
 - `tts.provider=doubao` 时，走豆包单向流式 WebSocket；当前播放链路要求 provider 配置里的 `audio_format=wav`，否则启动阶段直接报错。
 - `tts.provider=tencent_cloud` 时，走腾讯云基础语音合成 `TextToVoice`（官方 Python SDK）；当前播放链路同样只允许 `codec=wav`，不会顺手放开 `mp3/pcm`。
+- 腾讯云默认音色当前固定成 `WeJames`，也就是 `VoiceType=501008`；`501008` 不是 `sample_rate`，采样率仍只接受 `8000 / 16000 / 24000`。
 - 豆包配置当前额外支持 `sample_rate` / `speech_rate` / `loudness_rate` / `use_cache`。
 - 腾讯云配置当前额外支持 `voice_type` / `sample_rate` / `speed` / `volume` / `primary_language` / `segment_rate` / `emotion_*` / `request_timeout_seconds`。
-- 默认值收敛为 `sample_rate=32000`、`speech_rate=-15`、`loudness_rate=0`、`use_cache=false`。
+- 豆包链路默认值收敛为 `sample_rate=32000`、`speech_rate=-15`、`loudness_rate=0`、`use_cache=false`。
 - `sample_rate` 不再只做“>=8000”这种宽松校验，而是限制在官方支持值集合内；`speech_rate` / `loudness_rate` 也按官方范围 fail-fast 校验，避免把脏值拖到运行时才炸。
 - 腾讯云这条链路同样做 fail-fast 校验：`voice_type>0`、`sample_rate ∈ {8000,16000,24000}`、`speed ∈ [-2,6]`、`volume ∈ [-10,10]`、`primary_language ∈ {1,2}`、`segment_rate ∈ {0,1,2}`，避免把脏值拖到请求时才报业务错。
 - `use_cache` 只做成显式开关，默认不启用；聊天短句重复率有限，而且缓存会干扰不同语速/音量参数的对比。

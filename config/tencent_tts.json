@@ -1,10 +1,12 @@
 {
   "provider": "tencent_cloud",
+  "secret_id": "",
+  "secret_key": "",
   "secret_id_env": "TENCENTCLOUD_SECRET_ID",
   "secret_key_env": "TENCENTCLOUD_SECRET_KEY",
   "endpoint": "tts.tencentcloudapi.com",
   "region": "",
-  "voice_type": 0,
+  "voice_type": 501008,
   "codec": "wav",
   "sample_rate": 16000,
   "speed": 0.0,

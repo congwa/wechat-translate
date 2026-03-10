@@ -18,7 +18,7 @@ pip install -r requirements.txt
 
 ## 启动
 
-监听目标、翻译策略、侧边栏参数都从 `config/listener.json` 读取；当前默认 TTS provider 是豆包，provider 的私有参数拆到独立 JSON（例如 `config/doubao_tts.json` / `config/tencent_tts.json`）：
+监听目标、翻译策略、侧边栏参数都从 `config/listener.json` 读取；当前默认 TTS provider 是腾讯云，provider 的私有参数拆到独立 JSON（例如 `config/tencent_tts.json` / `config/doubao_tts.json`）：
 
 ```bash
 python listener_app/sidebar_translate_listener.py --config ".\config\listener.json"
@@ -35,7 +35,8 @@ TENCENTCLOUD_SECRET_KEY=<your-secret-key>
 ```
 
 如果你不想依赖云 TTS，把 `config/listener.json` 里的 `tts.provider` 改回 `windows_system` 即可。
-如果你要切腾讯云，把 `tts.provider` 改成 `tencent_cloud`，并把 `tts.config_path` 指到 `config/tencent_tts.json`。
+当前默认已经是腾讯云；如果你之前改过 provider，确保 `tts.provider=tencent_cloud`，并把 `tts.config_path` 指到 `config/tencent_tts.json`。
+当前默认腾讯云配置示例里的英文音色是 `WeJames`，代号 `VoiceType=501008`；这不是 `SampleRate`。
 
 或者临时在 PowerShell 中设置：
 

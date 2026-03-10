@@ -31,8 +31,8 @@
     "side": "right"
   },
   "tts": {
-    "provider": "doubao",
-    "config_path": "config/doubao_tts.json"
+    "provider": "tencent_cloud",
+    "config_path": "config/tencent_tts.json"
   },
   "logging": {
     "file": "logs/sidebar_listener.log"
