@@ -44,6 +44,13 @@ class SidebarHelpersTest(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             sidebar.validate_float_min("x", 0.1, 0.2)
 
+    def test_validate_float_range(self):
+        self.assertEqual(sidebar.validate_float_range("x", 1.5, -2.0, 6.0), 1.5)
+        with self.assertRaises(RuntimeError):
+            sidebar.validate_float_range("x", -2.1, -2.0, 6.0)
+        with self.assertRaises(RuntimeError):
+            sidebar.validate_float_range("x", 6.1, -2.0, 6.0)
+
     def test_validate_int_min(self):
         self.assertEqual(sidebar.validate_int_min("w", 300, 280), 300)
         with self.assertRaises(RuntimeError):
@@ -86,6 +93,7 @@ class SidebarHelpersTest(unittest.TestCase):
 
     def test_normalize_tts_provider_rejects_invalid_value(self):
         self.assertEqual(sidebar.normalize_tts_provider("DOUBAO"), "doubao")
+        self.assertEqual(sidebar.normalize_tts_provider("TENCENT_CLOUD"), "tencent_cloud")
         self.assertEqual(sidebar.normalize_tts_provider(""), "doubao")
         with self.assertRaises(RuntimeError):
             sidebar.normalize_tts_provider("unknown")
@@ -202,6 +210,104 @@ class SidebarHelpersTest(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 sidebar.load_doubao_tts_settings(str(config_path))
 
+    def test_load_tencent_cloud_tts_settings_reads_env_backed_credentials(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = pathlib.Path(tmpdir) / "tencent_tts.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "provider": "tencent_cloud",
+                        "secret_id_env": "TENCENT_SECRET_ID",
+                        "secret_key_env": "TENCENT_SECRET_KEY",
+                        "voice_type": 101001,
+                        "codec": "wav",
+                        "sample_rate": 16000,
+                        "speed": 1.25,
+                        "volume": 2.0,
+                        "primary_language": 2,
+                        "segment_rate": 1,
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "TENCENT_SECRET_ID": "secret-id-1",
+                    "TENCENT_SECRET_KEY": "secret-key-1",
+                },
+                clear=False,
+            ):
+                settings = sidebar.load_tencent_cloud_tts_settings(str(config_path))
+
+        self.assertEqual(settings.secret_id, "secret-id-1")
+        self.assertEqual(settings.secret_key, "secret-key-1")
+        self.assertEqual(settings.voice_type, 101001)
+        self.assertEqual(settings.codec, "wav")
+        self.assertEqual(settings.sample_rate, 16000)
+        self.assertEqual(settings.speed, 1.25)
+        self.assertEqual(settings.volume, 2.0)
+        self.assertEqual(settings.primary_language, 2)
+        self.assertEqual(settings.segment_rate, 1)
+
+    def test_load_tencent_cloud_tts_settings_rejects_non_wav_codec(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = pathlib.Path(tmpdir) / "tencent_tts.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "provider": "tencent_cloud",
+                        "secret_id": "secret-id-1",
+                        "secret_key": "secret-key-1",
+                        "voice_type": 101001,
+                        "codec": "mp3",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaises(RuntimeError):
+                sidebar.load_tencent_cloud_tts_settings(str(config_path))
+
+    def test_load_tencent_cloud_tts_settings_rejects_invalid_sample_rate(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = pathlib.Path(tmpdir) / "tencent_tts.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "provider": "tencent_cloud",
+                        "secret_id": "secret-id-1",
+                        "secret_key": "secret-key-1",
+                        "voice_type": 101001,
+                        "sample_rate": 32000,
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaises(RuntimeError):
+                sidebar.load_tencent_cloud_tts_settings(str(config_path))
+
+    def test_load_tencent_cloud_tts_settings_rejects_out_of_range_speed(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = pathlib.Path(tmpdir) / "tencent_tts.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "provider": "tencent_cloud",
+                        "secret_id": "secret-id-1",
+                        "secret_key": "secret-key-1",
+                        "voice_type": 101001,
+                        "speed": 6.5,
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaises(RuntimeError):
+                sidebar.load_tencent_cloud_tts_settings(str(config_path))
+
     def test_build_doubao_ws_headers_and_payload(self):
         settings = sidebar.DoubaoTTSSettings(
             endpoint="wss://example.invalid/tts",
@@ -229,6 +335,40 @@ class SidebarHelpersTest(unittest.TestCase):
         self.assertEqual(payload["req_params"]["audio_params"]["loudness_rate"], 0)
         self.assertTrue(payload["req_params"]["additions"]["cache_config"]["use_cache"])
         self.assertEqual(payload["req_params"]["additions"]["cache_config"]["text_type"], 1)
+
+    def test_build_tencent_cloud_tts_request_payload(self):
+        settings = sidebar.TencentCloudTTSSettings(
+            secret_id="secret-id-1",
+            secret_key="secret-key-1",
+            voice_type=101001,
+            sample_rate=24000,
+            speed=1.25,
+            volume=2.0,
+            primary_language=2,
+            segment_rate=1,
+            enable_subtitle=True,
+            emotion_category="neutral",
+            emotion_intensity=120,
+        )
+
+        payload = sidebar.build_tencent_cloud_tts_request_payload(
+            settings,
+            "Hello world",
+            "session-123",
+        )
+
+        self.assertEqual(payload["Text"], "Hello world")
+        self.assertEqual(payload["SessionId"], "session-123")
+        self.assertEqual(payload["VoiceType"], 101001)
+        self.assertEqual(payload["SampleRate"], 24000)
+        self.assertEqual(payload["Codec"], "wav")
+        self.assertEqual(payload["Speed"], 1.25)
+        self.assertEqual(payload["Volume"], 2.0)
+        self.assertEqual(payload["PrimaryLanguage"], 2)
+        self.assertEqual(payload["SegmentRate"], 1)
+        self.assertTrue(payload["EnableSubtitle"])
+        self.assertEqual(payload["EmotionCategory"], "neutral")
+        self.assertEqual(payload["EmotionIntensity"], 120)
 
     def test_normalize_wav_size_fields_rewrites_streaming_placeholders(self):
         wav_bytes = (
@@ -317,6 +457,72 @@ class SidebarHelpersTest(unittest.TestCase):
         self.assertIn("tts unavailable backend=doubao", runtime_text)
         self.assertIn("missing Python module 'websockets'", runtime_text)
 
+    def test_create_tts_player_tencent_cloud_uses_external_config(self):
+        settings = sidebar.TencentCloudTTSSettings(
+            secret_id="secret-id-1",
+            secret_key="secret-key-1",
+            voice_type=101001,
+            sample_rate=16000,
+            speed=0.0,
+            volume=0.0,
+        )
+        with mock.patch.object(
+            sidebar,
+            "load_tencent_cloud_tts_settings",
+            return_value=settings,
+        ), mock.patch.object(
+            sidebar,
+            "resolve_config_file_path",
+            return_value="D:\\mock\\config\\tencent_tts.json",
+        ), mock.patch.object(
+            sidebar,
+            "probe_tencent_cloud_tts_runtime",
+            return_value="",
+        ):
+            player, runtime_text = sidebar.create_tts_player(
+                {
+                    "provider": "tencent_cloud",
+                    "config_path": "config/tencent_tts.json",
+                },
+                config_dir="D:\\mock",
+            )
+
+        self.assertIsInstance(player, sidebar.TencentCloudSDKTTS)
+        self.assertIn("backend=tencent_cloud", runtime_text)
+        self.assertIn("voice_type=101001", runtime_text)
+        self.assertIn("sample_rate=16000", runtime_text)
+
+    def test_create_tts_player_tencent_cloud_returns_unavailable_when_sdk_missing(self):
+        settings = sidebar.TencentCloudTTSSettings(
+            secret_id="secret-id-1",
+            secret_key="secret-key-1",
+            voice_type=101001,
+        )
+        with mock.patch.object(
+            sidebar,
+            "load_tencent_cloud_tts_settings",
+            return_value=settings,
+        ), mock.patch.object(
+            sidebar,
+            "resolve_config_file_path",
+            return_value="D:\\mock\\config\\tencent_tts.json",
+        ), mock.patch.object(
+            sidebar,
+            "probe_tencent_cloud_tts_runtime",
+            return_value="missing Python module 'tencentcloud.tts.v20190823.tts_client': No module named 'tencentcloud'",
+        ):
+            player, runtime_text = sidebar.create_tts_player(
+                {
+                    "provider": "tencent_cloud",
+                    "config_path": "config/tencent_tts.json",
+                },
+                config_dir="D:\\mock",
+            )
+
+        self.assertIsNone(player)
+        self.assertIn("tts unavailable backend=tencent_cloud", runtime_text)
+        self.assertIn("No module named 'tencentcloud'", runtime_text)
+
     def test_check_tts_dependency_packaging_reports_missing_websockets(self):
         with mock.patch.object(
             sidebar,
@@ -328,6 +534,18 @@ class SidebarHelpersTest(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("tts dependency check failed backend=doubao", detail)
         self.assertIn("missing Python module 'websockets'", detail)
+
+    def test_check_tts_dependency_packaging_reports_missing_tencent_sdk(self):
+        with mock.patch.object(
+            sidebar,
+            "probe_tencent_cloud_tts_runtime",
+            return_value="missing Python module 'tencentcloud.tts.v20190823.tts_client': No module named 'tencentcloud'",
+        ):
+            ok, detail = sidebar.check_tts_dependency_packaging({"provider": "tencent_cloud"})
+
+        self.assertFalse(ok)
+        self.assertIn("tts dependency check failed backend=tencent_cloud", detail)
+        self.assertIn("No module named 'tencentcloud'", detail)
 
     def test_doubao_run_blocking_emits_failure_log(self):
         settings = sidebar.DoubaoTTSSettings(
@@ -371,6 +589,45 @@ class SidebarHelpersTest(unittest.TestCase):
         self.assertTrue(player._run_speak_blocking("Hello world"))
         self.assertEqual(player._last_error, "")
         self.assertTrue(any("tts played backend=doubao" in line for line in logs))
+
+    def test_tencent_cloud_run_blocking_emits_failure_log(self):
+        settings = sidebar.TencentCloudTTSSettings(
+            secret_id="secret-id-1",
+            secret_key="secret-key-1",
+            voice_type=101001,
+        )
+        player = sidebar.TencentCloudSDKTTS(settings)
+        logs = []
+        player.set_logger(logs.append)
+
+        def fake_synthesize(_payload):
+            raise RuntimeError("boom")
+
+        player._synthesize_audio = fake_synthesize
+
+        self.assertFalse(player._run_speak_blocking("Hello world"))
+        self.assertIn("boom", player._last_error)
+        self.assertTrue(any("tts failed backend=tencent_cloud" in line for line in logs))
+
+    def test_tencent_cloud_run_blocking_emits_success_log(self):
+        settings = sidebar.TencentCloudTTSSettings(
+            secret_id="secret-id-1",
+            secret_key="secret-key-1",
+            voice_type=101001,
+        )
+        player = sidebar.TencentCloudSDKTTS(settings)
+        logs = []
+        player.set_logger(logs.append)
+
+        def fake_synthesize(_payload):
+            return (b"RIFF....WAVEfmt ", "req-1", "session-1")
+
+        player._synthesize_audio = fake_synthesize
+        player._play_wav_bytes = lambda _audio: True
+
+        self.assertTrue(player._run_speak_blocking("Hello world"))
+        self.assertEqual(player._last_error, "")
+        self.assertTrue(any("tts played backend=tencent_cloud" in line for line in logs))
 
     def test_is_filtered_placeholder_matches_media_placeholders(self):
         self.assertTrue(sidebar.is_filtered_placeholder("[图片]"))

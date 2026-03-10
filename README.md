@@ -18,21 +18,24 @@ pip install -r requirements.txt
 
 ## 启动
 
-监听目标、翻译策略、侧边栏参数都从 `config/listener.json` 读取；当前默认 TTS provider 是豆包，provider 的私有参数拆到独立 JSON（例如 `config/doubao_tts.json`）：
+监听目标、翻译策略、侧边栏参数都从 `config/listener.json` 读取；当前默认 TTS provider 是豆包，provider 的私有参数拆到独立 JSON（例如 `config/doubao_tts.json` / `config/tencent_tts.json`）：
 
 ```bash
 python listener_app/sidebar_translate_listener.py --config ".\config\listener.json"
 ```
 
-接入 DeepLX / 豆包 TTS 时，推荐把真实密钥放进项目根目录的 `.env.local`：
+接入 DeepLX / 云 TTS 时，推荐把真实密钥放进项目根目录的 `.env.local`：
 
 ```bash
 DEEPLX_URL=http://127.0.0.1:1188/translate
 VOLCENGINE_TTS_APPID=<your-appid>
 VOLCENGINE_TTS_ACCESS_TOKEN=<your-access-token>
+TENCENTCLOUD_SECRET_ID=<your-secret-id>
+TENCENTCLOUD_SECRET_KEY=<your-secret-key>
 ```
 
 如果你不想依赖云 TTS，把 `config/listener.json` 里的 `tts.provider` 改回 `windows_system` 即可。
+如果你要切腾讯云，把 `tts.provider` 改成 `tencent_cloud`，并把 `tts.config_path` 指到 `config/tencent_tts.json`。
 
 或者临时在 PowerShell 中设置：
 
@@ -95,6 +98,7 @@ artifacts\windows-app\wechat_sidebar\
 ```text
 config/
 ├── doubao_tts.json
+├── tencent_tts.json
 ├── listener.json
 └── listener.md
 docs/

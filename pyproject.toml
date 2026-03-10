@@ -19,6 +19,7 @@ requires-python = ">=3.8"
 dependencies = [
     "uiautomation>=2.0.18",
     "websockets>=14.0",
+    "tencentcloud-sdk-python-tts>=3.0.0",
 ]
 
 [project.urls]

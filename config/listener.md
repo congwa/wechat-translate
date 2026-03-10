@@ -103,9 +103,11 @@
 - `provider`：TTS 后端选择。当前支持 `windows_system` / `doubao`，默认 `doubao`。
   - `windows_system`：继续走本机 `System.Speech`，不依赖云接口。
   - `doubao`：走豆包单向流式 WebSocket，大模型合成结果回到本机播放。
+  - `tencent_cloud`：走腾讯云 `TextToVoice` 基础语音合成 API（官方 Python SDK），返回 `wav` 后在本机播放。
 - 若保持默认 `doubao`，启动前必须准备好 `config/doubao_tts.json` 对应凭证（推荐通过 `.env.local` 注入），否则启动阶段会直接报错退出。
+- 若切到 `tencent_cloud`，启动前必须准备好 `config/tencent_tts.json` 对应凭证和音色 ID；这个 provider 当前也只允许 `wav`，不会顺手放开 `mp3/pcm`。
 - `config_path`：provider 私有配置文件路径。
-  - 当前主要给 `doubao` 使用。
+  - 当前给 `doubao` / `tencent_cloud` 使用。
   - 相对路径优先按当前 `listener.json` 所在目录解析；找不到时再按项目根目录解析。
   - 推荐把 provider 私有配置拆到独立 JSON，别把不同供应商参数全堆回 `listener.json`。
 
@@ -158,6 +160,54 @@
 - `uid`：业务侧用户标识，用于请求体。
 - `connect_timeout_seconds`：建连超时秒数，必须 `> 0`。
 
+## `config/tencent_tts.json` 示例
+```json
+{
+  "provider": "tencent_cloud",
+  "secret_id_env": "TENCENTCLOUD_SECRET_ID",
+  "secret_key_env": "TENCENTCLOUD_SECRET_KEY",
+  "endpoint": "tts.tencentcloudapi.com",
+  "region": "",
+  "voice_type": 0,
+  "codec": "wav",
+  "sample_rate": 16000,
+  "speed": 0.0,
+  "volume": 0.0,
+  "primary_language": 2,
+  "model_type": 1,
+  "project_id": 0,
+  "segment_rate": 0,
+  "enable_subtitle": false,
+  "request_timeout_seconds": 15.0
+}
+```
+
+### `tencent_tts.json` 字段说明
+- `provider`：固定为 `tencent_cloud`，用于防止把错误 JSON 指给腾讯云后端。
+- `secret_id_env` / `secret_key_env`：从环境变量读取腾讯云密钥名。推荐把真实值放到 `.env.local`，不要硬写进仓库。
+- `secret_id` / `secret_key`：也支持直接写死，但不推荐；只有当对应 `_env` 未提供或环境变量为空时才会使用字面值。
+- `endpoint`：腾讯云 TTS API 域名，默认 `tts.tencentcloudapi.com`。
+- `region`：可选地域。基础语音合成文档允许省略；留空时当前实现不会额外带 `X-TC-Region`。
+- `voice_type`：音色 ID，必须是正整数。
+  - 示例里的 `0` 只是强提醒占位，不是可用值；真要切腾讯云 provider，必须先换成你实际要用的音色 ID。
+  - 音色列表看腾讯云官方文档，不要拍脑袋填。
+- `codec`：当前必须是 `wav`。
+  - 腾讯云文档虽然支持 `wav/mp3/pcm`，但当前本机播放链路只收 `wav`；继续放开 `mp3/pcm` 只会把兼容性问题拖回运行时。
+- `sample_rate`：采样率。当前只接受腾讯云基础语音合成文档明确支持的 `8000 / 16000 / 24000`。
+- `speed`：语速，允许范围 `-2.0 ~ 6.0`；支持小数。
+- `volume`：音量，允许范围 `-10.0 ~ 10.0`；支持小数。
+- `primary_language`：主语言类型，仅允许：
+  - `1`：中文
+  - `2`：英文
+  - 当前英文学习场景建议直接用 `2`，别让 provider 继续按中文模型猜。
+- `model_type`：当前只接受 `1`。文档没给你别的稳定选项，就别自作聪明扩。
+- `project_id`：项目 ID，必须 `>= 0`，默认 `0`。
+- `segment_rate`：断句敏感阈值，仅允许 `0 / 1 / 2`。
+- `enable_subtitle`：是否开启时间戳。当前播放链路不消费字幕，只是按官方参数原样透传；默认关。
+- `emotion_category`：情感参数，仅多情感音色可用；留空表示不用。
+- `emotion_intensity`：情感强度。只有 `emotion_category` 非空时才会校验并生效，允许范围 `50 ~ 200`。
+- `request_timeout_seconds`：腾讯云 SDK 请求超时，必须 `> 0`。
+
 ## 当前消息渲染规则（代码行为）
 - 明显的媒体占位文本会被过滤，不显示到侧边栏，也不会送进 DeepLX：`[图片]` / `[image]` / `[images]` / `[photo]` / `[视频]` / `[video]` / `[动画表情]` / `[animated emoticon]` / `[语音] 2"` / `[Voice Over] 3"` 等同类方括号占位文本。
 - 额外兜底规则：只要整条消息被 ASCII 方括号完整包住（例如 `[系统提示]`），也会直接过滤。这条规则是故意偏激进的，会一并吞掉合法的方括号文本。
@@ -171,7 +221,9 @@
 - 若按下后位移很小再松开，会判定为“轻点播放”；若位移超过阈值、形成文本选区，或触发双击/三击选词，则不会播放。
 - 当 `tts.provider=windows_system` 时，默认优先选用 `Microsoft Zira Desktop`，不存在时回退到其他英文 voice。
 - 当 `tts.provider=doubao` 时，会先请求豆包单向流式 WebSocket，再把返回的 `wav` 在本机顺序播放。
+- 当 `tts.provider=tencent_cloud` 时，会通过腾讯云官方 Python SDK 调 `TextToVoice`，把返回的 base64 `wav` 解码后在本机顺序播放。
 - 豆包请求当前会固定带上 `audio_params.sample_rate` / `speech_rate` / `loudness_rate`；启用 `use_cache=true` 时，还会附带 `cache_config.use_cache=true`。
+- 腾讯云请求当前会固定带上 `VoiceType` / `SampleRate` / `Speed` / `Volume` / `PrimaryLanguage` / `SegmentRate`；若配置了情感参数，才会额外带 `EmotionCategory` / `EmotionIntensity`。
 - 当 `display.tts_auto_read_active_chat=true` 时，当前选中会话的新英文消息在翻译结果落地后会自动朗读；切到其他会话后，旧会话新消息不会补读。
 - UI 不显示 `source=session_preview`，该字段仅用于内部日志。
 - 当前侧边栏仅用于监听与展示，不提供消息发送输入框。

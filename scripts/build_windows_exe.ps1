@@ -239,6 +239,7 @@ $mainArgs = @(
     "--specpath", $SpecRoot,
     "--paths", $RepoRoot,
     "--collect-submodules", "websockets",
+    "--collect-submodules", "tencentcloud",
     "--add-data", $ConfigData,
     $MainSource
 )
