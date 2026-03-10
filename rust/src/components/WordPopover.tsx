@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback, useRef } from "react";
-import { X, Volume2, Loader2 } from "lucide-react";
+import { X, Volume2, Loader2, Star } from "lucide-react";
 import { useDictionaryStore } from "@/stores/dictionaryStore";
+import { useFavoriteStore } from "@/stores/favoriteStore";
 import type { Definition, Meaning } from "@/lib/tauri-api";
 
 interface DefinitionItemProps {
@@ -116,9 +117,36 @@ export function WordPopover() {
     translateDefinition,
   } = useDictionaryStore();
 
+  const { checkFavorite, toggleFavorite, getCachedStatus } = useFavoriteStore();
+
   const popoverRef = useRef<HTMLDivElement>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [playingRegion, setPlayingRegion] = useState<string | null>(null);
+  const [isFavorited, setIsFavorited] = useState(false);
+  const [favoriteLoading, setFavoriteLoading] = useState(false);
+
+  // 检查收藏状态
+  useEffect(() => {
+    if (currentWord) {
+      const cached = getCachedStatus(currentWord);
+      if (cached !== undefined) {
+        setIsFavorited(cached);
+      } else {
+        checkFavorite(currentWord).then(setIsFavorited);
+      }
+    }
+  }, [currentWord, checkFavorite, getCachedStatus]);
+
+  const handleToggleFavorite = useCallback(async () => {
+    if (!currentWord || favoriteLoading) return;
+    setFavoriteLoading(true);
+    try {
+      const newStatus = await toggleFavorite(currentWord, currentEntry ?? undefined);
+      setIsFavorited(newStatus);
+    } finally {
+      setFavoriteLoading(false);
+    }
+  }, [currentWord, currentEntry, favoriteLoading, toggleFavorite]);
 
   // 点击外部关闭
   useEffect(() => {
@@ -224,6 +252,23 @@ export function WordPopover() {
           )}
         </div>
         <div className="flex items-center gap-0.5 shrink-0">
+          {/* 收藏按钮 */}
+          <button
+            onClick={handleToggleFavorite}
+            disabled={favoriteLoading}
+            className="p-1 rounded hover:bg-accent transition-colors"
+            title={isFavorited ? "取消收藏" : "收藏单词"}
+          >
+            <Star
+              className={`w-3.5 h-3.5 transition-colors ${
+                favoriteLoading
+                  ? "text-muted-foreground animate-pulse"
+                  : isFavorited
+                  ? "fill-yellow-400 text-yellow-400"
+                  : "text-muted-foreground hover:text-yellow-400"
+              }`}
+            />
+          </button>
           {phoneticsWithAudio.map((p) => (
             <button
               key={p.region || "default"}

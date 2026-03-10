@@ -1,5 +1,8 @@
-use crate::dictionary::{api::DictionaryApiClient, db::hash_text, DictionaryDb, WordEntry};
+use crate::dictionary::api::DictionaryApiClient;
+use crate::dictionary::db::hash_text;
+use crate::dictionary::{DictionaryDb, FavoriteWord, WordEntry};
 use crate::task_manager::TaskManager;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 /// 查询单词（带缓存）
@@ -117,4 +120,106 @@ pub async fn translate_batch(
     }
 
     Ok(results)
+}
+
+// ========== 收藏功能 ==========
+
+/// 收藏/取消收藏单词（toggle）
+#[tauri::command]
+pub async fn toggle_favorite(
+    dict_db: tauri::State<'_, Arc<DictionaryDb>>,
+    word: String,
+    entry: Option<WordEntry>,
+) -> Result<bool, String> {
+    let word = word.to_lowercase().trim().to_string();
+    if word.is_empty() {
+        return Err("Word cannot be empty".to_string());
+    }
+
+    // 检查是否已收藏
+    let is_favorited = dict_db.is_favorited(&word).map_err(|e| e.to_string())?;
+
+    if is_favorited {
+        // 取消收藏
+        dict_db.remove_favorite(&word).map_err(|e| e.to_string())?;
+        Ok(false)
+    } else {
+        // 添加收藏
+        dict_db
+            .add_favorite(&word, entry.as_ref())
+            .map_err(|e| e.to_string())?;
+        Ok(true)
+    }
+}
+
+/// 检查单词是否已收藏
+#[tauri::command]
+pub async fn is_word_favorited(
+    dict_db: tauri::State<'_, Arc<DictionaryDb>>,
+    word: String,
+) -> Result<bool, String> {
+    dict_db
+        .is_favorited(&word)
+        .map_err(|e| e.to_string())
+}
+
+/// 批量检查收藏状态
+#[tauri::command]
+pub async fn get_favorites_batch(
+    dict_db: tauri::State<'_, Arc<DictionaryDb>>,
+    words: Vec<String>,
+) -> Result<HashMap<String, bool>, String> {
+    let results = dict_db
+        .get_favorites_batch(&words)
+        .map_err(|e| e.to_string())?;
+    
+    Ok(results.into_iter().collect())
+}
+
+/// 获取收藏列表
+#[tauri::command]
+pub async fn list_favorites(
+    dict_db: tauri::State<'_, Arc<DictionaryDb>>,
+    offset: Option<u32>,
+    limit: Option<u32>,
+) -> Result<Vec<FavoriteWord>, String> {
+    let offset = offset.unwrap_or(0);
+    let limit = limit.unwrap_or(50);
+    
+    dict_db
+        .list_favorites(offset, limit)
+        .map_err(|e| e.to_string())
+}
+
+/// 更新收藏笔记
+#[tauri::command]
+pub async fn update_favorite_note(
+    dict_db: tauri::State<'_, Arc<DictionaryDb>>,
+    word: String,
+    note: String,
+) -> Result<bool, String> {
+    dict_db
+        .update_favorite_note(&word, &note)
+        .map_err(|e| e.to_string())
+}
+
+/// 记录复习
+#[tauri::command]
+pub async fn record_review(
+    dict_db: tauri::State<'_, Arc<DictionaryDb>>,
+    word: String,
+) -> Result<bool, String> {
+    dict_db
+        .record_review(&word)
+        .map_err(|e| e.to_string())
+}
+
+/// 获取收藏总数
+#[tauri::command]
+pub async fn count_favorites(
+    dict_db: tauri::State<'_, Arc<DictionaryDb>>,
+) -> Result<u32, String> {
+    dict_db
+        .count_favorites()
+        .map_err(|e| e.to_string())
 }

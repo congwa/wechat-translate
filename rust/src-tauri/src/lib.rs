@@ -599,6 +599,13 @@ pub fn run() {
             commands::dictionary::word_lookup,
             commands::dictionary::translate_cached,
             commands::dictionary::translate_batch,
+            commands::dictionary::toggle_favorite,
+            commands::dictionary::is_word_favorited,
+            commands::dictionary::get_favorites_batch,
+            commands::dictionary::list_favorites,
+            commands::dictionary::update_favorite_note,
+            commands::dictionary::record_review,
+            commands::dictionary::count_favorites,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

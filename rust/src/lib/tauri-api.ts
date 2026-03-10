@@ -222,3 +222,54 @@ export async function translateBatch(params: {
 }): Promise<(string | null)[]> {
   return invoke("translate_batch", params);
 }
+
+// ==================== Favorite API ====================
+
+export interface FavoriteWord {
+  word: string;
+  phonetic?: string;
+  meanings_json?: string;
+  note?: string;
+  review_count: number;
+  last_review_at?: string;
+  created_at: string;
+}
+
+export async function toggleFavorite(
+  word: string,
+  entry?: WordEntry
+): Promise<boolean> {
+  return invoke("toggle_favorite", { word, entry });
+}
+
+export async function isWordFavorited(word: string): Promise<boolean> {
+  return invoke("is_word_favorited", { word });
+}
+
+export async function getFavoritesBatch(
+  words: string[]
+): Promise<Record<string, boolean>> {
+  return invoke("get_favorites_batch", { words });
+}
+
+export async function listFavorites(params?: {
+  offset?: number;
+  limit?: number;
+}): Promise<FavoriteWord[]> {
+  return invoke("list_favorites", params ?? {});
+}
+
+export async function updateFavoriteNote(
+  word: string,
+  note: string
+): Promise<boolean> {
+  return invoke("update_favorite_note", { word, note });
+}
+
+export async function recordReview(word: string): Promise<boolean> {
+  return invoke("record_review", { word });
+}
+
+export async function countFavorites(): Promise<number> {
+  return invoke("count_favorites", {});
+}

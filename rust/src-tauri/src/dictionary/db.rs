@@ -50,6 +50,21 @@ impl DictionaryDb {
 
             CREATE INDEX IF NOT EXISTS idx_translation_hash 
                 ON translation_cache(source_hash, source_lang, target_lang);
+
+            CREATE TABLE IF NOT EXISTS word_favorites (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                word TEXT NOT NULL UNIQUE,
+                phonetic TEXT,
+                meanings_json TEXT,
+                note TEXT DEFAULT '',
+                review_count INTEGER DEFAULT 0,
+                last_review_at TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_favorites_word ON word_favorites(word);
+            CREATE INDEX IF NOT EXISTS idx_favorites_created ON word_favorites(created_at DESC);
             "#,
         )?;
         Ok(())
@@ -204,6 +219,149 @@ impl DictionaryDb {
         }
         true
     }
+
+    // ========== 收藏功能 ==========
+
+    /// 收藏单词（如果已存在则返回 false）
+    pub fn add_favorite(&self, word: &str, entry: Option<&WordEntry>) -> Result<bool> {
+        let conn = self.conn.lock().unwrap();
+        let word_lower = word.to_lowercase();
+
+        let (phonetic, meanings_json) = if let Some(e) = entry {
+            let phonetic = e.phonetics.iter().find(|p| p.text.is_some()).and_then(|p| p.text.clone());
+            let meanings_json = serde_json::to_string(&e.meanings).ok();
+            (phonetic, meanings_json)
+        } else {
+            (None, None)
+        };
+
+        let result = conn.execute(
+            r#"
+            INSERT OR IGNORE INTO word_favorites (word, phonetic, meanings_json, created_at, updated_at)
+            VALUES (?1, ?2, ?3, datetime('now'), datetime('now'))
+            "#,
+            params![word_lower, phonetic, meanings_json],
+        )?;
+
+        Ok(result > 0)
+    }
+
+    /// 取消收藏
+    pub fn remove_favorite(&self, word: &str) -> Result<bool> {
+        let conn = self.conn.lock().unwrap();
+        let result = conn.execute(
+            "DELETE FROM word_favorites WHERE word = ?1",
+            params![word.to_lowercase()],
+        )?;
+        Ok(result > 0)
+    }
+
+    /// 检查是否已收藏
+    pub fn is_favorited(&self, word: &str) -> Result<bool> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT 1 FROM word_favorites WHERE word = ?1")?;
+        let exists = stmt.exists(params![word.to_lowercase()])?;
+        Ok(exists)
+    }
+
+    /// 批量检查收藏状态
+    pub fn get_favorites_batch(&self, words: &[String]) -> Result<Vec<(String, bool)>> {
+        let conn = self.conn.lock().unwrap();
+        let mut results = Vec::with_capacity(words.len());
+
+        for word in words {
+            let word_lower = word.to_lowercase();
+            let mut stmt = conn.prepare("SELECT 1 FROM word_favorites WHERE word = ?1")?;
+            let exists = stmt.exists(params![&word_lower])?;
+            results.push((word_lower, exists));
+        }
+
+        Ok(results)
+    }
+
+    /// 获取收藏列表
+    pub fn list_favorites(&self, offset: u32, limit: u32) -> Result<Vec<FavoriteWord>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            r#"
+            SELECT word, phonetic, meanings_json, note, review_count, last_review_at, created_at
+            FROM word_favorites
+            ORDER BY created_at DESC
+            LIMIT ?1 OFFSET ?2
+            "#,
+        )?;
+
+        let rows = stmt.query_map(params![limit, offset], |row| {
+            Ok(FavoriteWord {
+                word: row.get(0)?,
+                phonetic: row.get(1)?,
+                meanings_json: row.get(2)?,
+                note: row.get(3)?,
+                review_count: row.get(4)?,
+                last_review_at: row.get(5)?,
+                created_at: row.get(6)?,
+            })
+        })?;
+
+        let mut favorites = Vec::new();
+        for row in rows {
+            favorites.push(row?);
+        }
+        Ok(favorites)
+    }
+
+    /// 更新收藏笔记
+    pub fn update_favorite_note(&self, word: &str, note: &str) -> Result<bool> {
+        let conn = self.conn.lock().unwrap();
+        let result = conn.execute(
+            r#"
+            UPDATE word_favorites 
+            SET note = ?1, updated_at = datetime('now')
+            WHERE word = ?2
+            "#,
+            params![note, word.to_lowercase()],
+        )?;
+        Ok(result > 0)
+    }
+
+    /// 记录复习
+    pub fn record_review(&self, word: &str) -> Result<bool> {
+        let conn = self.conn.lock().unwrap();
+        let result = conn.execute(
+            r#"
+            UPDATE word_favorites 
+            SET review_count = review_count + 1, 
+                last_review_at = datetime('now'),
+                updated_at = datetime('now')
+            WHERE word = ?1
+            "#,
+            params![word.to_lowercase()],
+        )?;
+        Ok(result > 0)
+    }
+
+    /// 获取收藏总数
+    pub fn count_favorites(&self) -> Result<u32> {
+        let conn = self.conn.lock().unwrap();
+        let count: u32 = conn.query_row(
+            "SELECT COUNT(*) FROM word_favorites",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(count)
+    }
+}
+
+/// 收藏单词数据结构
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct FavoriteWord {
+    pub word: String,
+    pub phonetic: Option<String>,
+    pub meanings_json: Option<String>,
+    pub note: Option<String>,
+    pub review_count: i32,
+    pub last_review_at: Option<String>,
+    pub created_at: String,
 }
 
 /// 生成文本哈希（用于翻译缓存 key）
