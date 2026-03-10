@@ -109,7 +109,8 @@ function Invoke-SmokeTestCommand {
         [Parameter(Mandatory = $true)]
         [string]$FilePath,
         [Parameter(Mandatory = $true)]
-        [string[]]$Arguments
+        [string[]]$Arguments,
+        [string]$FailureHint = ""
     )
 
     $stdoutPath = [System.IO.Path]::GetTempFileName()
@@ -135,6 +136,9 @@ function Invoke-SmokeTestCommand {
         if ($process.ExitCode -ne 0) {
             if ($output.Count -gt 0) {
                 $output | ForEach-Object { Write-Host $_ }
+            }
+            if (-not [string]::IsNullOrWhiteSpace($FailureHint)) {
+                throw "$StepName failed. $FailureHint"
             }
             throw "$StepName failed"
         }
@@ -195,6 +199,16 @@ if (Test-Path $SourceConfigPath) {
     catch {
     }
 }
+else {
+    throw "Source config missing: $SourceConfigPath"
+}
+
+Write-Host "Preflighting source TTS dependencies..."
+Invoke-SmokeTestCommand `
+    -StepName "Source TTS dependency preflight" `
+    -FilePath $Python `
+    -Arguments @($MainSource, "--config", $SourceConfigPath, "--check-tts-deps") `
+    -FailureHint "Install runtime dependencies with 'python -m pip install -r requirements.txt', or change config\\listener.json tts.provider to windows_system if you intentionally do not want to package cloud TTS."
 
 if (Test-Path $BuildRoot) {
     Remove-Item $BuildRoot -Recurse -Force
@@ -264,7 +278,8 @@ Write-Host "Smoke testing sidebar TTS dependencies..."
 Invoke-SmokeTestCommand `
     -StepName "Sidebar TTS dependency smoke test" `
     -FilePath $MainExe `
-    -Arguments @("--check-tts-deps")
+    -Arguments @("--check-tts-deps") `
+    -FailureHint "The packaged app is missing TTS runtime modules. Reinstall runtime dependencies, rebuild, and do not distribute this artifact until the smoke test passes."
 
 Copy-Item $WorkerExe (Join-Path $MainAppRoot "$WorkerName.exe") -Force
 
