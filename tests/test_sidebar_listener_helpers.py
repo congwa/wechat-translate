@@ -1,23 +1,60 @@
 import io
-import importlib.util
+import importlib
 import json
 import os
 import pathlib
+import sys
 import tempfile
 import unittest
 from unittest import mock
 from urllib import error
 
 
+class _ModuleProxy:
+    def __init__(self, modules):
+        object.__setattr__(self, "_owners", {})
+        for module in modules:
+            for name in dir(module):
+                if name.startswith("_"):
+                    continue
+                self._owners[name] = module
+
+    def __getattr__(self, name):
+        owner = self._owners.get(name)
+        if owner is None:
+            raise AttributeError(name)
+        return getattr(owner, name)
+
+    def __setattr__(self, name, value):
+        owner = self._owners.get(name)
+        if owner is None:
+            object.__setattr__(self, name, value)
+            return
+        setattr(owner, name, value)
+
+    def __delattr__(self, name):
+        owner = self._owners.get(name)
+        if owner is None:
+            object.__delattr__(self, name)
+            return
+        delattr(owner, name)
+
+
 def _load_sidebar_module():
     repo_root = pathlib.Path(__file__).resolve().parents[1]
-    script_path = repo_root / "listener_app" / "sidebar_translate_listener.py"
-    spec = importlib.util.spec_from_file_location("sidebar_translate_listener", script_path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"failed to load module from {script_path}")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    repo_root_str = str(repo_root)
+    if repo_root_str not in sys.path:
+        sys.path.insert(0, repo_root_str)
+    module_names = [
+        "listener_app.sidebar_translate_listener",
+        "listener_app.sidebar_shared",
+        "listener_app.sidebar_translate_runtime",
+        "listener_app.sidebar_runtime_support",
+        "listener_app.sidebar_tts",
+        "listener_app.sidebar_ui",
+    ]
+    modules = [importlib.import_module(name) for name in module_names]
+    return _ModuleProxy(modules)
 
 
 sidebar = _load_sidebar_module()
