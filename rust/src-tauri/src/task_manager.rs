@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager};
-use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore};
+use tokio::sync::{watch, Mutex, OwnedSemaphorePermit, Semaphore};
 use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -131,7 +131,52 @@ impl SidebarRuntime {
             refresh_version: AtomicU64::new(0),
         }
     }
+}
 
+/// 监听循环首次 poll 完成信号
+/// 用于 live_start 等待监听就绪后再打开窗口
+pub struct FirstPollSignal {
+    tx: watch::Sender<Option<String>>,
+    rx: watch::Receiver<Option<String>>,
+}
+
+impl FirstPollSignal {
+    fn new() -> Self {
+        let (tx, rx) = watch::channel(None);
+        Self { tx, rx }
+    }
+
+    /// 监听循环调用：标记首次 poll 完成，并传递当前聊天名称
+    fn signal_ready(&self, chat_name: &str) {
+        let _ = self.tx.send(Some(chat_name.to_string()));
+    }
+
+    /// 重置信号（监听重启时调用）
+    fn reset(&self) {
+        let _ = self.tx.send(None);
+    }
+
+    /// 等待首次 poll 完成，返回当前聊天名称
+    /// 带超时保护，避免无限等待
+    pub async fn wait_ready(&self, timeout: Duration) -> Option<String> {
+        let mut rx = self.rx.clone();
+        tokio::select! {
+            result = async {
+                loop {
+                    if let Some(chat_name) = rx.borrow().clone() {
+                        return Some(chat_name);
+                    }
+                    if rx.changed().await.is_err() {
+                        return None;
+                    }
+                }
+            } => result,
+            _ = tokio::time::sleep(timeout) => None,
+        }
+    }
+}
+
+impl SidebarRuntime {
     pub fn get_current_chat(&self) -> String {
         self.current_chat.lock().unwrap().clone()
     }
@@ -234,6 +279,7 @@ pub struct TaskManager {
     monitor_token: Arc<Mutex<Option<CancellationToken>>>,
     monitoring_active: Arc<AtomicBool>,
     monitor_config: Arc<Mutex<MonitorConfig>>,
+    first_poll_signal: Arc<FirstPollSignal>,
     sidebar_enabled: Arc<AtomicBool>,
     sidebar_config: Arc<Mutex<SidebarConfig>>,
     sidebar_runtime: Arc<SidebarRuntime>,
@@ -259,6 +305,7 @@ impl TaskManager {
             monitor_config: Arc::new(Mutex::new(MonitorConfig {
                 use_right_panel_details: false,
             })),
+            first_poll_signal: Arc::new(FirstPollSignal::new()),
             sidebar_enabled: Arc::new(AtomicBool::new(false)),
             sidebar_config: Arc::new(Mutex::new(SidebarConfig {
                 translator: None,
@@ -302,6 +349,12 @@ impl TaskManager {
 
     pub fn get_sidebar_runtime(&self) -> &Arc<SidebarRuntime> {
         &self.sidebar_runtime
+    }
+
+    /// 等待监听循环首次 poll 完成
+    /// 返回当前聊天名称，超时返回 None
+    pub async fn wait_first_poll(&self, timeout: Duration) -> Option<String> {
+        self.first_poll_signal.wait_ready(timeout).await
     }
 
     pub fn service_status(&self) -> serde_json::Value {
@@ -492,6 +545,7 @@ impl TaskManager {
         let token = CancellationToken::new();
         *self.monitor_token.lock().await = Some(token.clone());
         self.monitoring_active.store(true, Ordering::Relaxed);
+        self.first_poll_signal.reset();
 
         let app = self.get_app_handle().await?;
         let state = self.get_task_state();
@@ -508,6 +562,7 @@ impl TaskManager {
         let monitor_token_ref = self.monitor_token.clone();
         let monitoring_active = self.monitoring_active.clone();
         let monitor_config = self.monitor_config.clone();
+        let first_poll_signal = self.first_poll_signal.clone();
         let sidebar_enabled = self.sidebar_enabled.clone();
         let sidebar_config = self.sidebar_config.clone();
         let sidebar_runtime = self.sidebar_runtime.clone();
@@ -524,6 +579,7 @@ impl TaskManager {
             let mut pending_chat_name: Option<String> = None;
             let mut pending_count: u32 = 0;
             let mut last_use_right_panel_details: Option<bool> = None;
+            let mut first_poll_signaled = false;
             const DEBOUNCE_THRESHOLD: u32 = 2;
             const SESSION_CORRECTION_WINDOW_SECONDS: i64 = 15;
 
@@ -571,6 +627,12 @@ impl TaskManager {
                 .await;
 
                 if let Ok(Ok((chat_name, snapshots, mut messages, member_count))) = poll_result {
+                    // 首次成功读取微信状态后发出信号
+                    if !first_poll_signaled {
+                        first_poll_signal.signal_ready(&chat_name);
+                        first_poll_signaled = true;
+                    }
+
                     let now_instant = Instant::now();
                     cleanup_preview_sender_hints(&mut preview_sender_hints, now_instant);
                     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();

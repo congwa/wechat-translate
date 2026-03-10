@@ -4,6 +4,7 @@ use crate::sidebar_window::{SidebarWindowState, WindowMode};
 use crate::task_manager::TaskManager;
 use crate::translator::DeepLXTranslator;
 use std::sync::Arc;
+use std::time::Duration;
 
 #[tauri::command]
 pub async fn sidebar_start(
@@ -105,6 +106,20 @@ pub async fn live_start(
         )
         .await
         .map_err(|e| e.to_string())?;
+
+    // 等待监听循环首次 poll 完成后再打开窗口
+    // 确保 SidebarRuntime.current_chat 已经被设置，避免显示错误数据
+    let first_chat = manager
+        .wait_first_poll(Duration::from_secs(5))
+        .await;
+
+    if let Some(chat_name) = first_chat {
+        // 确保 sidebar_runtime 的 current_chat 已设置
+        let runtime = manager.get_sidebar_runtime();
+        if runtime.get_current_chat().is_empty() {
+            runtime.set_current_chat(&chat_name);
+        }
+    }
 
     let _ = sidebar_state
         .open(&app, Some(config.display.width as f64), mode)
