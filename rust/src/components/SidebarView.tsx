@@ -9,6 +9,7 @@ import type { SidebarMessage } from "@/lib/types";
 import { useFormStore, type DisplayMode } from "@/stores/formStore";
 import { useRuntimeStore } from "@/stores/runtimeStore";
 import { useSettingsStore } from "@/stores/settingsStore";
+import { SegmentedText } from "@/components/SegmentedText";
 import * as api from "@/lib/tauri-api";
 
 type WindowMode = "follow" | "independent";
@@ -158,9 +159,10 @@ function renderMessageCard(msg: SidebarMessage, displayMode: DisplayMode) {
               />
             </div>
           ) : displayMode === "translated" ? (
-            <p className="text-[12px] text-gray-800 dark:text-gray-200 leading-relaxed whitespace-pre-wrap break-words">
-              {(msg.textEn && msg.textEn !== msg.textCn) ? msg.textEn : msg.textCn}
-            </p>
+            <SegmentedText
+              text={(msg.textEn && msg.textEn !== msg.textCn) ? msg.textEn : msg.textCn}
+              className="text-[12px] text-gray-800 dark:text-gray-200 leading-relaxed whitespace-pre-wrap break-words"
+            />
           ) : displayMode === "original" ? (
             <p className="text-[12px] text-gray-800 dark:text-gray-200 leading-relaxed whitespace-pre-wrap break-words">
               {msg.textCn}
