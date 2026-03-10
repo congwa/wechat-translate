@@ -4,6 +4,11 @@
 本说明覆盖以下实现：
 - `listener_app/group_listener_worker.py`
 - `listener_app/sidebar_translate_listener.py`
+- `listener_app/sidebar_translate_runtime.py`
+- `listener_app/sidebar_runtime_support.py`
+- `listener_app/sidebar_ui.py`
+- `listener_app/sidebar_tts.py`
+- `listener_app/sidebar_shared.py`
 - `wechat_auto/window.py`
 - `wechat_auto/controls.py`
 
@@ -13,6 +18,15 @@
 
 ## 架构结论
 - 监听与 UI 必须分离：`group_listener_worker.py` 负责抓消息，`sidebar_translate_listener.py` 负责展示与翻译。
+- 当前侧边栏主进程已经按职责拆分：
+  - `sidebar_translate_listener.py` 只保留主入口编排、配置校验、翻译线程和事件分发。
+  - `sidebar_translate_runtime.py` 专管 translate provider、DeepLX runtime 与失败 fallback。
+  - `sidebar_runtime_support.py` 专管日志轮转、worker 启停支撑、运行时锁与 stdout/stderr reader。
+  - `sidebar_ui.py` 专管 Tk UI、消息缓存、快捷键和 TTS 交互入口。
+  - `sidebar_tts.py` 专管 TTS runtime、依赖探测与播放器工厂。
+  - `sidebar_shared.py` 收敛共享常量、路径/配置工具、文本归一化与通用校验。
+  - UI 私有常量/快捷键节流与 TTS 私有 provider/config helper 不应继续堆进 `sidebar_shared.py`；否则 shared 会再次退化成垃圾桶。
+  - 拆分后也不要再假设“所有 helper 都挂在 `sidebar_translate_listener.py`”；翻译 helper 的归属是 `sidebar_translate_runtime.py`，worker/runtime helper 的归属是 `sidebar_runtime_support.py`。
 - 当前监听主链路已收敛为 `session-only`。
 - 当前 worker 为单进程多目标：一次扫描微信主窗口左侧会话列表，覆盖全部 `listen.targets`。
 - 运行时 target 变更不走 IPC 热更新；当前实现是“UI 显式增删 -> 回写 `listener.json` -> 先停旧 worker -> 确认退出后再启动新 worker”。
@@ -86,7 +100,7 @@
 - `wx_auto` 普通日志不是 JSON；若按“纯 JSON 流”解析会报错。
 
 处理：
-- `sidebar_translate_listener.py` 对 worker stdout 做两类处理：
+- `sidebar_runtime_support.py` 中的 worker stdout/stderr reader 会做两类处理：
   - JSON：按事件处理（`status` / `message` / `log`）
   - 非 JSON：作为 `worker raw` 记录
 
@@ -98,7 +112,7 @@
 - 某些 DeepLX 网关会对 Python 默认请求特征做风控，`urllib` 默认 UA 容易被拦截。
 
 处理：
-- 在 `listener_app/sidebar_translate_listener.py` 的 `DeepLXTranslator` 请求头中显式设置：
+- 在 `listener_app/sidebar_translate_runtime.py` 的 `DeepLXTranslator` 请求头中显式设置：
   - `User-Agent`（浏览器风格）
   - `Accept`
   - `Content-Type: application/json; charset=utf-8`
@@ -262,6 +276,7 @@
 - 在主进程进入翻译前，先过滤明显的媒体占位文本（图片、视频、动画表情、语音等）。
 - 当前额外启用了一条激进兜底：凡是整条消息被 ASCII 方括号完整包住（`[ ... ]`），一律按占位文本过滤，不再送翻译。
 - 侧边栏头部增加“原文”开关，便于在不改配置的情况下切换查看消息原文，继续补充新的占位样本。
+- `Right` / `Ctrl+Right` 都会复用同一个“原文”开关状态，而不是额外维护一套快捷键私有状态；否则复选框状态和实际显示很容易跑偏。
 
 ### 21.1) 带 `http://` / `https://` 的链接消息不该进翻译链路
 现象：
@@ -351,7 +366,11 @@
 
 处理：
 - 窗口标题改为始终显示“当前选中 target 的完整会话名”。
-- `Ctrl+Up` / `Ctrl+Down` 切换会话时，标题会随 `active_chat` 同步更新。
+- `Up` / `Down` 在焦点不在左侧 target 列表时负责窗口级切群；如果焦点就在 `Listbox` 上，必须保留原生上下选择，否则会出现“一次按键触发两次跳群”的冲突。
+- `Ctrl+Up` / `Ctrl+Down` 继续兼容旧版切换会话，标题仍会随 `active_chat` 同步更新。
+- `Left` / `Ctrl+Left` / `Ctrl+B` 可以直接展开或收起左侧菜单。
+- `Right` / `Ctrl+Right` 可以直接切换“原文”显示，不需要把鼠标拉回头部复选框。
+- `F1` 提供快捷键速查，避免“功能做了但没人知道怎么用”。
 - 删除当前 target 后，若自动切到下一个 target，标题也必须同步切过去，不能继续挂旧标题。
 
 ## 推荐运行命令
@@ -381,7 +400,7 @@ python listener_app/sidebar_translate_listener.py ^
 
 ## 契约约束（后续改动必须保持）
 - `group_listener_worker.py` 输出事件必须保持 JSON 行格式（至少包含 `type` 字段）。
-- `sidebar_translate_listener.py` 必须兼容非 JSON stdout 行，不得因解析失败退出。
+- `sidebar_runtime_support.py` 中的 stdout/stderr reader 必须兼容非 JSON stdout 行，不得因解析失败退出。
 - 当前监听主链路必须是 `session-only`，禁止恢复 `chat` / `mixed` 分支进入主路径。
 - worker 必须以“单进程多 target”方式扫描同一个微信主窗口会话列表，禁止恢复为“一目标一子进程”主架构。
 - 同一 target 只允许一个活动侧边栏实例（由运行时锁保证）。

@@ -26,7 +26,12 @@
 
 ### 当前主流程脚本 `listener_app/`
 - `listener_app/group_listener_worker.py`：监听 worker 进程；输出 JSON 行事件；单进程多 target 扫描会话预览。
-- `listener_app/sidebar_translate_listener.py`：侧边栏 UI + DeepLX 翻译 + 单 worker 管理。
+- `listener_app/sidebar_translate_listener.py`：主入口与编排层；负责配置读取、配置校验、翻译线程与事件分发。
+- `listener_app/sidebar_translate_runtime.py`：翻译 runtime；负责 provider 选择、DeepLX 请求与失败 fallback。
+- `listener_app/sidebar_runtime_support.py`：运行时支撑；负责日志轮转、worker 启停支撑、运行时锁与 stdout/stderr reader。
+- `listener_app/sidebar_ui.py`：侧边栏 Tk UI、消息缓存、快捷键、原文显示与 TTS 点击/自动朗读入口。
+- `listener_app/sidebar_tts.py`：Windows System / 豆包 / 腾讯云 TTS runtime、依赖探测与播放器工厂。
+- `listener_app/sidebar_shared.py`：侧边栏链路共享常量、路径/配置工具、消息文本归一化与通用校验。
 
 ### 文档与运行产物
 - `docs/wechat-listening-pitfalls.md`：监听架构、坑位、排障与实现契约。
@@ -44,7 +49,12 @@
 - `config/listener.md`：监听配置字段说明。
 - `@AutomationLog.txt`：本地调试日志。
 - `docs/wechat-listening-pitfalls.md`：监听与翻译链路踩坑文档。
-- `listener_app/sidebar_translate_listener.py`：侧边栏 UI、翻译、worker 管理。
+- `listener_app/sidebar_translate_listener.py`：主入口与编排层。
+- `listener_app/sidebar_translate_runtime.py`：翻译 runtime。
+- `listener_app/sidebar_runtime_support.py`：运行时支撑。
+- `listener_app/sidebar_ui.py`：侧边栏 UI、消息缓存、快捷键与 TTS 交互入口。
+- `listener_app/sidebar_tts.py`：TTS runtime 与播放器工厂。
+- `listener_app/sidebar_shared.py`：共享常量、路径/配置工具、文本归一化与校验。
 - `listener_app/group_listener_worker.py`：监听 worker，输出 JSON 事件。
 - `wechat_auto/__init__.py`：包导出入口。
 - `wechat_auto/core.py`：`WxAuto` 主类。
@@ -53,7 +63,7 @@
 - `wechat_auto/logger.py`：日志输出。
 
 ## 维护约束
-- 监听主链路默认只维护 `listener_app/sidebar_translate_listener.py` + `listener_app/group_listener_worker.py`。
+- 监听主链路默认维护 `listener_app/group_listener_worker.py`、`listener_app/sidebar_translate_listener.py`、`listener_app/sidebar_translate_runtime.py`、`listener_app/sidebar_runtime_support.py`、`listener_app/sidebar_ui.py`、`listener_app/sidebar_tts.py`、`listener_app/sidebar_shared.py`。
 - 当前分支不再维护发送消息、发送文件、自动回复、写输入框等主动操作能力。
 - 任何监听相关改动都要同步更新 `docs/wechat-listening-pitfalls.md`。
 - 任何 `config/listener.json` 字段新增/删除/语义变更，必须同步更新 `config/listener.md` 对应说明与示例。

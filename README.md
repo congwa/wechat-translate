@@ -74,7 +74,17 @@ artifacts\windows-app\wechat_sidebar\
 ## 当前架构
 
 - `listener_app/sidebar_translate_listener.py`
-  负责配置读取、侧边栏 UI、翻译线程、可插拔 TTS、单 worker 管理、去重和运行时锁。
+  负责主入口编排：配置读取、配置校验、翻译线程、去重和事件分发。
+- `listener_app/sidebar_translate_runtime.py`
+  负责 translate provider、DeepLX runtime 与失败 fallback。
+- `listener_app/sidebar_runtime_support.py`
+  负责日志轮转、worker 生命周期支撑、运行时锁与 stdout/stderr reader。
+- `listener_app/sidebar_ui.py`
+  负责 Tk 侧边栏 UI、消息缓存、快捷键、原文显示与 TTS 交互入口。
+- `listener_app/sidebar_tts.py`
+  负责 Windows System / 豆包 / 腾讯云 TTS runtime、依赖探测与播放器工厂。
+- `listener_app/sidebar_shared.py`
+  负责共享常量、路径/配置工具、文本归一化与通用校验。
 - `listener_app/group_listener_worker.py`
   负责单进程多目标监听；一次 UIA 扫描覆盖全部 `listen.targets`。
 - `wechat_auto/window.py`
@@ -106,7 +116,12 @@ docs/
 └── wechat-listening-pitfalls.md
 listener_app/
 ├── group_listener_worker.py
-└── sidebar_translate_listener.py
+├── sidebar_runtime_support.py
+├── sidebar_shared.py
+├── sidebar_translate_runtime.py
+├── sidebar_translate_listener.py
+├── sidebar_tts.py
+└── sidebar_ui.py
 wechat_auto/
 ├── __init__.py
 ├── core.py
