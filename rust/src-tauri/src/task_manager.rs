@@ -651,6 +651,7 @@ impl TaskManager {
                             ) {
                                 let _ = db.insert_message_with_meta(
                                     &snapshot.chat_name,
+                                    Some(chat_kind.as_str()),
                                     &sender,
                                     &snapshot.preview_body,
                                     "",
@@ -902,6 +903,7 @@ impl TaskManager {
                                 let corrected = db
                                     .try_correct_preview_row(
                                         &chat_name,
+                                        Some(&chat_type_label),
                                         &msg.content,
                                         &msg.sender,
                                         &content_en,
@@ -915,6 +917,7 @@ impl TaskManager {
                                 if !corrected {
                                     let _ = db.insert_message_with_meta(
                                         &chat_name,
+                                        Some(&chat_type_label),
                                         &msg.sender,
                                         &msg.content,
                                         &content_en,

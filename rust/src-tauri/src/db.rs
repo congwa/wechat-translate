@@ -15,6 +15,7 @@ pub struct MessageDb {
 pub struct StoredMessage {
     pub id: i64,
     pub chat_name: String,
+    pub chat_type: Option<String>,
     pub sender: String,
     pub content: String,
     pub content_en: String,
@@ -161,6 +162,14 @@ impl MessageDb {
             );
         }
 
+        // Migrate: add chat_type column (nullable, history data will have NULL)
+        let has_chat_type: bool = conn.prepare("SELECT chat_type FROM messages LIMIT 0").is_ok();
+        if !has_chat_type {
+            let _ = conn.execute_batch(
+                "ALTER TABLE messages ADD COLUMN chat_type TEXT DEFAULT NULL;",
+            );
+        }
+
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -179,6 +188,7 @@ impl MessageDb {
     ) -> Result<bool> {
         self.insert_message_with_meta(
             chat_name,
+            None,
             sender,
             content,
             content_en,
@@ -190,10 +200,11 @@ impl MessageDb {
         )
     }
 
-    /// Insert a message with explicit source/quality metadata.
+    /// Insert a message with explicit source/quality/chat_type metadata.
     pub fn insert_message_with_meta(
         &self,
         chat_name: &str,
+        chat_type: Option<&str>,
         sender: &str,
         content: &str,
         content_en: &str,
@@ -208,10 +219,11 @@ impl MessageDb {
         let rows = conn
             .execute(
                 "INSERT OR IGNORE INTO messages (
-                    chat_name, sender, content, content_hash, detected_at, content_en, is_self, image_path, source, quality
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                    chat_name, chat_type, sender, content, content_hash, detected_at, content_en, is_self, image_path, source, quality
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
                 params![
                     chat_name,
+                    chat_type,
                     sender,
                     content,
                     hash,
@@ -305,6 +317,7 @@ impl MessageDb {
     pub fn try_correct_preview_row(
         &self,
         chat_name: &str,
+        chat_type: Option<&str>,
         content: &str,
         sender: &str,
         content_en: &str,
@@ -373,9 +386,10 @@ impl MessageDb {
                  content_en = ?5,
                  is_self = ?6,
                  image_path = ?7,
+                 chat_type = ?8,
                  source = 'session_corrected',
                  quality = 'high'
-             WHERE id = ?8",
+             WHERE id = ?9",
             params![
                 sender,
                 content,
@@ -384,6 +398,7 @@ impl MessageDb {
                 content_en,
                 is_self as i32,
                 image_path,
+                chat_type,
                 target_id
             ],
         )?;
@@ -401,7 +416,7 @@ impl MessageDb {
         let conn = self.conn.lock().unwrap();
 
         let mut sql = String::from(
-            "SELECT id, chat_name, sender, content, detected_at, content_en, is_self, image_path, source, quality
+            "SELECT id, chat_name, chat_type, sender, content, detected_at, content_en, is_self, image_path, source, quality
              FROM messages
              WHERE 1=1",
         );
@@ -432,14 +447,15 @@ impl MessageDb {
                 Ok(StoredMessage {
                     id: row.get(0)?,
                     chat_name: row.get(1)?,
-                    sender: row.get(2)?,
-                    content: row.get(3)?,
-                    detected_at: row.get(4)?,
-                    content_en: row.get::<_, String>(5).unwrap_or_default(),
-                    is_self: row.get::<_, i32>(6).unwrap_or(0) != 0,
-                    image_path: row.get::<_, Option<String>>(7).unwrap_or(None),
-                    source: row.get::<_, Option<String>>(8).unwrap_or(None),
-                    quality: row.get::<_, Option<String>>(9).unwrap_or(None),
+                    chat_type: row.get::<_, Option<String>>(2).unwrap_or(None),
+                    sender: row.get(3)?,
+                    content: row.get(4)?,
+                    detected_at: row.get(5)?,
+                    content_en: row.get::<_, String>(6).unwrap_or_default(),
+                    is_self: row.get::<_, i32>(7).unwrap_or(0) != 0,
+                    image_path: row.get::<_, Option<String>>(8).unwrap_or(None),
+                    source: row.get::<_, Option<String>>(9).unwrap_or(None),
+                    quality: row.get::<_, Option<String>>(10).unwrap_or(None),
                 })
             })
             .context("execute query")?;
@@ -602,6 +618,7 @@ mod tests {
         let db = MessageDb::new(&path).expect("create db");
         db.insert_message_with_meta(
             "chat-a",
+            Some("private"),
             "",
             "preview row",
             "",
@@ -614,6 +631,7 @@ mod tests {
         .expect("insert low");
         db.insert_message_with_meta(
             "chat-a",
+            Some("private"),
             "Alice",
             "high row",
             "",
@@ -640,6 +658,7 @@ mod tests {
         let db = MessageDb::new(&path).expect("create db");
         db.insert_message_with_meta(
             "chat-b",
+            Some("group"),
             "",
             "因为rust的代码简直不是人类读的",
             "",
@@ -654,6 +673,7 @@ mod tests {
         let corrected = db
             .try_correct_preview_row(
                 "chat-b",
+                Some("group"),
                 "因为rust的代码简直不是人类读的!!!",
                 "花姐",
                 "",
@@ -670,6 +690,7 @@ mod tests {
             .expect("query messages");
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].sender, "花姐");
+        assert_eq!(rows[0].chat_type.as_deref(), Some("group"));
         assert_eq!(rows[0].source.as_deref(), Some("session_corrected"));
         assert_eq!(rows[0].quality.as_deref(), Some("high"));
 
@@ -683,6 +704,7 @@ mod tests {
         let db = MessageDb::new(&path).expect("create db");
         db.insert_message_with_meta(
             "chat-a",
+            Some("private"),
             "Alice",
             "你好",
             "",
