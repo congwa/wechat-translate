@@ -4,6 +4,8 @@ import { listen } from "@tauri-apps/api/event";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import { X, MessageCircle, Languages, AlertCircle, ChevronUp, ChevronDown, BookOpen } from "lucide-react";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useSidebarStore } from "@/stores/sidebarStore";
 import type { SidebarMessage } from "@/lib/types";
 import { useFormStore, type DisplayMode } from "@/stores/formStore";
@@ -161,10 +163,72 @@ function renderMessageCard(msg: SidebarMessage, displayMode: DisplayMode) {
               />
             </div>
           ) : displayMode === "translated" ? (
-            <SegmentedText
-              text={(msg.textEn && msg.textEn !== msg.textCn) ? msg.textEn : msg.textCn}
-              className="text-[12px] text-gray-800 dark:text-gray-200 leading-relaxed whitespace-pre-wrap break-words"
-            />
+            // 译文模式：区分三种状态
+            // 1. 已翻译：显示英文（可点词查词）
+            // 2. 正在翻译中（5秒内的消息）：显示骨架屏，hover 可看中文
+            // 3. 历史未翻译（超过5秒）：显示中文 + 翻译按钮
+            (() => {
+              // 已翻译：直接显示英文
+              if (msg.textEn && msg.textEn !== msg.textCn) {
+                return (
+                  <SegmentedText
+                    text={msg.textEn}
+                    className="text-[12px] text-gray-800 dark:text-gray-200 leading-relaxed whitespace-pre-wrap break-words"
+                  />
+                );
+              }
+              
+              // 判断是否是最近 5 秒内的消息（可能正在翻译中）
+              const msgTime = new Date(msg.timestamp).getTime();
+              const now = Date.now();
+              const isRecent = (now - msgTime) < 5000;
+              
+              if (isRecent) {
+                // 正在翻译中：显示骨架屏，hover 可看中文
+                return (
+                  <TooltipProvider delayDuration={200}>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <div className="cursor-pointer hover:opacity-70 transition-opacity inline-block">
+                          <Skeleton className="h-3 w-32" />
+                          {msg.textCn.length > 20 && <Skeleton className="h-3 w-24 mt-1.5" />}
+                        </div>
+                      </TooltipTrigger>
+                      <TooltipContent 
+                        side="top" 
+                        className="max-w-xs px-2 py-1.5 text-xs bg-zinc-800 text-zinc-100 border-zinc-700"
+                      >
+                        <p className="whitespace-pre-wrap">{msg.textCn}</p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                );
+              }
+              
+              // 历史未翻译：显示中文 + 翻译按钮
+              return (
+                <div className="flex items-start gap-1.5">
+                  <p className="text-[12px] text-gray-800 dark:text-gray-200 leading-relaxed whitespace-pre-wrap break-words flex-1">
+                    {msg.textCn}
+                  </p>
+                  <TooltipProvider delayDuration={300}>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button 
+                          className="shrink-0 mt-0.5 p-1 rounded hover:bg-gray-200/50 dark:hover:bg-white/10 transition-colors"
+                          onClick={() => api.translateCached({ text: msg.textCn })}
+                        >
+                          <Languages className="w-3 h-3 text-gray-400 dark:text-gray-500" />
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent side="top" className="text-xs">
+                        点击翻译
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                </div>
+              );
+            })()
           ) : displayMode === "original" ? (
             <p className="text-[12px] text-gray-800 dark:text-gray-200 leading-relaxed whitespace-pre-wrap break-words">
               {msg.textCn}
