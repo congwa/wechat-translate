@@ -4,9 +4,12 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WordEntry {
     pub word: String,
+    pub summary_zh: Option<String>,
     pub phonetics: Vec<Phonetic>,
     pub meanings: Vec<Meaning>,
     pub fetched_at: String,
+    pub translation_completed: bool,
+    pub data_source: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -140,9 +143,12 @@ impl From<DictionaryApiResponse> for WordEntry {
 
         WordEntry {
             word: api.word,
+            summary_zh: None,
             phonetics,
             meanings,
             fetched_at: now,
+            translation_completed: false,
+            data_source: "free_dictionary_api".to_string(),
         }
     }
 }

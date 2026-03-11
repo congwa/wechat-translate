@@ -36,7 +36,10 @@ impl DictionaryDb {
                 audio_url_us TEXT,
                 raw_json TEXT NOT NULL,
                 fetched_at TEXT NOT NULL,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                summary_zh TEXT,
+                translation_completed INTEGER DEFAULT 0,
+                data_source TEXT DEFAULT 'free_dictionary_api'
             );
 
             CREATE TABLE IF NOT EXISTS translation_cache (
@@ -95,12 +98,18 @@ impl DictionaryDb {
             "#,
         )?;
 
-        // 迁移：为旧 word_favorites 表添加新列（忽略已存在的错误）
+        // 迁移：为旧表添加新列（忽略已存在的错误）
         let migrations = [
+            // word_favorites 迁移
             "ALTER TABLE word_favorites ADD COLUMN mastery_level INTEGER DEFAULT 0",
             "ALTER TABLE word_favorites ADD COLUMN next_review_at TEXT",
             "ALTER TABLE word_favorites ADD COLUMN last_feedback INTEGER",
             "ALTER TABLE word_favorites ADD COLUMN consecutive_correct INTEGER DEFAULT 0",
+            "ALTER TABLE word_favorites ADD COLUMN summary_zh TEXT",
+            // word_dictionary 迁移
+            "ALTER TABLE word_dictionary ADD COLUMN summary_zh TEXT",
+            "ALTER TABLE word_dictionary ADD COLUMN translation_completed INTEGER DEFAULT 0",
+            "ALTER TABLE word_dictionary ADD COLUMN data_source TEXT DEFAULT 'free_dictionary_api'",
         ];
 
         for migration in migrations {
@@ -172,8 +181,8 @@ impl DictionaryDb {
         conn.execute(
             r#"
             INSERT OR REPLACE INTO word_dictionary 
-            (word, phonetic_uk, phonetic_us, audio_url_uk, audio_url_us, raw_json, fetched_at)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            (word, phonetic_uk, phonetic_us, audio_url_uk, audio_url_us, raw_json, fetched_at, summary_zh, translation_completed, data_source)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
             "#,
             params![
                 word.to_lowercase(),
@@ -183,8 +192,89 @@ impl DictionaryDb {
                 audio_url_us,
                 raw_json,
                 entry.fetched_at,
+                entry.summary_zh,
+                entry.translation_completed as i32,
+                entry.data_source,
             ],
         )?;
+        Ok(())
+    }
+
+    /// 更新单词的单个翻译字段
+    /// field 格式: "summary_zh" | "def_{m}_{d}" | "ex_{m}_{d}"
+    pub fn update_word_field(&self, word: &str, field: &str, value: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let word_lower = word.to_lowercase();
+
+        // 读取当前 raw_json
+        let raw_json: String = conn.query_row(
+            "SELECT raw_json FROM word_dictionary WHERE word = ?1",
+            params![word_lower],
+            |row| row.get(0),
+        )?;
+
+        let mut entry: WordEntry = serde_json::from_str(&raw_json)?;
+
+        // 根据 field 更新对应字段
+        if field == "summary_zh" {
+            entry.summary_zh = Some(value.to_string());
+        } else if field.starts_with("def_") {
+            // 解析 def_{m}_{d}
+            let parts: Vec<&str> = field.split('_').collect();
+            if parts.len() == 3 {
+                if let (Ok(m_idx), Ok(d_idx)) = (parts[1].parse::<usize>(), parts[2].parse::<usize>()) {
+                    if let Some(meaning) = entry.meanings.get_mut(m_idx) {
+                        if let Some(def) = meaning.definitions.get_mut(d_idx) {
+                            def.chinese = Some(value.to_string());
+                        }
+                    }
+                }
+            }
+        } else if field.starts_with("ex_") {
+            // 解析 ex_{m}_{d}
+            let parts: Vec<&str> = field.split('_').collect();
+            if parts.len() == 3 {
+                if let (Ok(m_idx), Ok(d_idx)) = (parts[1].parse::<usize>(), parts[2].parse::<usize>()) {
+                    if let Some(meaning) = entry.meanings.get_mut(m_idx) {
+                        if let Some(def) = meaning.definitions.get_mut(d_idx) {
+                            def.example_chinese = Some(value.to_string());
+                        }
+                    }
+                }
+            }
+        }
+
+        // 写回数据库
+        let new_raw_json = serde_json::to_string(&entry)?;
+        conn.execute(
+            "UPDATE word_dictionary SET raw_json = ?1, summary_zh = ?2 WHERE word = ?3",
+            params![new_raw_json, entry.summary_zh, word_lower],
+        )?;
+
+        Ok(())
+    }
+
+    /// 标记单词翻译完成
+    pub fn mark_translation_completed(&self, word: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let word_lower = word.to_lowercase();
+
+        // 读取并更新 raw_json 中的 translation_completed
+        let raw_json: String = conn.query_row(
+            "SELECT raw_json FROM word_dictionary WHERE word = ?1",
+            params![word_lower],
+            |row| row.get(0),
+        )?;
+
+        let mut entry: WordEntry = serde_json::from_str(&raw_json)?;
+        entry.translation_completed = true;
+
+        let new_raw_json = serde_json::to_string(&entry)?;
+        conn.execute(
+            "UPDATE word_dictionary SET raw_json = ?1, translation_completed = 1 WHERE word = ?2",
+            params![new_raw_json, word_lower],
+        )?;
+
         Ok(())
     }
 
@@ -273,20 +363,20 @@ impl DictionaryDb {
         let conn = self.conn.lock().unwrap();
         let word_lower = word.to_lowercase();
 
-        let (phonetic, meanings_json) = if let Some(e) = entry {
+        let (phonetic, meanings_json, summary_zh) = if let Some(e) = entry {
             let phonetic = e.phonetics.iter().find(|p| p.text.is_some()).and_then(|p| p.text.clone());
             let meanings_json = serde_json::to_string(&e.meanings).ok();
-            (phonetic, meanings_json)
+            (phonetic, meanings_json, e.summary_zh.clone())
         } else {
-            (None, None)
+            (None, None, None)
         };
 
         let result = conn.execute(
             r#"
-            INSERT OR IGNORE INTO word_favorites (word, phonetic, meanings_json, created_at, updated_at)
-            VALUES (?1, ?2, ?3, datetime('now'), datetime('now'))
+            INSERT OR IGNORE INTO word_favorites (word, phonetic, meanings_json, summary_zh, created_at, updated_at)
+            VALUES (?1, ?2, ?3, ?4, datetime('now'), datetime('now'))
             "#,
-            params![word_lower, phonetic, meanings_json],
+            params![word_lower, phonetic, meanings_json, summary_zh],
         )?;
 
         Ok(result > 0)
@@ -330,7 +420,7 @@ impl DictionaryDb {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             r#"
-            SELECT word, phonetic, meanings_json, note, review_count, last_review_at, created_at,
+            SELECT word, phonetic, meanings_json, summary_zh, note, review_count, last_review_at, created_at,
                    mastery_level, next_review_at, last_feedback, consecutive_correct
             FROM word_favorites
             ORDER BY created_at DESC
@@ -343,14 +433,15 @@ impl DictionaryDb {
                 word: row.get(0)?,
                 phonetic: row.get(1)?,
                 meanings_json: row.get(2)?,
-                note: row.get(3)?,
-                review_count: row.get(4)?,
-                last_review_at: row.get(5)?,
-                created_at: row.get(6)?,
-                mastery_level: row.get::<_, Option<i32>>(7)?.unwrap_or(0),
-                next_review_at: row.get(8)?,
-                last_feedback: row.get(9)?,
-                consecutive_correct: row.get::<_, Option<i32>>(10)?.unwrap_or(0),
+                summary_zh: row.get(3)?,
+                note: row.get(4)?,
+                review_count: row.get(5)?,
+                last_review_at: row.get(6)?,
+                created_at: row.get(7)?,
+                mastery_level: row.get::<_, Option<i32>>(8)?.unwrap_or(0),
+                next_review_at: row.get(9)?,
+                last_feedback: row.get(10)?,
+                consecutive_correct: row.get::<_, Option<i32>>(11)?.unwrap_or(0),
             })
         })?;
 
@@ -409,7 +500,7 @@ impl DictionaryDb {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             r#"
-            SELECT word, phonetic, meanings_json, note, review_count, last_review_at, created_at,
+            SELECT word, phonetic, meanings_json, summary_zh, note, review_count, last_review_at, created_at,
                    mastery_level, next_review_at, last_feedback, consecutive_correct
             FROM word_favorites
             WHERE mastery_level < 2
@@ -426,14 +517,15 @@ impl DictionaryDb {
                 word: row.get(0)?,
                 phonetic: row.get(1)?,
                 meanings_json: row.get(2)?,
-                note: row.get(3)?,
-                review_count: row.get(4)?,
-                last_review_at: row.get(5)?,
-                created_at: row.get(6)?,
-                mastery_level: row.get::<_, Option<i32>>(7)?.unwrap_or(0),
-                next_review_at: row.get(8)?,
-                last_feedback: row.get(9)?,
-                consecutive_correct: row.get::<_, Option<i32>>(10)?.unwrap_or(0),
+                summary_zh: row.get(3)?,
+                note: row.get(4)?,
+                review_count: row.get(5)?,
+                last_review_at: row.get(6)?,
+                created_at: row.get(7)?,
+                mastery_level: row.get::<_, Option<i32>>(8)?.unwrap_or(0),
+                next_review_at: row.get(9)?,
+                last_feedback: row.get(10)?,
+                consecutive_correct: row.get::<_, Option<i32>>(11)?.unwrap_or(0),
             })
         })?;
 
@@ -478,7 +570,7 @@ impl DictionaryDb {
         )?;
 
         // 获取当前状态
-        let (current_consecutive, current_mastery): (i32, i32) = conn.query_row(
+        let (current_consecutive, _current_mastery): (i32, i32) = conn.query_row(
             "SELECT consecutive_correct, mastery_level FROM word_favorites WHERE word = ?1",
             params![word_lower],
             |row| Ok((row.get(0)?, row.get(1)?)),
@@ -546,7 +638,7 @@ impl DictionaryDb {
         let conn = self.conn.lock().unwrap();
         conn.query_row(
             r#"
-            SELECT word, phonetic, meanings_json, note, review_count, last_review_at, created_at,
+            SELECT word, phonetic, meanings_json, summary_zh, note, review_count, last_review_at, created_at,
                    mastery_level, next_review_at, last_feedback, consecutive_correct
             FROM word_favorites WHERE word = ?1
             "#,
@@ -556,14 +648,15 @@ impl DictionaryDb {
                     word: row.get(0)?,
                     phonetic: row.get(1)?,
                     meanings_json: row.get(2)?,
-                    note: row.get(3)?,
-                    review_count: row.get(4)?,
-                    last_review_at: row.get(5)?,
-                    created_at: row.get(6)?,
-                    mastery_level: row.get::<_, Option<i32>>(7)?.unwrap_or(0),
-                    next_review_at: row.get(8)?,
-                    last_feedback: row.get(9)?,
-                    consecutive_correct: row.get::<_, Option<i32>>(10)?.unwrap_or(0),
+                    summary_zh: row.get(3)?,
+                    note: row.get(4)?,
+                    review_count: row.get(5)?,
+                    last_review_at: row.get(6)?,
+                    created_at: row.get(7)?,
+                    mastery_level: row.get::<_, Option<i32>>(8)?.unwrap_or(0),
+                    next_review_at: row.get(9)?,
+                    last_feedback: row.get(10)?,
+                    consecutive_correct: row.get::<_, Option<i32>>(11)?.unwrap_or(0),
                 })
             },
         ).map_err(Into::into)
@@ -657,6 +750,7 @@ pub struct FavoriteWord {
     pub word: String,
     pub phonetic: Option<String>,
     pub meanings_json: Option<String>,
+    pub summary_zh: Option<String>,
     pub note: Option<String>,
     pub review_count: i32,
     pub last_review_at: Option<String>,

@@ -128,22 +128,31 @@ function WordCard({ word, onDelete, onUpdateNote, onClick }: WordCardProps) {
         </div>
       </div>
 
-      {/* 释义 */}
-      <div className="space-y-1 mb-2">
-        {meanings.slice(0, 2).map((meaning, i) => (
-          <div key={i} className="text-sm">
-            <span className="text-primary font-medium mr-1">
-              {meaning.part_of_speech_zh}
-            </span>
-            <span className="text-muted-foreground">
-              {meaning.definitions
-                .slice(0, 2)
-                .map((d) => d.chinese || d.english)
-                .join("; ")}
-            </span>
-          </div>
-        ))}
-      </div>
+      {/* 中文总释义 */}
+      {word.summary_zh && (
+        <p className="text-sm text-primary font-medium mb-2">
+          {word.summary_zh}
+        </p>
+      )}
+
+      {/* 释义（作为补充） */}
+      {!word.summary_zh && (
+        <div className="space-y-1 mb-2">
+          {meanings.slice(0, 2).map((meaning, i) => (
+            <div key={i} className="text-sm">
+              <span className="text-primary font-medium mr-1">
+                {meaning.part_of_speech_zh}
+              </span>
+              <span className="text-muted-foreground">
+                {meaning.definitions
+                  .slice(0, 2)
+                  .map((d) => d.chinese || d.english)
+                  .join("; ")}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* 笔记 */}
       {isEditing ? (
@@ -255,6 +264,9 @@ function WordDetail({ word, onClose, onUpdateNote, onDelete }: WordDetailProps) 
           </div>
           {word.phonetic && (
             <p className="text-muted-foreground">{word.phonetic}</p>
+          )}
+          {word.summary_zh && (
+            <p className="text-primary font-medium mt-2">{word.summary_zh}</p>
           )}
         </div>
 
@@ -460,7 +472,14 @@ function FlashcardReview({ onClose }: FlashcardReviewProps) {
               animate={{ opacity: 1, y: 0 }}
               className="space-y-4 mb-8"
             >
-              {meanings.map((meaning, i) => (
+              {/* 中文总释义 */}
+              {currentWord.summary_zh && (
+                <p className="text-xl text-primary font-semibold text-center">
+                  {currentWord.summary_zh}
+                </p>
+              )}
+              {/* 详细释义 */}
+              {!currentWord.summary_zh && meanings.map((meaning, i) => (
                 <div key={i} className="text-center">
                   <Badge variant="secondary" className="mb-2">
                     {meaning.part_of_speech_zh}

@@ -198,9 +198,12 @@ export interface Meaning {
 
 export interface WordEntry {
   word: string;
+  summary_zh?: string;
   phonetics: Phonetic[];
   meanings: Meaning[];
   fetched_at: string;
+  translation_completed: boolean;
+  data_source: string;
 }
 
 export async function wordLookup(word: string): Promise<WordEntry> {
@@ -229,6 +232,7 @@ export interface FavoriteWord {
   word: string;
   phonetic?: string;
   meanings_json?: string;
+  summary_zh?: string;
   note?: string;
   review_count: number;
   last_review_at?: string;

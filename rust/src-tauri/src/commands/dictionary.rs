@@ -1,14 +1,17 @@
 use crate::dictionary::api::DictionaryApiClient;
 use crate::dictionary::db::hash_text;
-use crate::dictionary::{DictionaryDb, FavoriteWord, ReviewSession, ReviewStats, WordEntry};
+use crate::dictionary::{DictionaryDb, FavoriteWord, ReviewSession, ReviewStats, TranslationWorker, WordEntry};
 use crate::task_manager::TaskManager;
 use std::collections::HashMap;
 use std::sync::Arc;
+use tauri::AppHandle;
 
-/// 查询单词（带缓存）
+/// 查询单词（立即返回，异步翻译）
 #[tauri::command]
 pub async fn word_lookup(
+    app_handle: AppHandle,
     dict_db: tauri::State<'_, Arc<DictionaryDb>>,
+    manager: tauri::State<'_, TaskManager>,
     word: String,
 ) -> Result<WordEntry, String> {
     let word = word.to_lowercase().trim().to_string();
@@ -18,6 +21,12 @@ pub async fn word_lookup(
 
     // 1. 检查数据库缓存
     if let Ok(Some(cached)) = dict_db.get_word(&word) {
+        // 如果已翻译完成，直接返回
+        if cached.translation_completed {
+            return Ok(cached);
+        }
+        // 否则启动异步翻译并返回当前数据
+        spawn_translation_task(&app_handle, &dict_db, &manager, &word, cached.clone()).await;
         return Ok(cached);
     }
 
@@ -25,12 +34,35 @@ pub async fn word_lookup(
     let client = DictionaryApiClient::new().map_err(|e| e.to_string())?;
     let entry = client.lookup(&word).await.map_err(|e| e.to_string())?;
 
-    // 3. 存入数据库
+    // 3. 立即存入数据库（未翻译状态）
     dict_db
         .upsert_word(&word, &entry)
         .map_err(|e| e.to_string())?;
 
+    // 4. 启动异步翻译任务
+    spawn_translation_task(&app_handle, &dict_db, &manager, &word, entry.clone()).await;
+
+    // 5. 立即返回（英文释义 + 空中文）
     Ok(entry)
+}
+
+/// 启动异步翻译任务
+async fn spawn_translation_task(
+    app_handle: &AppHandle,
+    dict_db: &Arc<DictionaryDb>,
+    manager: &TaskManager,
+    word: &str,
+    entry: WordEntry,
+) {
+    // 获取翻译器
+    let translator = match manager.get_translator().await {
+        Some(t) => t,
+        None => return, // 无翻译器，不启动翻译
+    };
+
+    // 创建翻译工作器并启动任务
+    let worker = TranslationWorker::new(app_handle.clone(), dict_db.clone());
+    worker.spawn_translation(word.to_string(), entry, translator);
 }
 
 /// 翻译文本（带缓存）

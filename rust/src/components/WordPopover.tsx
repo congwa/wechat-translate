@@ -2,66 +2,44 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import { X, Volume2, Loader2, Star } from "lucide-react";
 import { useDictionaryStore } from "@/stores/dictionaryStore";
 import { useFavoriteStore } from "@/stores/favoriteStore";
+import { Skeleton } from "@/components/ui/skeleton";
 import type { Definition, Meaning } from "@/lib/tauri-api";
 
 interface DefinitionItemProps {
   definition: Definition;
-  onTranslate: (text: string) => Promise<string | null>;
+  translating: boolean;
 }
 
-function DefinitionItem({ definition, onTranslate }: DefinitionItemProps) {
-  const [chinese, setChinese] = useState(definition.chinese);
-  const [exampleChinese, setExampleChinese] = useState(definition.example_chinese);
-  const [translating, setTranslating] = useState(false);
-
-  const handleTranslate = useCallback(async () => {
-    if (chinese || translating) return;
-    setTranslating(true);
-    const result = await onTranslate(definition.english);
-    if (result) setChinese(result);
-    setTranslating(false);
-  }, [chinese, translating, definition.english, onTranslate]);
-
-  const handleTranslateExample = useCallback(async () => {
-    if (!definition.example || exampleChinese || translating) return;
-    setTranslating(true);
-    const result = await onTranslate(definition.example);
-    if (result) setExampleChinese(result);
-    setTranslating(false);
-  }, [definition.example, exampleChinese, translating, onTranslate]);
-
-  useEffect(() => {
-    handleTranslate();
-  }, [handleTranslate]);
-
+function DefinitionItem({ definition, translating }: DefinitionItemProps) {
   return (
     <div className="py-1.5 border-b border-border last:border-b-0">
-      <p className="text-xs text-foreground leading-relaxed">
-        {definition.english}
-      </p>
-      {translating ? (
-        <p className="text-[11px] text-primary/70 mt-0.5 flex items-center gap-1">
-          <Loader2 className="w-3 h-3 animate-spin" />
-          翻译中...
+      {/* 中文释义为主 */}
+      {definition.chinese ? (
+        <p className="text-xs text-foreground leading-relaxed">
+          {definition.chinese}
         </p>
-      ) : chinese ? (
-        <p className="text-[11px] text-primary mt-0.5">
-          {chinese}
+      ) : translating ? (
+        <Skeleton className="h-4 w-3/4" />
+      ) : (
+        <p className="text-xs text-foreground leading-relaxed">
+          {definition.english}
         </p>
-      ) : null}
+      )}
+      {/* 英文例句 */}
       {definition.example && (
-        <p
-          className="text-[11px] text-muted-foreground mt-1 italic cursor-pointer hover:text-foreground transition-colors"
-          onClick={handleTranslateExample}
-          title="点击翻译例句"
-        >
+        <p className="text-[11px] text-muted-foreground mt-1 italic">
           例: {definition.example}
         </p>
       )}
-      {exampleChinese && (
-        <p className="text-[11px] text-primary/70 mt-0.5">
-          {exampleChinese}
-        </p>
+      {/* 例句中文翻译 */}
+      {definition.example && (
+        definition.example_chinese ? (
+          <p className="text-[11px] text-primary/70 mt-0.5">
+            {definition.example_chinese}
+          </p>
+        ) : translating ? (
+          <Skeleton className="h-3 w-2/3 mt-0.5" />
+        ) : null
       )}
     </div>
   );
@@ -69,10 +47,10 @@ function DefinitionItem({ definition, onTranslate }: DefinitionItemProps) {
 
 interface MeaningItemProps {
   meaning: Meaning;
-  onTranslate: (text: string) => Promise<string | null>;
+  translating: boolean;
 }
 
-function MeaningItem({ meaning, onTranslate }: MeaningItemProps) {
+function MeaningItem({ meaning, translating }: MeaningItemProps) {
   return (
     <div className="mb-3 last:mb-0">
       <div className="flex items-center gap-1.5 mb-1">
@@ -88,7 +66,7 @@ function MeaningItem({ meaning, onTranslate }: MeaningItemProps) {
           <DefinitionItem
             key={i}
             definition={def}
-            onTranslate={onTranslate}
+            translating={translating}
           />
         ))}
         {meaning.definitions.length > 3 && (
@@ -112,9 +90,9 @@ export function WordPopover() {
     currentEntry,
     loading,
     error,
+    translating,
     popoverPosition,
     clearCurrent,
-    translateDefinition,
   } = useDictionaryStore();
 
   const { checkFavorite, toggleFavorite, getCachedStatus } = useFavoriteStore();
@@ -240,58 +218,68 @@ export function WordPopover() {
         }
       `}</style>
       {/* Header */}
-      <div className="flex items-center justify-between px-3 py-2 border-b border-border" style={{ backgroundColor: "var(--color-muted)" }}>
-        <div className="flex items-center gap-2 min-w-0">
-          <span className="text-sm font-semibold truncate">
-            {currentWord}
-          </span>
-          {phoneticText && (
-            <span className="text-xs text-muted-foreground shrink-0">
-              {phoneticText}
+      <div className="px-3 py-2 border-b border-border" style={{ backgroundColor: "var(--color-muted)" }}>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="text-sm font-semibold truncate">
+              {currentWord}
             </span>
-          )}
-        </div>
-        <div className="flex items-center gap-0.5 shrink-0">
-          {/* 收藏按钮 */}
-          <button
-            onClick={handleToggleFavorite}
-            disabled={favoriteLoading}
-            className="p-1 rounded hover:bg-accent transition-colors"
-            title={isFavorited ? "取消收藏" : "收藏单词"}
-          >
-            <Star
-              className={`w-3.5 h-3.5 transition-colors ${
-                favoriteLoading
-                  ? "text-muted-foreground animate-pulse"
-                  : isFavorited
-                  ? "fill-yellow-400 text-yellow-400"
-                  : "text-muted-foreground hover:text-yellow-400"
-              }`}
-            />
-          </button>
-          {phoneticsWithAudio.map((p) => (
+            {phoneticText && (
+              <span className="text-xs text-muted-foreground shrink-0">
+                {phoneticText}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-0.5 shrink-0">
+            {/* 收藏按钮 */}
             <button
-              key={p.region || "default"}
-              onClick={() => p.audio_url && playAudio(p.audio_url, p.region || "default")}
+              onClick={handleToggleFavorite}
+              disabled={favoriteLoading}
               className="p-1 rounded hover:bg-accent transition-colors"
-              title={`播放 ${p.region?.toUpperCase() || ""} 发音`}
+              title={isFavorited ? "取消收藏" : "收藏单词"}
             >
-              <Volume2
-                className={`w-3.5 h-3.5 ${
-                  playingRegion === (p.region || "default")
-                    ? "text-primary animate-pulse"
-                    : "text-muted-foreground"
+              <Star
+                className={`w-3.5 h-3.5 transition-colors ${
+                  favoriteLoading
+                    ? "text-muted-foreground animate-pulse"
+                    : isFavorited
+                    ? "fill-yellow-400 text-yellow-400"
+                    : "text-muted-foreground hover:text-yellow-400"
                 }`}
               />
             </button>
-          ))}
-          <button
-            onClick={clearCurrent}
-            className="p-1 rounded hover:bg-accent transition-colors ml-0.5"
-          >
-            <X className="w-3.5 h-3.5 text-muted-foreground" />
-          </button>
+            {phoneticsWithAudio.map((p) => (
+              <button
+                key={p.region || "default"}
+                onClick={() => p.audio_url && playAudio(p.audio_url, p.region || "default")}
+                className="p-1 rounded hover:bg-accent transition-colors"
+                title={`播放 ${p.region?.toUpperCase() || ""} 发音`}
+              >
+                <Volume2
+                  className={`w-3.5 h-3.5 ${
+                    playingRegion === (p.region || "default")
+                      ? "text-primary animate-pulse"
+                      : "text-muted-foreground"
+                  }`}
+                />
+              </button>
+            ))}
+            <button
+              onClick={clearCurrent}
+              className="p-1 rounded hover:bg-accent transition-colors ml-0.5"
+            >
+              <X className="w-3.5 h-3.5 text-muted-foreground" />
+            </button>
+          </div>
         </div>
+        {/* 中文总释义 */}
+        {currentEntry?.summary_zh ? (
+          <p className="text-xs text-primary mt-1.5 font-medium">
+            {currentEntry.summary_zh}
+          </p>
+        ) : translating ? (
+          <Skeleton className="h-4 w-1/2 mt-1.5" />
+        ) : null}
       </div>
 
       {/* Content */}
@@ -311,7 +299,7 @@ export function WordPopover() {
                 <MeaningItem
                   key={i}
                   meaning={meaning}
-                  onTranslate={translateDefinition}
+                  translating={translating}
                 />
               ))}
             </div>

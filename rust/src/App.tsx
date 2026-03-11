@@ -20,6 +20,7 @@ import { useToastStore } from "@/stores/toastStore";
 import { useFormStore } from "@/stores/formStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useRuntimeStore } from "@/stores/runtimeStore";
+import { initDictionaryEventListeners, cleanupDictionaryEventListeners } from "@/stores/dictionaryStore";
 import * as api from "@/lib/tauri-api";
 import type { TaskState, TranslatorServiceStatus } from "@/lib/types";
 
@@ -33,6 +34,9 @@ export default function App() {
       useSettingsStore.getState().initSettingsListener(),
       useRuntimeStore.getState().initRuntimeListener(),
     ];
+
+    // 初始化词典事件监听器
+    initDictionaryEventListeners();
 
     api
       .appStateGet()
@@ -48,6 +52,7 @@ export default function App() {
       cleanupPromises.forEach((cleanup) => {
         cleanup.then((fn) => fn());
       });
+      cleanupDictionaryEventListeners();
     };
   }, []);
 
