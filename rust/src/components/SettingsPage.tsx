@@ -666,8 +666,8 @@ export function SettingsPage() {
           <div className="space-y-2">
             <Label className="text-xs text-muted-foreground">浮窗显示消息数</Label>
             <div className="flex items-center gap-2">
-              <div className="flex items-center gap-1">
-                {["1", "2", "3"].map((n) => (
+              <div className="flex items-center gap-1 flex-wrap">
+                {["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"].map((n) => (
                   <button
                     key={n}
                     onClick={() => updateDraft({ collapsedDisplayCount: n })}
