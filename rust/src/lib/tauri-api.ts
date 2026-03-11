@@ -226,8 +226,23 @@ export interface WordEntry {
   data_source: string;
 }
 
-export async function wordLookup(word: string): Promise<WordEntry> {
-  return invoke("word_lookup", { word });
+export interface DictProviderInfo {
+  id: string;
+  display_name: string;
+  requires_network: boolean;
+  is_default: boolean;
+}
+
+export async function wordLookup(word: string, provider?: string): Promise<WordEntry> {
+  return invoke("word_lookup", { word, provider });
+}
+
+export async function listDictProviders(): Promise<DictProviderInfo[]> {
+  return invoke("list_dict_providers");
+}
+
+export async function getDictProvider(): Promise<string> {
+  return invoke("get_dict_provider");
 }
 
 export async function translateCached(params: {

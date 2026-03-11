@@ -349,6 +349,16 @@ pub fn run() {
                     .expect("failed to open dictionary database"),
             );
 
+            // 初始化词典路由器
+            let cambridge_db_path = app
+                .path()
+                .resolve("dictionaries/cambridge.sqlite", tauri::path::BaseDirectory::Resource)
+                .ok();
+            let dict_router = Arc::new(
+                dictionary::DictionaryRouter::new(cambridge_db_path)
+                    .expect("failed to create dictionary router"),
+            );
+
             let image_cache = Arc::new(std::sync::Mutex::new(WeChatImageCache::new()));
             let translation_service = Arc::new(TranslationService::new());
 
@@ -364,6 +374,7 @@ pub fn run() {
             app.manage(ConfigDir(data_dir.clone()));
             app.manage(message_db);
             app.manage(dict_db);
+            app.manage(dict_router);
             app.manage(image_cache);
             app.manage(translation_service);
             app.manage(manager.clone());
@@ -606,6 +617,8 @@ pub fn run() {
             commands::preflight::accessibility_request_access,
             commands::preflight::accessibility_open_settings,
             commands::dictionary::word_lookup,
+            commands::dictionary::list_dict_providers,
+            commands::dictionary::get_dict_provider,
             commands::dictionary::translate_cached,
             commands::dictionary::translate_batch,
             commands::dictionary::toggle_favorite,

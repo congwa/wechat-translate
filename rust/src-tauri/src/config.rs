@@ -95,6 +95,26 @@ pub struct LoggingConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DictConfig {
+    /// 当前使用的词典提供者
+    /// 可选值: "cambridge" | "free_dictionary"
+    #[serde(default = "default_dict_provider")]
+    pub provider: String,
+}
+
+fn default_dict_provider() -> String {
+    "cambridge".to_string()
+}
+
+impl Default for DictConfig {
+    fn default() -> Self {
+        Self {
+            provider: default_dict_provider(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     #[serde(default)]
     pub listen: ListenConfig,
@@ -104,6 +124,8 @@ pub struct AppConfig {
     pub display: DisplayConfig,
     #[serde(default)]
     pub logging: LoggingConfig,
+    #[serde(default)]
+    pub dict: DictConfig,
 }
 
 // ---------------------------------------------------------------------------
@@ -243,6 +265,7 @@ impl Default for AppConfig {
             translate: TranslateConfig::default(),
             display: DisplayConfig::default(),
             logging: LoggingConfig::default(),
+            dict: DictConfig::default(),
         }
     }
 }

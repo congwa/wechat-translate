@@ -62,11 +62,16 @@ export interface LoggingSettings {
   file: string;
 }
 
+export interface DictSettings {
+  provider: string;
+}
+
 export interface AppSettings {
   listen: ListenSettings;
   translate: TranslateSettings;
   display: DisplaySettings;
   logging: LoggingSettings;
+  dict: DictSettings;
 }
 
 export interface AppRuntime {

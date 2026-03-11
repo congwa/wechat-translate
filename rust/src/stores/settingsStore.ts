@@ -21,6 +21,8 @@ export interface SettingsDraft {
   pollInterval: string;
   useRightPanelDetails: boolean;
   displayWidth: string;
+  // 词典设置
+  dictProvider: string;
 }
 
 function createDefaultSettings(): AppSettings {
@@ -59,6 +61,9 @@ function createDefaultSettings(): AppSettings {
     logging: {
       file: "logs/sidebar_listener.log",
     },
+    dict: {
+      provider: "cambridge",
+    },
   };
 }
 
@@ -82,6 +87,7 @@ export function draftFromSettings(settings: AppSettings): SettingsDraft {
     pollInterval: String(settings.listen.interval_seconds),
     useRightPanelDetails: settings.listen.use_right_panel_details,
     displayWidth: String(settings.display.width),
+    dictProvider: settings.dict?.provider || "cambridge",
   };
 }
 
@@ -114,6 +120,10 @@ export function settingsFromDraft(
     display: {
       ...settings.display,
       width: parseInt(draft.displayWidth, 10) || 420,
+    },
+    dict: {
+      ...settings.dict,
+      provider: draft.dictProvider,
     },
   };
 }

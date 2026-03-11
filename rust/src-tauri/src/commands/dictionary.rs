@@ -1,6 +1,6 @@
-use crate::dictionary::api::DictionaryApiClient;
+use crate::config::{load_app_config, ConfigDir};
 use crate::dictionary::db::hash_text;
-use crate::dictionary::{DictionaryDb, FavoriteWord, ReviewSession, ReviewStats, TranslationWorker, WordEntry};
+use crate::dictionary::{DictionaryDb, DictionaryRouter, FavoriteWord, ProviderInfo, ReviewSession, ReviewStats, TranslationWorker, WordEntry};
 use crate::task_manager::TaskManager;
 use crate::translator::TranslationService;
 use std::collections::HashMap;
@@ -11,29 +11,50 @@ use tauri::AppHandle;
 #[tauri::command]
 pub async fn word_lookup(
     app_handle: AppHandle,
+    config_dir: tauri::State<'_, ConfigDir>,
     dict_db: tauri::State<'_, Arc<DictionaryDb>>,
+    dict_router: tauri::State<'_, Arc<DictionaryRouter>>,
     translation_service: tauri::State<'_, Arc<TranslationService>>,
     word: String,
+    provider: Option<String>,
 ) -> Result<WordEntry, String> {
     let word = word.to_lowercase().trim().to_string();
     if word.is_empty() {
         return Err("Word cannot be empty".to_string());
     }
 
-    // 1. 检查数据库缓存
+    // 获取用户配置的词典提供者
+    let provider_id = provider.or_else(|| {
+        load_app_config(&config_dir.0)
+            .ok()
+            .map(|c| c.dict.provider)
+    });
+
+    // 1. 检查数据库缓存（考虑词典来源）
     if let Ok(Some(cached)) = dict_db.get_word(&word) {
-        // 如果已翻译完成，直接返回
-        if cached.translation_completed {
+        // 如果缓存来源与当前选择的提供者匹配，且已翻译完成，直接返回
+        let cache_matches_provider = provider_id
+            .as_ref()
+            .map(|p| cached.data_source == *p)
+            .unwrap_or(true);
+
+        if cache_matches_provider && cached.translation_completed {
             return Ok(cached);
         }
-        // 否则启动异步翻译并返回当前数据
-        spawn_translation_task(&app_handle, &dict_db, &translation_service, &word, cached.clone()).await;
-        return Ok(cached);
+
+        // 如果来源匹配但未翻译完成，启动异步翻译并返回
+        if cache_matches_provider {
+            spawn_translation_task(&app_handle, &dict_db, &translation_service, &word, cached.clone()).await;
+            return Ok(cached);
+        }
+        // 如果来源不匹配，继续查询新的词典源
     }
 
-    // 2. 调用 freeDictionaryAPI
-    let client = DictionaryApiClient::new().map_err(|e| e.to_string())?;
-    let entry = client.lookup(&word).await.map_err(|e| e.to_string())?;
+    // 2. 使用词典路由器查询
+    let entry = dict_router
+        .lookup(&word, provider_id.as_deref())
+        .await
+        .map_err(|e| e.to_string())?;
 
     // 3. 立即存入数据库（未翻译状态）
     dict_db
@@ -45,6 +66,23 @@ pub async fn word_lookup(
 
     // 5. 立即返回（英文释义 + 空中文）
     Ok(entry)
+}
+
+/// 获取可用的词典提供者列表
+#[tauri::command]
+pub async fn list_dict_providers(
+    dict_router: tauri::State<'_, Arc<DictionaryRouter>>,
+) -> Result<Vec<ProviderInfo>, String> {
+    Ok(dict_router.list_providers())
+}
+
+/// 获取当前配置的词典提供者
+#[tauri::command]
+pub async fn get_dict_provider(
+    config_dir: tauri::State<'_, ConfigDir>,
+) -> Result<String, String> {
+    let config = load_app_config(&config_dir.0).map_err(|e| e.to_string())?;
+    Ok(config.dict.provider)
 }
 
 /// 启动异步翻译任务
