@@ -152,7 +152,12 @@ pub async fn live_start(
     }
 
     let _ = sidebar_state
-        .open(&app, Some(config.display.width as f64), mode)
+        .open(
+            &app,
+            Some(config.display.width as f64),
+            mode,
+            Some(config.display.collapsed_display_count),
+        )
         .await;
 
     Ok(serde_json::json!({ "ok": true, "message": "live started" }))
@@ -169,7 +174,12 @@ pub async fn sidebar_window_open(
     let mode = WindowMode::from_str_opt(window_mode.as_deref());
     let config = load_app_config(&config_dir.0).map_err(|e| e.to_string())?;
     state
-        .open(&app, width.or(Some(config.display.width as f64)), mode)
+        .open(
+            &app,
+            width.or(Some(config.display.width as f64)),
+            mode,
+            Some(config.display.collapsed_display_count),
+        )
         .await
         .map_err(|e| e.to_string())?;
     Ok(serde_json::json!({ "ok": true, "message": "sidebar window opened" }))

@@ -532,6 +532,7 @@ pub fn run() {
                                         &app,
                                         Some(config.display.width as f64),
                                         sidebar_window::WindowMode::default(),
+                                        Some(config.display.collapsed_display_count),
                                     )
                                     .await;
                             }

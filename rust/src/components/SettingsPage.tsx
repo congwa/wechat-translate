@@ -175,7 +175,6 @@ export function SettingsPage() {
   const setTranslatorStatus = useRuntimeStore((s) => s.setTranslatorStatus);
 
   const sidebarWindowMode = useFormStore((s) => s.sidebarWindowMode);
-  const collapsedDisplayCount = useFormStore((s) => s.collapsedDisplayCount);
   const imageCapture = useFormStore((s) => s.imageCapture);
   const setUiSettings = useFormStore((s) => s.setSettings);
 
@@ -652,60 +651,26 @@ export function SettingsPage() {
 
         {sidebarWindowMode === "independent" && (
           <div className="space-y-2">
-            <Label className="text-xs text-muted-foreground">折叠显示</Label>
-            <div className="grid grid-cols-2 gap-3">
-              <button
-                onClick={() => setUiSettings({ collapsedDisplayCount: "0" })}
-                className={`text-left rounded-xl border p-3 transition-all duration-150 ${
-                  collapsedDisplayCount === "0"
-                    ? "border-primary bg-primary/5 ring-1 ring-primary/20"
-                    : "border-border hover:border-muted-foreground/30"
-                }`}
-              >
-                <span className={`text-sm font-medium ${
-                  collapsedDisplayCount === "0" ? "text-primary" : ""
-                }`}>完全折叠</span>
-                <p className="text-[11px] text-muted-foreground mt-0.5">折叠后不显示任何消息</p>
-              </button>
-              <button
-                onClick={() => {
-                  if (collapsedDisplayCount === "0") {
-                    setUiSettings({ collapsedDisplayCount: "1" });
-                  }
-                }}
-                className={`text-left rounded-xl border p-3 transition-all duration-150 ${
-                  collapsedDisplayCount !== "0"
-                    ? "border-primary bg-primary/5 ring-1 ring-primary/20"
-                    : "border-border hover:border-muted-foreground/30"
-                }`}
-              >
-                <span className={`text-sm font-medium ${
-                  collapsedDisplayCount !== "0" ? "text-primary" : ""
-                }`}>保留最新消息</span>
-                <p className="text-[11px] text-muted-foreground mt-0.5">折叠后仍显示最新消息</p>
-              </button>
-            </div>
-            {collapsedDisplayCount !== "0" && (
-              <div className="flex items-center gap-2 pt-1">
-                <Label className="text-xs text-muted-foreground shrink-0">显示条数</Label>
-                <div className="flex items-center gap-1">
-                  {["1", "2", "3"].map((n) => (
-                    <button
-                      key={n}
-                      onClick={() => setUiSettings({ collapsedDisplayCount: n })}
-                      className={`w-8 h-8 rounded-lg text-sm font-medium transition-all duration-150 ${
-                        collapsedDisplayCount === n
-                          ? "bg-primary text-primary-foreground shadow-sm"
-                          : "bg-muted text-muted-foreground hover:bg-muted/80"
-                      }`}
-                    >
-                      {n}
-                    </button>
-                  ))}
-                </div>
-                <span className="text-xs text-muted-foreground">条</span>
+            <Label className="text-xs text-muted-foreground">浮窗显示消息数</Label>
+            <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1">
+                {["1", "2", "3"].map((n) => (
+                  <button
+                    key={n}
+                    onClick={() => updateDraft({ collapsedDisplayCount: n })}
+                    className={`w-8 h-8 rounded-lg text-sm font-medium transition-all duration-150 ${
+                      draft.collapsedDisplayCount === n
+                        ? "bg-primary text-primary-foreground shadow-sm"
+                        : "bg-muted text-muted-foreground hover:bg-muted/80"
+                    }`}
+                  >
+                    {n}
+                  </button>
+                ))}
               </div>
-            )}
+              <span className="text-xs text-muted-foreground">条</span>
+            </div>
+            <p className="text-[11px] text-muted-foreground">独立模式下浮窗显示的消息数量，重新开启浮窗后生效</p>
           </div>
         )}
       </SettingsSection>

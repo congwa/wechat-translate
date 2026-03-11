@@ -86,6 +86,8 @@ pub struct DisplayConfig {
     pub width: u32,
     #[serde(default = "default_side")]
     pub side: String,
+    #[serde(default = "default_collapsed_display_count")]
+    pub collapsed_display_count: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -183,6 +185,9 @@ fn default_side() -> String {
 fn default_log_file() -> String {
     "logs/sidebar_listener.log".into()
 }
+fn default_collapsed_display_count() -> u32 {
+    3
+}
 
 impl Default for ListenConfig {
     fn default() -> Self {
@@ -246,6 +251,7 @@ impl Default for DisplayConfig {
             on_translate_fail: default_on_translate_fail(),
             width: default_width(),
             side: default_side(),
+            collapsed_display_count: default_collapsed_display_count(),
         }
     }
 }

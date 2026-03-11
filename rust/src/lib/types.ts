@@ -56,6 +56,7 @@ export interface DisplaySettings {
   on_translate_fail: string;
   width: number;
   side: string;
+  collapsed_display_count: number;
 }
 
 export interface LoggingSettings {

@@ -2,8 +2,7 @@ import { useRef, useEffect, useState, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { listen } from "@tauri-apps/api/event";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
-import { X, MessageCircle, Languages, AlertCircle, ChevronUp, ChevronDown, BookOpen } from "lucide-react";
+import { X, MessageCircle, Languages, AlertCircle, BookOpen } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useSidebarStore } from "@/stores/sidebarStore";
@@ -18,19 +17,15 @@ import * as api from "@/lib/tauri-api";
 
 type WindowMode = "follow" | "independent";
 
-const TITLE_BAR_H = 40;
-const MSG_CARD_H = 62;
-const MSG_GAP = 6;
-const CONTAINER_PAD = 12;
-
-function getCollapsedHeight(count: number): number {
-  if (count <= 0) return TITLE_BAR_H;
-  return TITLE_BAR_H + CONTAINER_PAD + count * MSG_CARD_H + (count - 1) * MSG_GAP;
-}
-
 function getWindowMode(): WindowMode {
   const params = new URLSearchParams(window.location.search);
   return params.get("mode") === "independent" ? "independent" : "follow";
+}
+
+function getDisplayCount(): number {
+  const params = new URLSearchParams(window.location.search);
+  const count = parseInt(params.get("count") || "3", 10);
+  return Math.max(count, 1);
 }
 
 const DISPLAY_MODES: { value: DisplayMode; label: string; title: string }[] = [
@@ -259,6 +254,7 @@ export function SidebarView() {
 
   const [windowMode] = useState<WindowMode>(getWindowMode);
   const isIndependent = windowMode === "independent";
+  const displayCount = isIndependent ? getDisplayCount() : 0;
 
   useEffect(() => {
     document.documentElement.style.background = "transparent";
@@ -274,13 +270,10 @@ export function SidebarView() {
   const settings = useSettingsStore((s) => s.settings);
   const translatorStatus = useRuntimeStore((s) => s.runtime.translator);
   const setTranslatorStatus = useRuntimeStore((s) => s.setTranslatorStatus);
-  const collapsedCount = parseInt(useFormStore((s) => s.collapsedDisplayCount) || "0", 10);
   const bottomRef = useRef<HTMLDivElement>(null);
   const [visible, setVisible] = useState(true);
-  const [collapsed, setCollapsed] = useState(false);
   const [snapshotLoading, setSnapshotLoading] = useState(false);
   const [showWordBook, setShowWordBook] = useState(false);
-  const expandedSizeRef = useRef({ w: 380, h: 600 });
   const translateEnabled = settings?.translate.enabled ?? false;
   const deeplxUrl = settings?.translate.deeplx_url ?? "";
   const canSwitchDisplayMode = !settings || (translateEnabled && deeplxUrl.trim() !== "");
@@ -322,7 +315,7 @@ export function SidebarView() {
     };
   }, [isIndependent]);
 
-  // 滚动到底部：当消息数量变化或最后一条消息内容更新时触发
+  // 滚动到底部：当消息数量变化或最后一条消息内容更新时触发（仅跟随模式）
   // 这样翻译完成后内容增多也会自动滚动到底部
   const lastItemContent = items.length > 0 ? items[items.length - 1]?.textEn : "";
   useEffect(() => {
@@ -331,21 +324,6 @@ export function SidebarView() {
 
   function handleClose() {
     api.sidebarStop().catch(() => {});
-  }
-
-  async function handleToggleCollapse() {
-    const win = getCurrentWindow();
-    const scale = await win.scaleFactor();
-    if (collapsed) {
-      await win.setSize(new LogicalSize(expandedSizeRef.current.w, expandedSizeRef.current.h));
-      setCollapsed(false);
-    } else {
-      const size = await win.innerSize();
-      expandedSizeRef.current = { w: size.width / scale, h: size.height / scale };
-      const targetHeight = getCollapsedHeight(collapsedCount);
-      await win.setSize(new LogicalSize(size.width / scale, targetHeight));
-      setCollapsed(true);
-    }
   }
 
   return (
@@ -391,29 +369,18 @@ export function SidebarView() {
               ))}
             </div>
           )}
-          {/* 单词本按钮 */}
-          <button
-            onClick={() => setShowWordBook(!showWordBook)}
-            className={`w-6 h-6 flex items-center justify-center rounded-md transition-colors ${
-              showWordBook
-                ? "bg-primary/10 text-primary"
-                : "hover:bg-black/[0.05] dark:hover:bg-white/[0.08]"
-            }`}
-            title="单词本"
-          >
-            <BookOpen className={`w-3 h-3 ${showWordBook ? "text-primary" : "text-gray-400 dark:text-gray-500"}`} />
-          </button>
-          {isIndependent && (
+          {/* 单词本按钮 - 仅跟随模式显示 */}
+          {!isIndependent && (
             <button
-              onClick={handleToggleCollapse}
-              className="w-6 h-6 flex items-center justify-center rounded-md hover:bg-black/[0.05] dark:hover:bg-white/[0.08] transition-colors"
-              title={collapsed ? "展开" : "折叠"}
+              onClick={() => setShowWordBook(!showWordBook)}
+              className={`w-6 h-6 flex items-center justify-center rounded-md transition-colors ${
+                showWordBook
+                  ? "bg-primary/10 text-primary"
+                  : "hover:bg-black/[0.05] dark:hover:bg-white/[0.08]"
+              }`}
+              title="单词本"
             >
-              {collapsed ? (
-                <ChevronDown className="w-3 h-3 text-gray-400 dark:text-gray-500" />
-              ) : (
-                <ChevronUp className="w-3 h-3 text-gray-400 dark:text-gray-500" />
-              )}
+              <BookOpen className={`w-3 h-3 ${showWordBook ? "text-primary" : "text-gray-400 dark:text-gray-500"}`} />
             </button>
           )}
           <button
@@ -426,26 +393,26 @@ export function SidebarView() {
         </div>
       </div>
 
-      {/* Collapsed preview: show latest N messages */}
-      {collapsed && collapsedCount > 0 && items.length > 0 && (
+      {/* 独立模式：显示最新 N 条消息 */}
+      {isIndependent && items.length > 0 && (
         <div className="px-2.5 pt-1 pb-2 overflow-hidden">
           <div className="flex flex-col gap-1.5">
             {items
-              .slice(-collapsedCount)
+              .slice(-displayCount)
               .map((msg) => renderMessageCard(msg, effectiveDisplayMode))}
           </div>
         </div>
       )}
 
-      {/* 单词本视图 */}
-      {showWordBook && !collapsed && (
+      {/* 单词本视图 - 仅跟随模式 */}
+      {!isIndependent && showWordBook && (
         <div className="flex-1 overflow-hidden bg-background">
           <WordBook />
         </div>
       )}
 
-      {/* Full message list (expanded) */}
-      {!collapsed && !showWordBook && (
+      {/* 跟随模式：完整消息列表 */}
+      {!isIndependent && !showWordBook && (
         <div className="sidebar-scroll flex-1 overflow-y-auto px-2.5 pt-1 pb-4">
           {items.length === 0 && (
             <div className="flex flex-col items-center justify-center h-full gap-3">

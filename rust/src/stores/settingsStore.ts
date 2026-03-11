@@ -21,6 +21,7 @@ export interface SettingsDraft {
   pollInterval: string;
   useRightPanelDetails: boolean;
   displayWidth: string;
+  collapsedDisplayCount: string;
   // 词典设置
   dictProvider: string;
 }
@@ -57,6 +58,7 @@ function createDefaultSettings(): AppSettings {
       on_translate_fail: "show_cn_with_reason",
       width: 420,
       side: "right",
+      collapsed_display_count: 3,
     },
     logging: {
       file: "logs/sidebar_listener.log",
@@ -87,6 +89,7 @@ export function draftFromSettings(settings: AppSettings): SettingsDraft {
     pollInterval: String(settings.listen.interval_seconds),
     useRightPanelDetails: settings.listen.use_right_panel_details,
     displayWidth: String(settings.display.width),
+    collapsedDisplayCount: String(settings.display.collapsed_display_count || 3),
     dictProvider: settings.dict?.provider || "cambridge",
   };
 }
@@ -120,6 +123,7 @@ export function settingsFromDraft(
     display: {
       ...settings.display,
       width: parseInt(draft.displayWidth, 10) || 420,
+      collapsed_display_count: Math.max(1, parseInt(draft.collapsedDisplayCount, 10) || 3),
     },
     dict: {
       ...settings.dict,
@@ -164,7 +168,7 @@ const SECTION_FIELDS: Record<SettingsSection, (keyof SettingsDraft)[]> = {
     "translateMaxConcurrency",
     "translateMaxRequestsPerSecond",
   ],
-  display: ["displayWidth"],
+  display: ["displayWidth", "collapsedDisplayCount"],
 };
 
 export const useSettingsStore = create<SettingsStoreState>((set, get) => ({

@@ -14,6 +14,18 @@ use crate::adapter::applescript::{
 const DEFAULT_WIDTH: f64 = 380.0;
 const DEFAULT_INDEPENDENT_HEIGHT: f64 = 600.0;
 const INDEPENDENT_MARGIN: f64 = 20.0;
+
+const TITLE_BAR_H: f64 = 40.0;
+const MSG_CARD_H: f64 = 62.0;
+const MSG_GAP: f64 = 6.0;
+const CONTAINER_PAD: f64 = 12.0;
+
+fn calc_collapsed_height(count: u32) -> f64 {
+    if count == 0 {
+        return TITLE_BAR_H;
+    }
+    TITLE_BAR_H + CONTAINER_PAD + (count as f64) * MSG_CARD_H + ((count - 1) as f64) * MSG_GAP
+}
 const SIDEBAR_LABEL: &str = "sidebar";
 const POLL_INTERVAL_MS: u64 = 300;
 const ANIMATION_DURATION_MS: u64 = 350;
@@ -57,8 +69,15 @@ impl SidebarWindowState {
         }
     }
 
-    pub async fn open(&self, app: &AppHandle, width: Option<f64>, mode: WindowMode) -> Result<()> {
+    pub async fn open(
+        &self,
+        app: &AppHandle,
+        width: Option<f64>,
+        mode: WindowMode,
+        collapsed_display_count: Option<u32>,
+    ) -> Result<()> {
         let width = width.unwrap_or(DEFAULT_WIDTH);
+        let count = collapsed_display_count.unwrap_or(3).max(1);
 
         if let Some(existing) = app.webview_windows().get(SIDEBAR_LABEL) {
             existing.set_focus().ok();
@@ -75,13 +94,14 @@ impl SidebarWindowState {
                 let (screen_w, _screen_h) = get_screen_size(app);
                 let x = screen_w - width - INDEPENDENT_MARGIN;
                 let y = INDEPENDENT_MARGIN;
-                (x, y, DEFAULT_INDEPENDENT_HEIGHT)
+                let h = calc_collapsed_height(count);
+                (x, y, h)
             }
         };
 
         let url_query = match mode {
-            WindowMode::Follow => "index.html?view=sidebar&mode=follow",
-            WindowMode::Independent => "index.html?view=sidebar&mode=independent",
+            WindowMode::Follow => "index.html?view=sidebar&mode=follow".to_string(),
+            WindowMode::Independent => format!("index.html?view=sidebar&mode=independent&count={}", count),
         };
 
         WebviewWindowBuilder::new(app, SIDEBAR_LABEL, WebviewUrl::App(url_query.into()))
