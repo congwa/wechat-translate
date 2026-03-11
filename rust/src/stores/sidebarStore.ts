@@ -19,6 +19,7 @@ function storedToSidebar(message: StoredMessage): SidebarMessage {
   return {
     id: message.id,  // 使用数据库 ID 作为稳定的 key，避免 UI 闪烁
     chatName: message.chat_name,
+    chatType: message.chat_type || undefined,
     sender: message.sender,
     textCn: message.content,
     textEn: message.content_en || "",

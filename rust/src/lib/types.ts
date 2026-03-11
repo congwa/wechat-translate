@@ -114,6 +114,7 @@ export interface ApiResponse<T = unknown> {
 export interface SidebarMessage {
   id: number;
   chatName: string;
+  chatType?: string;
   sender: string;
   textCn: string;
   textEn: string;
@@ -126,6 +127,7 @@ export interface SidebarMessage {
 export interface StoredMessage {
   id: number;
   chat_name: string;
+  chat_type?: string;
   sender: string;
   content: string;
   content_en: string;

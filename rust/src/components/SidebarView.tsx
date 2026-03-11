@@ -2,7 +2,7 @@ import { useRef, useEffect, useState, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { listen } from "@tauri-apps/api/event";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { X, MessageCircle, Languages, AlertCircle, BookOpen } from "lucide-react";
+import { X, MessageCircle, Languages, AlertCircle, BookOpen, Users, User } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useSidebarStore } from "@/stores/sidebarStore";
@@ -187,6 +187,10 @@ function renderMessageCard(msg: SidebarMessage, displayMode: DisplayMode) {
                 <>
                   <span className={`w-1.5 h-1.5 rounded-full ${color} shrink-0`} />
                 </>
+              ) : msg.chatType === "group" ? (
+                <Users className="w-2.5 h-2.5 text-blue-400 dark:text-blue-500 shrink-0" />
+              ) : msg.chatType === "private" ? (
+                <User className="w-2.5 h-2.5 text-gray-400 dark:text-gray-500 shrink-0" />
               ) : (
                 <MessageCircle className="w-2.5 h-2.5 text-gray-400 dark:text-gray-500 shrink-0" />
               )}
