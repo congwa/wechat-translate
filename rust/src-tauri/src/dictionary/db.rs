@@ -392,6 +392,25 @@ impl DictionaryDb {
         Ok(result > 0)
     }
 
+    /// 更新收藏单词的释义数据（翻译完成后调用）
+    pub fn update_favorite_meanings(&self, word: &str, entry: &WordEntry) -> Result<bool> {
+        let conn = self.conn.lock().unwrap();
+        let word_lower = word.to_lowercase();
+
+        let meanings_json = serde_json::to_string(&entry.meanings).ok();
+        
+        let result = conn.execute(
+            r#"
+            UPDATE word_favorites 
+            SET meanings_json = ?2, summary_zh = ?3, updated_at = datetime('now')
+            WHERE word = ?1
+            "#,
+            params![word_lower, meanings_json, entry.summary_zh],
+        )?;
+
+        Ok(result > 0)
+    }
+
     /// 检查是否已收藏
     pub fn is_favorited(&self, word: &str) -> Result<bool> {
         let conn = self.conn.lock().unwrap();
@@ -415,25 +434,61 @@ impl DictionaryDb {
         Ok(results)
     }
 
-    /// 获取收藏列表
+    /// 获取收藏列表（从词典表实时获取最新释义，避免数据不一致）
     pub fn list_favorites(&self, offset: u32, limit: u32) -> Result<Vec<FavoriteWord>> {
         let conn = self.conn.lock().unwrap();
+        // 使用 LEFT JOIN 从词典表获取最新释义数据
+        // word_dictionary 表使用 raw_json 存储完整 WordEntry，需要解析
         let mut stmt = conn.prepare(
             r#"
-            SELECT word, phonetic, meanings_json, summary_zh, note, review_count, last_review_at, created_at,
-                   mastery_level, next_review_at, last_feedback, consecutive_correct
-            FROM word_favorites
-            ORDER BY created_at DESC
+            SELECT 
+                f.word,
+                f.phonetic,
+                f.meanings_json,
+                COALESCE(d.summary_zh, f.summary_zh) as summary_zh,
+                f.note,
+                f.review_count,
+                f.last_review_at,
+                f.created_at,
+                f.mastery_level,
+                f.next_review_at,
+                f.last_feedback,
+                f.consecutive_correct,
+                d.raw_json
+            FROM word_favorites f
+            LEFT JOIN word_dictionary d ON f.word = d.word
+            ORDER BY f.created_at DESC
             LIMIT ?1 OFFSET ?2
             "#,
         )?;
 
         let rows = stmt.query_map(params![limit, offset], |row| {
+            let word: String = row.get(0)?;
+            let fallback_phonetic: Option<String> = row.get(1)?;
+            let fallback_meanings_json: Option<String> = row.get(2)?;
+            let summary_zh: Option<String> = row.get(3)?;
+            let raw_json: Option<String> = row.get(12)?;
+
+            // 优先从词典表的 raw_json 解析最新数据
+            let (phonetic, meanings_json) = if let Some(json) = raw_json {
+                if let Ok(entry) = serde_json::from_str::<WordEntry>(&json) {
+                    let phonetic = entry.phonetics.iter()
+                        .find(|p| p.text.is_some())
+                        .and_then(|p| p.text.clone());
+                    let meanings = serde_json::to_string(&entry.meanings).ok();
+                    (phonetic.or(fallback_phonetic), meanings.or(fallback_meanings_json))
+                } else {
+                    (fallback_phonetic, fallback_meanings_json)
+                }
+            } else {
+                (fallback_phonetic, fallback_meanings_json)
+            };
+
             Ok(FavoriteWord {
-                word: row.get(0)?,
-                phonetic: row.get(1)?,
-                meanings_json: row.get(2)?,
-                summary_zh: row.get(3)?,
+                word,
+                phonetic,
+                meanings_json,
+                summary_zh,
                 note: row.get(4)?,
                 review_count: row.get(5)?,
                 last_review_at: row.get(6)?,

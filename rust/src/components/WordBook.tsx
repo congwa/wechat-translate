@@ -16,6 +16,7 @@ import { useWordBookStore } from "@/stores/wordBookStore";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { WordMeaningsCard } from "@/components/WordMeaningDisplay";
 import * as api from "@/lib/tauri-api";
 import type { FavoriteWord, Meaning } from "@/lib/tauri-api";
 
@@ -131,31 +132,14 @@ function WordCard({ word, onDelete, onUpdateNote, onClick }: WordCardProps) {
         </div>
       </div>
 
-      {/* 中文总释义 */}
-      {word.summary_zh && (
-        <p className="text-sm text-primary font-medium mb-2">
-          {word.summary_zh}
-        </p>
-      )}
-
-      {/* 释义（作为补充） */}
-      {!word.summary_zh && (
-        <div className="space-y-1 mb-2">
-          {meanings.slice(0, 2).map((meaning, i) => (
-            <div key={i} className="text-sm">
-              <span className="text-primary font-medium mr-1">
-                {meaning.part_of_speech_zh}
-              </span>
-              <span className="text-muted-foreground">
-                {meaning.definitions
-                  .slice(0, 2)
-                  .map((d) => d.chinese || d.english)
-                  .join("; ")}
-              </span>
-            </div>
-          ))}
-        </div>
-      )}
+      {/* 释义卡片（紧凑模式） */}
+      <div className="mb-2">
+        <WordMeaningsCard
+          meanings={meanings}
+          summaryZh={word.summary_zh || undefined}
+          compact={true}
+        />
+      </div>
 
       {/* 笔记 */}
       {isEditing ? (
@@ -212,9 +196,11 @@ function WordDetail({ word, onClose, onUpdateNote, onDelete }: WordDetailProps) 
   const [noteInput, setNoteInput] = useState(word.note || "");
   const { playing, playWord } = useWordAudio();
 
+  // 直接使用收藏数据（已通过 JOIN 查询获取最新释义）
   const meanings: Meaning[] = word.meanings_json
     ? JSON.parse(word.meanings_json)
     : [];
+  const summaryZh = word.summary_zh;
 
   const getMasteryLabel = () => {
     switch (word.mastery_level) {
@@ -268,34 +254,17 @@ function WordDetail({ word, onClose, onUpdateNote, onDelete }: WordDetailProps) 
           {word.phonetic && (
             <p className="text-muted-foreground">{word.phonetic}</p>
           )}
-          {word.summary_zh && (
-            <p className="text-primary font-medium mt-2">{word.summary_zh}</p>
-          )}
         </div>
 
-        {/* Meanings */}
-        <div className="space-y-4 mb-6">
-          {meanings.map((meaning, i) => (
-            <div key={i} className="p-3 rounded-lg bg-muted/50">
-              <Badge variant="secondary" className="mb-2">
-                {meaning.part_of_speech_zh || meaning.part_of_speech}
-              </Badge>
-              <div className="space-y-2">
-                {meaning.definitions.map((def, j) => (
-                  <div key={j} className="text-sm">
-                    <p className="text-foreground">
-                      {def.chinese || def.english}
-                    </p>
-                    {def.example && (
-                      <p className="text-muted-foreground text-xs mt-1 italic">
-                        例: {def.example}
-                      </p>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-          ))}
+        {/* 释义卡片（完整模式，数据已通过 JOIN 查询获取最新） */}
+        <div className="p-4 rounded-lg bg-muted/30 mb-6">
+          <WordMeaningsCard
+            meanings={meanings}
+            summaryZh={summaryZh}
+            maxDefinitions={10}
+            showExample={true}
+            showSynonyms={true}
+          />
         </div>
 
         {/* Note */}
@@ -473,28 +442,15 @@ function FlashcardReview({ onClose }: FlashcardReviewProps) {
             <motion.div
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
-              className="space-y-4 mb-8"
+              className="w-full p-4 rounded-lg bg-muted/30 mb-8"
             >
-              {/* 中文总释义 */}
-              {currentWord.summary_zh && (
-                <p className="text-xl text-primary font-semibold text-center">
-                  {currentWord.summary_zh}
-                </p>
-              )}
-              {/* 详细释义 */}
-              {!currentWord.summary_zh && meanings.map((meaning, i) => (
-                <div key={i} className="text-center">
-                  <Badge variant="secondary" className="mb-2">
-                    {meaning.part_of_speech_zh}
-                  </Badge>
-                  <p className="text-lg text-foreground">
-                    {meaning.definitions
-                      .slice(0, 2)
-                      .map((d) => d.chinese || d.english)
-                      .join("; ")}
-                  </p>
-                </div>
-              ))}
+              <WordMeaningsCard
+                meanings={meanings}
+                summaryZh={currentWord.summary_zh || undefined}
+                maxDefinitions={2}
+                showExample={true}
+                showSynonyms={false}
+              />
             </motion.div>
           ) : (
             <Button

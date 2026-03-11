@@ -9,8 +9,8 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { MeaningItem } from "@/components/WordMeaningDisplay";
 import * as api from "@/lib/tauri-api";
-import type { Definition, Meaning } from "@/lib/tauri-api";
 
 // 发音地区显示名称映射
 const REGION_LABELS: Record<string, string> = {
@@ -19,85 +19,6 @@ const REGION_LABELS: Record<string, string> = {
   au: "🇦🇺 澳式发音",
   default: "🔊 播放发音",
 };
-
-interface DefinitionItemProps {
-  definition: Definition;
-  translating: boolean;
-}
-
-function DefinitionItem({ definition, translating }: DefinitionItemProps) {
-  return (
-    <div className="py-1.5 border-b border-border last:border-b-0">
-      {/* 中文释义为主 */}
-      {definition.chinese ? (
-        <p className="text-xs text-foreground leading-relaxed">
-          {definition.chinese}
-        </p>
-      ) : translating ? (
-        <Skeleton className="h-4 w-3/4" />
-      ) : (
-        <p className="text-xs text-foreground leading-relaxed">
-          {definition.english}
-        </p>
-      )}
-      {/* 英文例句 */}
-      {definition.example && (
-        <p className="text-[11px] text-muted-foreground mt-1 italic">
-          例: {definition.example}
-        </p>
-      )}
-      {/* 例句中文翻译 */}
-      {definition.example && (
-        definition.example_chinese ? (
-          <p className="text-[11px] text-primary/70 mt-0.5">
-            {definition.example_chinese}
-          </p>
-        ) : translating ? (
-          <Skeleton className="h-3 w-2/3 mt-0.5" />
-        ) : null
-      )}
-    </div>
-  );
-}
-
-interface MeaningItemProps {
-  meaning: Meaning;
-  translating: boolean;
-}
-
-function MeaningItem({ meaning, translating }: MeaningItemProps) {
-  return (
-    <div className="mb-3 last:mb-0">
-      <div className="flex items-center gap-1.5 mb-1">
-        <span className="text-[10px] font-medium text-primary-foreground bg-primary px-1.5 py-0.5 rounded">
-          {meaning.part_of_speech}
-        </span>
-        <span className="text-[10px] text-muted-foreground">
-          {meaning.part_of_speech_zh}
-        </span>
-      </div>
-      <div className="pl-2 border-l-2 border-primary/30">
-        {meaning.definitions.slice(0, 3).map((def, i) => (
-          <DefinitionItem
-            key={i}
-            definition={def}
-            translating={translating}
-          />
-        ))}
-        {meaning.definitions.length > 3 && (
-          <p className="text-[10px] text-muted-foreground py-1">
-            +{meaning.definitions.length - 3} 更多释义
-          </p>
-        )}
-      </div>
-      {meaning.synonyms.length > 0 && (
-        <p className="text-[10px] text-muted-foreground mt-1">
-          <span className="opacity-70">同义词:</span> {meaning.synonyms.slice(0, 5).join(", ")}
-        </p>
-      )}
-    </div>
-  );
-}
 
 export function WordPopover() {
   const {

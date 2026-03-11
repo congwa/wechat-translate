@@ -179,6 +179,9 @@ impl TranslationWorkerInner {
         // 4. 全部完成后更新状态并发送完成事件
         let _ = self.dict_db.mark_translation_completed(&word);
 
+        // 注意：不再需要手动同步收藏表，因为 list_favorites 使用 JOIN 查询
+        // 会自动从词典表获取最新的翻译数据
+
         let _ = self.app_handle.emit(
             EVENT_TRANSLATION_DONE,
             TranslationDoneEvent {
