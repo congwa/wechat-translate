@@ -634,6 +634,7 @@ pub fn run() {
             commands::sidebar::sidebar_window_close,
             commands::sidebar::sidebar_snapshot_get,
             commands::sidebar::translate_test,
+            commands::sidebar::translate_sidebar_message,
             commands::config::config_get,
             commands::config::config_put,
             commands::config::config_default,

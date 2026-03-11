@@ -261,6 +261,22 @@ export async function translateBatch(params: {
   return invoke("translate_batch", params);
 }
 
+export async function translateSidebarMessage(params: {
+  messageId: number;
+  chatName: string;
+  sender: string;
+  content: string;
+  detectedAt: string;
+}): Promise<void> {
+  return invoke("translate_sidebar_message", {
+    message_id: params.messageId,
+    chat_name: params.chatName,
+    sender: params.sender,
+    content: params.content,
+    detected_at: params.detectedAt,
+  });
+}
+
 // ==================== Favorite API ====================
 
 export interface FavoriteWord {

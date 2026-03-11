@@ -261,7 +261,13 @@ function renderMessageCard(msg: SidebarMessage, displayMode: DisplayMode) {
                       <TooltipTrigger asChild>
                         <button 
                           className="shrink-0 mt-0.5 p-1 rounded hover:bg-gray-200/50 dark:hover:bg-white/10 transition-colors"
-                          onClick={() => api.translateCached({ text: msg.textCn })}
+                          onClick={() => api.translateSidebarMessage({
+                            messageId: msg.id,
+                            chatName: msg.chatName,
+                            sender: msg.sender,
+                            content: msg.textCn,
+                            detectedAt: msg.timestamp,
+                          }).catch(() => {})}
                         >
                           <Languages className="w-3 h-3 text-gray-400 dark:text-gray-500" />
                         </button>

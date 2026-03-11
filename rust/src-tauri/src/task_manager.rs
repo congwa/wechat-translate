@@ -229,6 +229,48 @@ impl TaskManager {
         self.translation_service.clone()
     }
 
+    /// 手动翻译消息（用于点击翻译按钮）
+    pub async fn translate_message_manually(
+        &self,
+        app: tauri::AppHandle,
+        message_id: u64,
+        chat_name: String,
+        sender: String,
+        content: String,
+        detected_at: String,
+    ) -> Result<(), String> {
+        let config = self.translation_service.get_config().await;
+        if !config.enabled {
+            return Err("翻译服务未启用".to_string());
+        }
+
+        let (translator, limiter) = self.translation_service.get_translator_and_limiter().await;
+        let translator = translator.ok_or_else(|| "翻译服务未配置".to_string())?;
+        let limiter = limiter.ok_or_else(|| "翻译限流器未配置".to_string())?;
+
+        let source_lang = config.source_lang.clone();
+        let target_lang = config.target_lang.clone();
+
+        // 复用已有的翻译更新逻辑
+        spawn_sidebar_translation_update(
+            self.clone(),
+            self.events.clone(),
+            app,
+            self.db.clone(),
+            translator,
+            limiter,
+            source_lang,
+            target_lang,
+            message_id,
+            chat_name,
+            sender,
+            content,
+            detected_at,
+        );
+
+        Ok(())
+    }
+
     pub async fn service_status(&self) -> serde_json::Value {
         let state = self.get_task_state();
         let translator_status = self.get_translator_status().await;

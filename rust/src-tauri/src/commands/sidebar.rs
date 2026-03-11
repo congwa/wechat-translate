@@ -296,3 +296,27 @@ pub async fn translate_test(
         Err(e) => Err(format!("{}", e)),
     }
 }
+
+/// 手动翻译侧边栏消息
+/// 翻译完成后更新数据库并发送刷新事件
+#[tauri::command]
+pub async fn translate_sidebar_message(
+    app: tauri::AppHandle,
+    manager: tauri::State<'_, TaskManager>,
+    message_id: u64,
+    chat_name: String,
+    sender: String,
+    content: String,
+    detected_at: String,
+) -> Result<(), String> {
+    manager
+        .translate_message_manually(
+            app,
+            message_id,
+            chat_name,
+            sender,
+            content,
+            detected_at,
+        )
+        .await
+}
