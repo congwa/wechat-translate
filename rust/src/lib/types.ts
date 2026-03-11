@@ -57,6 +57,7 @@ export interface DisplaySettings {
   width: number;
   side: string;
   collapsed_display_count: number;
+  ghost_mode: boolean;
 }
 
 export interface LoggingSettings {

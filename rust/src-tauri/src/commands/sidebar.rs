@@ -157,6 +157,7 @@ pub async fn live_start(
             Some(config.display.width as f64),
             mode,
             Some(config.display.collapsed_display_count),
+            Some(config.display.ghost_mode),
         )
         .await;
 
@@ -179,6 +180,7 @@ pub async fn sidebar_window_open(
             width.or(Some(config.display.width as f64)),
             mode,
             Some(config.display.collapsed_display_count),
+            Some(config.display.ghost_mode),
         )
         .await
         .map_err(|e| e.to_string())?;

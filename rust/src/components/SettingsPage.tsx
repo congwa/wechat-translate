@@ -673,6 +673,21 @@ export function SettingsPage() {
             <p className="text-[11px] text-muted-foreground">独立模式下浮窗显示的消息数量，重新开启浮窗后生效</p>
           </div>
         )}
+
+        {sidebarWindowMode === "independent" && (
+          <div className="flex items-center justify-between">
+            <div className="space-y-0.5">
+              <Label className="text-sm font-medium">隐身模式</Label>
+              <p className="text-[11px] text-muted-foreground">
+                开启后浮窗不可点击，鼠标事件穿透到下层应用
+              </p>
+            </div>
+            <Switch
+              checked={draft.ghostMode}
+              onCheckedChange={(checked) => updateDraft({ ghostMode: checked })}
+            />
+          </div>
+        )}
       </SettingsSection>
 
       <SettingsSection

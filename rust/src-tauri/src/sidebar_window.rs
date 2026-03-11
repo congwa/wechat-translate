@@ -75,9 +75,11 @@ impl SidebarWindowState {
         width: Option<f64>,
         mode: WindowMode,
         collapsed_display_count: Option<u32>,
+        ghost_mode: Option<bool>,
     ) -> Result<()> {
         let width = width.unwrap_or(DEFAULT_WIDTH);
         let count = collapsed_display_count.unwrap_or(3).max(1);
+        let ghost = ghost_mode.unwrap_or(false);
 
         if let Some(existing) = app.webview_windows().get(SIDEBAR_LABEL) {
             existing.set_focus().ok();
@@ -104,7 +106,7 @@ impl SidebarWindowState {
             WindowMode::Independent => format!("index.html?view=sidebar&mode=independent&count={}", count),
         };
 
-        WebviewWindowBuilder::new(app, SIDEBAR_LABEL, WebviewUrl::App(url_query.into()))
+        let win = WebviewWindowBuilder::new(app, SIDEBAR_LABEL, WebviewUrl::App(url_query.into()))
             .title("Sidebar")
             .inner_size(width, win_height)
             .position(pos_x, pos_y)
@@ -114,6 +116,10 @@ impl SidebarWindowState {
             .transparent(true)
             .shadow(true)
             .build()?;
+
+        if ghost && mode == WindowMode::Independent {
+            win.set_ignore_cursor_events(true).ok();
+        }
 
         let token = CancellationToken::new();
         {

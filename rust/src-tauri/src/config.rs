@@ -88,6 +88,8 @@ pub struct DisplayConfig {
     pub side: String,
     #[serde(default = "default_collapsed_display_count")]
     pub collapsed_display_count: u32,
+    #[serde(default)]
+    pub ghost_mode: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -252,6 +254,7 @@ impl Default for DisplayConfig {
             width: default_width(),
             side: default_side(),
             collapsed_display_count: default_collapsed_display_count(),
+            ghost_mode: false,
         }
     }
 }

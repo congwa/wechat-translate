@@ -22,6 +22,7 @@ export interface SettingsDraft {
   useRightPanelDetails: boolean;
   displayWidth: string;
   collapsedDisplayCount: string;
+  ghostMode: boolean;
   // 词典设置
   dictProvider: string;
 }
@@ -59,6 +60,7 @@ function createDefaultSettings(): AppSettings {
       width: 420,
       side: "right",
       collapsed_display_count: 3,
+      ghost_mode: false,
     },
     logging: {
       file: "logs/sidebar_listener.log",
@@ -90,6 +92,7 @@ export function draftFromSettings(settings: AppSettings): SettingsDraft {
     useRightPanelDetails: settings.listen.use_right_panel_details,
     displayWidth: String(settings.display.width),
     collapsedDisplayCount: String(settings.display.collapsed_display_count || 3),
+    ghostMode: settings.display.ghost_mode ?? false,
     dictProvider: settings.dict?.provider || "cambridge",
   };
 }
@@ -124,6 +127,7 @@ export function settingsFromDraft(
       ...settings.display,
       width: parseInt(draft.displayWidth, 10) || 420,
       collapsed_display_count: Math.max(1, parseInt(draft.collapsedDisplayCount, 10) || 3),
+      ghost_mode: draft.ghostMode,
     },
     dict: {
       ...settings.dict,
@@ -168,7 +172,7 @@ const SECTION_FIELDS: Record<SettingsSection, (keyof SettingsDraft)[]> = {
     "translateMaxConcurrency",
     "translateMaxRequestsPerSecond",
   ],
-  display: ["displayWidth", "collapsedDisplayCount"],
+  display: ["displayWidth", "collapsedDisplayCount", "ghostMode"],
 };
 
 export const useSettingsStore = create<SettingsStoreState>((set, get) => ({

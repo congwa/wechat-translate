@@ -35,6 +35,7 @@ pub struct TrayMenuState {
     pub sidebar_toggle: tauri::menu::MenuItem<tauri::Wry>,
     pub listen_toggle: tauri::menu::MenuItem<tauri::Wry>,
     pub translate_toggle: tauri::menu::CheckMenuItem<tauri::Wry>,
+    pub ghost_mode_toggle: tauri::menu::CheckMenuItem<tauri::Wry>,
     pub close_to_tray_check: tauri::menu::CheckMenuItem<tauri::Wry>,
 }
 
@@ -439,6 +440,15 @@ pub fn run() {
             .build(app)?;
 
             let show_item = MenuItemBuilder::with_id("show", "设置").build(app)?;
+            let ghost_mode_toggle =
+                CheckMenuItemBuilder::with_id("toggle_ghost_mode", "浮窗隐身模式")
+                    .checked(
+                        startup_config
+                            .as_ref()
+                            .map(|c| c.display.ghost_mode)
+                            .unwrap_or(false),
+                    )
+                    .build(app)?;
             let close_to_tray_check =
                 CheckMenuItemBuilder::with_id("toggle_close_to_tray", "关闭时最小化到托盘")
                     .checked(true)
@@ -457,6 +467,7 @@ pub fn run() {
                 .item(&translate_toggle)
                 .separator()
                 .item(&show_item)
+                .item(&ghost_mode_toggle)
                 .item(&close_to_tray_check)
                 .separator()
                 .item(&quit_item)
@@ -470,6 +481,7 @@ pub fn run() {
                 sidebar_toggle,
                 listen_toggle,
                 translate_toggle,
+                ghost_mode_toggle,
                 close_to_tray_check,
             });
 
@@ -533,6 +545,7 @@ pub fn run() {
                                         Some(config.display.width as f64),
                                         sidebar_window::WindowMode::default(),
                                         Some(config.display.collapsed_display_count),
+                                        Some(config.display.ghost_mode),
                                     )
                                     .await;
                             }
@@ -559,6 +572,13 @@ pub fn run() {
                     }
                     "tray_toggle_translate" => {
                         handle_tray_toggle_translate(app);
+                    }
+                    "toggle_ghost_mode" => {
+                        let tray = app.state::<TrayMenuState>();
+                        let ghost_enabled = tray.ghost_mode_toggle.is_checked().unwrap_or(false);
+                        if let Some(sidebar) = app.get_webview_window("sidebar") {
+                            let _ = sidebar.set_ignore_cursor_events(ghost_enabled);
+                        }
                     }
                     "toggle_close_to_tray" => {
                         let close = app.state::<CloseToTray>();
