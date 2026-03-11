@@ -6,7 +6,7 @@ import { X, MessageCircle, Languages, AlertCircle, BookOpen } from "lucide-react
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useSidebarStore } from "@/stores/sidebarStore";
-import type { SidebarMessage } from "@/lib/types";
+import type { SidebarMessage, SidebarAppearance, AppSettings } from "@/lib/types";
 import { useFormStore, type DisplayMode } from "@/stores/formStore";
 import { useRuntimeStore } from "@/stores/runtimeStore";
 import { useSettingsStore } from "@/stores/settingsStore";
@@ -26,6 +26,56 @@ function getDisplayCount(): number {
   const params = new URLSearchParams(window.location.search);
   const count = parseInt(params.get("count") || "3", 10);
   return Math.max(count, 1);
+}
+
+const DEFAULT_APPEARANCE: SidebarAppearance = {
+  bg_opacity: 0.8,
+  blur: "strong",
+  card_style: "standard",
+  text_enhance: "none",
+};
+
+function getAppearanceFromUrl(): SidebarAppearance {
+  const params = new URLSearchParams(window.location.search);
+  const b64 = params.get("appearance");
+  if (b64) {
+    try {
+      return JSON.parse(atob(b64));
+    } catch {
+      return DEFAULT_APPEARANCE;
+    }
+  }
+  return DEFAULT_APPEARANCE;
+}
+
+function getGhostModeFromUrl(): boolean {
+  const params = new URLSearchParams(window.location.search);
+  return params.get("ghost") === "true";
+}
+
+const BLUR_MAP: Record<string, string> = {
+  none: "none",
+  weak: "blur(8px) saturate(120%)",
+  medium: "blur(14px) saturate(150%)",
+  strong: "blur(20px) saturate(180%)",
+};
+
+const CARD_STYLE_MAP: Record<string, { bg: string; darkBg: string }> = {
+  transparent: { bg: "rgba(255,255,255,0.1)", darkBg: "rgba(255,255,255,0.03)" },
+  light: { bg: "rgba(245,246,248,0.5)", darkBg: "rgba(255,255,255,0.04)" },
+  standard: { bg: "rgba(245,246,248,0.7)", darkBg: "rgba(255,255,255,0.05)" },
+  dark: { bg: "rgba(230,232,236,0.9)", darkBg: "rgba(255,255,255,0.08)" },
+};
+
+function getTextEnhanceStyle(enhance: string): React.CSSProperties {
+  switch (enhance) {
+    case "shadow":
+      return { textShadow: "0 1px 2px rgba(0,0,0,0.3)" };
+    case "bold":
+      return { fontWeight: 600 };
+    default:
+      return {};
+  }
 }
 
 const DISPLAY_MODES: { value: DisplayMode; label: string; title: string }[] = [
@@ -255,10 +305,27 @@ export function SidebarView() {
   const [windowMode] = useState<WindowMode>(getWindowMode);
   const isIndependent = windowMode === "independent";
   const displayCount = isIndependent ? getDisplayCount() : 0;
+  const [appearance, setAppearance] = useState<SidebarAppearance>(getAppearanceFromUrl);
+  const [ghostMode, setGhostMode] = useState<boolean>(getGhostModeFromUrl);
 
   useEffect(() => {
     document.documentElement.style.background = "transparent";
     document.body.style.background = "transparent";
+  }, []);
+
+  // 监听配置变更事件，实时更新外观和隐身模式
+  useEffect(() => {
+    const unlisten = listen<AppSettings>("settings-updated", (e) => {
+      if (e.payload.display?.sidebar_appearance) {
+        setAppearance(e.payload.display.sidebar_appearance);
+      }
+      if (e.payload.display?.ghost_mode !== undefined) {
+        setGhostMode(e.payload.display.ghost_mode);
+      }
+    });
+    return () => {
+      unlisten.then((fn) => fn());
+    };
   }, []);
 
   const items = useSidebarStore((s) => s.items);
@@ -326,6 +393,10 @@ export function SidebarView() {
     api.sidebarStop().catch(() => {});
   }
 
+  const textStyle = getTextEnhanceStyle(appearance.text_enhance);
+  // cardBg 和 CARD_STYLE_MAP 可用于未来消息卡片样式自定义
+  void CARD_STYLE_MAP;
+
   return (
     <motion.div
       variants={containerVariants}
@@ -333,14 +404,34 @@ export function SidebarView() {
       animate={visible ? "visible" : "hidden"}
       transition={containerTransition}
       data-window-focus={isWindowFocused ? "true" : "false"}
-      className={`${isDarkMode ? "dark " : ""}sidebar-shell flex flex-col h-screen overflow-hidden select-none transition-colors duration-200`}
+      className={`${isDarkMode ? "dark " : ""}relative flex flex-col h-screen overflow-hidden select-none`}
     >
-      {/* Title bar */}
+      {/* 背景层 - 独立透明度控制 */}
       <div
-        data-tauri-drag-region
-        data-window-focus={isWindowFocused ? "true" : "false"}
-        className="sidebar-titlebar flex items-center justify-between px-3 py-2 shrink-0"
-      >
+        className="absolute inset-0 border border-[var(--sidebar-window-border)] rounded-lg"
+        style={{
+          opacity: appearance.bg_opacity,
+          background: isDarkMode ? "rgba(18, 20, 26, 1)" : "rgba(255, 255, 255, 1)",
+          backdropFilter: BLUR_MAP[appearance.blur],
+          WebkitBackdropFilter: BLUR_MAP[appearance.blur],
+        }}
+      />
+
+      {/* 内容层 - 始终不透明 */}
+      <div className="relative z-10 flex flex-col h-full" style={textStyle}>
+        {/* Title bar - 背景跟随窗口透明度 */}
+        <div
+          data-tauri-drag-region
+          data-window-focus={isWindowFocused ? "true" : "false"}
+          className="flex items-center justify-between px-3 py-2 shrink-0 border-b border-[var(--sidebar-window-border)]"
+          style={ghostMode ? {} : {
+            background: isDarkMode 
+              ? `rgba(28, 30, 38, ${appearance.bg_opacity * 0.85})`
+              : `rgba(255, 255, 255, ${appearance.bg_opacity * 0.85})`,
+            backdropFilter: BLUR_MAP[appearance.blur],
+            WebkitBackdropFilter: BLUR_MAP[appearance.blur],
+          }}
+        >
         <div data-tauri-drag-region className="flex items-center gap-1.5 flex-1 min-w-0">
           <MessageCircle className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0 pointer-events-none" />
           <span
@@ -350,47 +441,50 @@ export function SidebarView() {
             {currentChat || "等待聊天..."}
           </span>
         </div>
-        <div className="flex items-center gap-1 shrink-0">
-          {canSwitchDisplayMode && (
-            <div className="sidebar-mode-switch flex items-center h-5 rounded-md p-0.5">
-              {DISPLAY_MODES.map((mode) => (
-                <button
-                  key={mode.value}
-                  onClick={() => setSettings({ displayMode: mode.value })}
-                  title={mode.title}
-                  className={`px-1.5 h-4 rounded text-[9px] font-medium transition-all duration-150 ${
-                    effectiveDisplayMode === mode.value
-                      ? "sidebar-mode-button-active shadow-sm"
-                      : "sidebar-mode-button"
-                  }`}
-                >
-                  {mode.label}
-                </button>
-              ))}
-            </div>
-          )}
-          {/* 单词本按钮 - 仅跟随模式显示 */}
-          {!isIndependent && (
+        {/* 隐身模式下隐藏所有按钮 */}
+        {!ghostMode && (
+          <div className="flex items-center gap-1 shrink-0">
+            {canSwitchDisplayMode && (
+              <div className="sidebar-mode-switch flex items-center h-5 rounded-md p-0.5">
+                {DISPLAY_MODES.map((mode) => (
+                  <button
+                    key={mode.value}
+                    onClick={() => setSettings({ displayMode: mode.value })}
+                    title={mode.title}
+                    className={`px-1.5 h-4 rounded text-[9px] font-medium transition-all duration-150 ${
+                      effectiveDisplayMode === mode.value
+                        ? "sidebar-mode-button-active shadow-sm"
+                        : "sidebar-mode-button"
+                    }`}
+                  >
+                    {mode.label}
+                  </button>
+                ))}
+              </div>
+            )}
+            {/* 单词本按钮 - 仅跟随模式显示 */}
+            {!isIndependent && (
+              <button
+                onClick={() => setShowWordBook(!showWordBook)}
+                className={`w-6 h-6 flex items-center justify-center rounded-md transition-colors ${
+                  showWordBook
+                    ? "bg-primary/10 text-primary"
+                    : "hover:bg-black/[0.05] dark:hover:bg-white/[0.08]"
+                }`}
+                title="单词本"
+              >
+                <BookOpen className={`w-3 h-3 ${showWordBook ? "text-primary" : "text-gray-400 dark:text-gray-500"}`} />
+              </button>
+            )}
             <button
-              onClick={() => setShowWordBook(!showWordBook)}
-              className={`w-6 h-6 flex items-center justify-center rounded-md transition-colors ${
-                showWordBook
-                  ? "bg-primary/10 text-primary"
-                  : "hover:bg-black/[0.05] dark:hover:bg-white/[0.08]"
-              }`}
-              title="单词本"
+              onClick={handleClose}
+              className="w-6 h-6 flex items-center justify-center rounded-md hover:bg-red-500/10 transition-colors group"
+              title="关闭"
             >
-              <BookOpen className={`w-3 h-3 ${showWordBook ? "text-primary" : "text-gray-400 dark:text-gray-500"}`} />
+              <X className="w-3 h-3 text-gray-400 dark:text-gray-500 group-hover:text-red-500" />
             </button>
-          )}
-          <button
-            onClick={handleClose}
-            className="w-6 h-6 flex items-center justify-center rounded-md hover:bg-red-500/10 transition-colors group"
-            title="关闭"
-          >
-            <X className="w-3 h-3 text-gray-400 dark:text-gray-500 group-hover:text-red-500" />
-          </button>
-        </div>
+          </div>
+        )}
       </div>
 
       {/* 独立模式：显示最新 N 条消息 */}
@@ -459,6 +553,7 @@ export function SidebarView() {
       
       {/* 单词查词弹窗 */}
       <WordPopover />
+      </div>
     </motion.div>
   );
 }

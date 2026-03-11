@@ -77,6 +77,42 @@ pub struct TranslateConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SidebarAppearance {
+    #[serde(default = "default_bg_opacity")]
+    pub bg_opacity: f32,
+    #[serde(default = "default_blur")]
+    pub blur: String,
+    #[serde(default = "default_card_style")]
+    pub card_style: String,
+    #[serde(default = "default_text_enhance")]
+    pub text_enhance: String,
+}
+
+fn default_bg_opacity() -> f32 {
+    0.8
+}
+fn default_blur() -> String {
+    "strong".into()
+}
+fn default_card_style() -> String {
+    "standard".into()
+}
+fn default_text_enhance() -> String {
+    "none".into()
+}
+
+impl Default for SidebarAppearance {
+    fn default() -> Self {
+        Self {
+            bg_opacity: default_bg_opacity(),
+            blur: default_blur(),
+            card_style: default_card_style(),
+            text_enhance: default_text_enhance(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DisplayConfig {
     #[serde(default = "default_true")]
     pub english_only: bool,
@@ -90,6 +126,8 @@ pub struct DisplayConfig {
     pub collapsed_display_count: u32,
     #[serde(default)]
     pub ghost_mode: bool,
+    #[serde(default)]
+    pub sidebar_appearance: SidebarAppearance,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -255,6 +293,7 @@ impl Default for DisplayConfig {
             side: default_side(),
             collapsed_display_count: default_collapsed_display_count(),
             ghost_mode: false,
+            sidebar_appearance: SidebarAppearance::default(),
         }
     }
 }

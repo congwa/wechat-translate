@@ -546,6 +546,7 @@ pub fn run() {
                                         sidebar_window::WindowMode::default(),
                                         Some(config.display.collapsed_display_count),
                                         Some(config.display.ghost_mode),
+                                        Some(config.display.sidebar_appearance.clone()),
                                     )
                                     .await;
                             }

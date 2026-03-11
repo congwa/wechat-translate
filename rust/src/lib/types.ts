@@ -51,6 +51,13 @@ export interface TranslateSettings {
 }
 
 
+export interface SidebarAppearance {
+  bg_opacity: number;
+  blur: "none" | "weak" | "medium" | "strong";
+  card_style: "transparent" | "light" | "standard" | "dark";
+  text_enhance: "none" | "shadow" | "bold";
+}
+
 export interface DisplaySettings {
   english_only: boolean;
   on_translate_fail: string;
@@ -58,6 +65,7 @@ export interface DisplaySettings {
   side: string;
   collapsed_display_count: number;
   ghost_mode: boolean;
+  sidebar_appearance: SidebarAppearance;
 }
 
 export interface LoggingSettings {

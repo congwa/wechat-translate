@@ -23,6 +23,11 @@ export interface SettingsDraft {
   displayWidth: string;
   collapsedDisplayCount: string;
   ghostMode: boolean;
+  // 浮窗外观
+  bgOpacity: string;
+  blur: string;
+  cardStyle: string;
+  textEnhance: string;
   // 词典设置
   dictProvider: string;
 }
@@ -50,6 +55,10 @@ export function draftFromSettings(settings: AppSettings): SettingsDraft {
     displayWidth: String(settings.display.width),
     collapsedDisplayCount: String(settings.display.collapsed_display_count || 3),
     ghostMode: settings.display.ghost_mode ?? false,
+    bgOpacity: String(settings.display.sidebar_appearance?.bg_opacity ?? 0.8),
+    blur: settings.display.sidebar_appearance?.blur ?? "strong",
+    cardStyle: settings.display.sidebar_appearance?.card_style ?? "standard",
+    textEnhance: settings.display.sidebar_appearance?.text_enhance ?? "none",
     dictProvider: settings.dict?.provider || "cambridge",
   };
 }
@@ -85,6 +94,12 @@ export function settingsFromDraft(
       width: parseInt(draft.displayWidth, 10) || 420,
       collapsed_display_count: Math.max(1, parseInt(draft.collapsedDisplayCount, 10) || 3),
       ghost_mode: draft.ghostMode,
+      sidebar_appearance: {
+        bg_opacity: Math.max(0.2, Math.min(1.0, parseFloat(draft.bgOpacity) || 0.8)),
+        blur: draft.blur as "none" | "weak" | "medium" | "strong",
+        card_style: draft.cardStyle as "transparent" | "light" | "standard" | "dark",
+        text_enhance: draft.textEnhance as "none" | "shadow" | "bold",
+      },
     },
     dict: {
       ...settings.dict,
@@ -129,7 +144,7 @@ const SECTION_FIELDS: Record<SettingsSection, (keyof SettingsDraft)[]> = {
     "translateMaxConcurrency",
     "translateMaxRequestsPerSecond",
   ],
-  display: ["displayWidth", "collapsedDisplayCount", "ghostMode"],
+  display: ["displayWidth", "collapsedDisplayCount", "ghostMode", "bgOpacity", "blur", "cardStyle", "textEnhance"],
 };
 
 function createEmptyDraft(): SettingsDraft {
@@ -152,6 +167,10 @@ function createEmptyDraft(): SettingsDraft {
     displayWidth: "420",
     collapsedDisplayCount: "3",
     ghostMode: false,
+    bgOpacity: "0.8",
+    blur: "strong",
+    cardStyle: "standard",
+    textEnhance: "none",
     dictProvider: "cambridge",
   };
 }

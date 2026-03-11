@@ -1,6 +1,9 @@
 use anyhow::Result;
+use base64::Engine;
 use serde::Deserialize;
 use std::sync::Arc;
+
+use crate::config::SidebarAppearance;
 use std::time::Instant;
 use tauri::webview::WebviewWindowBuilder;
 use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, WebviewUrl};
@@ -76,10 +79,12 @@ impl SidebarWindowState {
         mode: WindowMode,
         collapsed_display_count: Option<u32>,
         ghost_mode: Option<bool>,
+        appearance: Option<SidebarAppearance>,
     ) -> Result<()> {
         let width = width.unwrap_or(DEFAULT_WIDTH);
         let count = collapsed_display_count.unwrap_or(3).max(1);
         let ghost = ghost_mode.unwrap_or(false);
+        let appearance = appearance.unwrap_or_default();
 
         if let Some(existing) = app.webview_windows().get(SIDEBAR_LABEL) {
             existing.set_focus().ok();
@@ -101,9 +106,12 @@ impl SidebarWindowState {
             }
         };
 
+        let appearance_json = serde_json::to_string(&appearance).unwrap_or_default();
+        let appearance_b64 = base64::engine::general_purpose::STANDARD.encode(&appearance_json);
+        
         let url_query = match mode {
-            WindowMode::Follow => "index.html?view=sidebar&mode=follow".to_string(),
-            WindowMode::Independent => format!("index.html?view=sidebar&mode=independent&count={}", count),
+            WindowMode::Follow => format!("index.html?view=sidebar&mode=follow&appearance={}", appearance_b64),
+            WindowMode::Independent => format!("index.html?view=sidebar&mode=independent&count={}&ghost={}&appearance={}", count, ghost, appearance_b64),
         };
 
         let win = WebviewWindowBuilder::new(app, SIDEBAR_LABEL, WebviewUrl::App(url_query.into()))
