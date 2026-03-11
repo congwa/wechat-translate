@@ -258,9 +258,12 @@ export function SidebarView() {
     };
   }, [isIndependent]);
 
+  // 滚动到底部：当消息数量变化或最后一条消息内容更新时触发
+  // 这样翻译完成后内容增多也会自动滚动到底部
+  const lastItemContent = items.length > 0 ? items[items.length - 1]?.textEn : "";
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [items.length]);
+  }, [items.length, lastItemContent]);
 
   function handleClose() {
     api.sidebarStop().catch(() => {});

@@ -3,8 +3,22 @@ import { X, Volume2, Loader2, Star } from "lucide-react";
 import { useDictionaryStore } from "@/stores/dictionaryStore";
 import { useFavoriteStore } from "@/stores/favoriteStore";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import * as api from "@/lib/tauri-api";
 import type { Definition, Meaning } from "@/lib/tauri-api";
+
+// 发音地区显示名称映射
+const REGION_LABELS: Record<string, string> = {
+  uk: "🇬🇧 英式发音",
+  us: "🇺🇸 美式发音",
+  au: "🇦🇺 澳式发音",
+  default: "🔊 播放发音",
+};
 
 interface DefinitionItemProps {
   definition: Definition;
@@ -259,22 +273,29 @@ export function WordPopover() {
                 }`}
               />
             </button>
-            {phoneticsWithAudio.map((p) => (
-              <button
-                key={p.region || "default"}
-                onClick={() => p.audio_url && playAudio(p.audio_url, p.region || "default")}
-                className="p-1 rounded hover:bg-accent transition-colors"
-                title={`播放 ${p.region?.toUpperCase() || ""} 发音`}
-              >
-                <Volume2
-                  className={`w-3.5 h-3.5 ${
-                    playingRegion === (p.region || "default")
-                      ? "text-primary animate-pulse"
-                      : "text-muted-foreground"
-                  }`}
-                />
-              </button>
-            ))}
+            <TooltipProvider delayDuration={200}>
+              {phoneticsWithAudio.map((p) => (
+                <Tooltip key={p.region || "default"}>
+                  <TooltipTrigger asChild>
+                    <button
+                      onClick={() => p.audio_url && playAudio(p.audio_url, p.region || "default")}
+                      className="p-1 rounded hover:bg-accent transition-colors"
+                    >
+                      <Volume2
+                        className={`w-3.5 h-3.5 ${
+                          playingRegion === (p.region || "default")
+                            ? "text-primary animate-pulse"
+                            : "text-muted-foreground"
+                        }`}
+                      />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom" className="text-xs">
+                    {REGION_LABELS[p.region || "default"] || `${p.region?.toUpperCase()} 发音`}
+                  </TooltipContent>
+                </Tooltip>
+              ))}
+            </TooltipProvider>
             <button
               onClick={clearCurrent}
               className="p-1 rounded hover:bg-accent transition-colors ml-0.5"
