@@ -495,11 +495,13 @@ pub fn run() {
                 .menu(&menu)
                 .tooltip("WeChat PC Auto")
                 .on_menu_event(|app, event| match event.id().as_ref() {
+                    #[cfg(debug_assertions)]
                     "open_devtools" => {
                         if let Some(window) = app.get_webview_window("main") {
                             window.open_devtools();
                         }
                     }
+                    #[cfg(debug_assertions)]
                     "open_sidebar_devtools" => {
                         if let Some(window) = app.get_webview_window("sidebar") {
                             window.open_devtools();
