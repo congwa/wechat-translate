@@ -443,7 +443,15 @@ export function SidebarView() {
           }}
         >
         <div data-tauri-drag-region className="flex items-center gap-1.5 flex-1 min-w-0">
-          <MessageCircle className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0 pointer-events-none" />
+          {(() => {
+            const chatType = items[0]?.chatType;
+            if (chatType === "group") {
+              return <Users className="w-3.5 h-3.5 text-blue-500 dark:text-blue-400 shrink-0 pointer-events-none" />;
+            } else if (chatType === "private") {
+              return <User className="w-3.5 h-3.5 text-gray-500 dark:text-gray-400 shrink-0 pointer-events-none" />;
+            }
+            return <MessageCircle className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0 pointer-events-none" />;
+          })()}
           <span
             data-tauri-drag-region
             className="text-xs font-medium text-gray-700 dark:text-gray-300 truncate"
