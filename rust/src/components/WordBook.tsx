@@ -36,9 +36,9 @@ function useWordAudio() {
         if (audioRef.current) {
           audioRef.current.pause();
         }
-        // 通过 Tauri 获取缓存后的本地 URL
-        const localUrl = await api.audioGetUrl(audioUrl);
-        audioRef.current = new Audio(localUrl);
+        // 通过 Tauri 获取缓存后的本地路径，再转换为 asset:// 协议
+        const assetUrl = await api.audioGetAssetUrl(audioUrl);
+        audioRef.current = new Audio(assetUrl);
         audioRef.current.onended = () => setPlaying(false);
         audioRef.current.onerror = () => setPlaying(false);
         audioRef.current.play().catch(() => setPlaying(false));

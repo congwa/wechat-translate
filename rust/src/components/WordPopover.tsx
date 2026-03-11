@@ -96,10 +96,12 @@ export function WordPopover() {
     setPlayingRegion(region);
     
     try {
-      // 通过 Tauri 获取缓存后的本地 URL
-      const localUrl = await api.audioGetUrl(url);
+      console.log("[Audio] 1. 开始播放，远程 URL:", url);
+      // 通过 Tauri 获取缓存后的本地路径，再转换为 asset:// 协议
+      const assetUrl = await api.audioGetAssetUrl(url);
+      console.log("[Audio] 2. 获取到 assetUrl:", assetUrl);
       
-      audioRef.current = new Audio(localUrl);
+      audioRef.current = new Audio(assetUrl);
       audioRef.current.onended = () => setPlayingRegion(null);
       audioRef.current.onerror = () => setPlayingRegion(null);
       audioRef.current.play().catch(() => setPlayingRegion(null));

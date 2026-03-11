@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import type { ApiResponse, AppSettings, AppStateSnapshot, SidebarSnapshot } from "./types";
 
 export async function appStateGet(): Promise<ApiResponse<AppStateSnapshot>> {
@@ -401,6 +401,20 @@ export interface AudioCacheStats {
 }
 
 /**
+ * 将本地文件路径转换为 Tauri asset:// 协议 URL
+ * 
+ * @param localPath 本地文件绝对路径
+ * @returns asset:// 协议 URL，可用于 HTML Audio/Image 等元素
+ */
+export function localPathToAssetUrl(localPath: string): string {
+  // 使用 Tauri 官方的 convertFileSrc 函数
+  const url = convertFileSrc(localPath);
+  console.log("[localPathToAssetUrl] 原始路径:", localPath);
+  console.log("[localPathToAssetUrl] 转换后 URL:", url);
+  return url;
+}
+
+/**
  * 获取音频播放 URL（自动缓存）
  * 
  * 如果音频已缓存，返回本地文件路径；否则下载并缓存后返回。
@@ -409,6 +423,18 @@ export interface AudioCacheStats {
  */
 export async function audioGetUrl(url: string): Promise<string> {
   return invoke("audio_get_url", { url });
+}
+
+/**
+ * 获取音频的 asset:// URL（自动缓存 + 路径转换）
+ * 
+ * 封装了 audioGetUrl + localPathToAssetUrl 的完整流程
+ * @param url 远程音频 URL
+ * @returns asset:// 协议 URL，可直接用于 HTML Audio 元素
+ */
+export async function audioGetAssetUrl(url: string): Promise<string> {
+  const localPath = await audioGetUrl(url);
+  return localPathToAssetUrl(localPath);
 }
 
 /**

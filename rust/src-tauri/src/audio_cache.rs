@@ -72,20 +72,27 @@ impl AudioCache {
     /// # 返回
     /// - 本地缓存文件的绝对路径
     pub async fn get_or_download(&self, url: &str) -> Result<PathBuf> {
+        println!("[AudioCache] 1. 收到请求, URL: {}", url);
+        
         // 验证 URL 格式
         if !url.starts_with("http://") && !url.starts_with("https://") {
+            println!("[AudioCache] 无效的 URL 格式");
             return Err(anyhow!("无效的音频 URL: {}", url));
         }
         
         // 计算缓存 key
         let hash = self.url_hash(url);
         let cache_path = self.get_cache_path(&hash);
+        println!("[AudioCache] 2. 缓存路径: {}", cache_path.display());
         
         // 检查缓存是否存在
-        if cache_path.exists() {
-            log::debug!("音频缓存命中: {} -> {}", url, cache_path.display());
+        let exists = cache_path.exists();
+        println!("[AudioCache] 3. 文件存在检查: {}", exists);
+        if exists {
+            println!("[AudioCache] 3. 缓存命中，直接返回");
             return Ok(cache_path);
         }
+        println!("[AudioCache] 3. 缓存未命中，开始下载");
         
         // 获取下载锁，防止同一文件并发下载
         let lock = {
@@ -100,15 +107,18 @@ impl AudioCache {
         
         // 再次检查缓存（可能其他线程已下载完成）
         if cache_path.exists() {
+            println!("[AudioCache] 4. 其他线程已下载，直接返回");
             return Ok(cache_path);
         }
         
         // 下载音频文件
-        log::info!("下载音频: {} -> {}", url, cache_path.display());
+        println!("[AudioCache] 4. 开始下载: {}", url);
         let bytes = self.download_audio(url).await?;
+        println!("[AudioCache] 5. 下载完成，大小: {} bytes", bytes.len());
         
         // 写入缓存
         std::fs::write(&cache_path, &bytes)?;
+        println!("[AudioCache] 6. 写入缓存成功: {}", cache_path.display());
         
         // 清理下载锁
         {

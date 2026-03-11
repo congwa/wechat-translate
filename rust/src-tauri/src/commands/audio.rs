@@ -20,6 +20,8 @@ pub async fn audio_get_url(
     audio_cache: tauri::State<'_, Arc<AudioCache>>,
     url: String,
 ) -> Result<String, String> {
+    println!("[audio_get_url] 收到请求: {}", url);
+    
     // 验证 URL
     if url.is_empty() {
         return Err("音频 URL 不能为空".to_string());
@@ -29,13 +31,16 @@ pub async fn audio_get_url(
     let cache_path = audio_cache
         .get_or_download(&url)
         .await
-        .map_err(|e| format!("获取音频失败: {}", e))?;
+        .map_err(|e| {
+            println!("[audio_get_url] 获取失败: {}", e);
+            format!("获取音频失败: {}", e)
+        })?;
     
-    // 返回 file:// 协议的本地路径
-    // Tauri 的 webview 可以直接访问本地文件
-    let local_url = format!("file://{}", cache_path.display());
+    let result = cache_path.display().to_string();
+    println!("[audio_get_url] 返回路径: {}", result);
     
-    Ok(local_url)
+    // 返回纯文件路径，前端使用 convertFileSrc 转换为 asset:// 协议
+    Ok(result)
 }
 
 /// 检查音频是否已缓存
