@@ -28,6 +28,9 @@ const isSidebarView =
   new URLSearchParams(window.location.search).get("view") === "sidebar";
 
 export default function App() {
+  const [loading, setLoading] = useState(!isSidebarView);
+  const settings = useSettingsStore((s) => s.settings);
+
   useEffect(() => {
     const cleanupPromises = [
       useEventStore.getState().initEventListener(),
@@ -38,15 +41,19 @@ export default function App() {
     // 初始化词典事件监听器
     initDictionaryEventListeners();
 
-    api
-      .appStateGet()
-      .then((resp) => {
-        if (resp.data) {
-          useSettingsStore.getState().setSettings(resp.data.settings);
-          useRuntimeStore.getState().setRuntime(resp.data.runtime);
-        }
-      })
-      .catch(() => {});
+    // 主窗口必须等待后端配置加载完成
+    if (!isSidebarView) {
+      api
+        .appStateGet()
+        .then((resp) => {
+          if (resp.data) {
+            useSettingsStore.getState().setSettings(resp.data.settings);
+            useRuntimeStore.getState().setRuntime(resp.data.runtime);
+          }
+        })
+        .catch(() => {})
+        .finally(() => setLoading(false));
+    }
 
     return () => {
       cleanupPromises.forEach((cleanup) => {
@@ -56,9 +63,23 @@ export default function App() {
     };
   }, []);
 
+  // 侧边栏窗口：直接渲染，从 URL 读取配置
   if (isSidebarView) {
     return <SidebarView />;
   }
+
+  // 主窗口：等待后端配置加载完成
+  if (loading || !settings) {
+    return (
+      <div className="h-screen flex items-center justify-center bg-background">
+        <div className="text-center space-y-3">
+          <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin mx-auto" />
+          <p className="text-sm text-muted-foreground">加载配置中...</p>
+        </div>
+      </div>
+    );
+  }
+
   return <MainApp />;
 }
 

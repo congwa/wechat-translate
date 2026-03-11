@@ -27,49 +27,6 @@ export interface SettingsDraft {
   dictProvider: string;
 }
 
-function createDefaultSettings(): AppSettings {
-  return {
-    listen: {
-      mode: "session",
-      targets: [],
-      interval_seconds: 1,
-      dedupe_window_seconds: 2.5,
-      session_preview_dedupe_window_seconds: 20,
-      cross_source_merge_window_seconds: 3,
-      focus_refresh: false,
-      worker_debug: false,
-      use_right_panel_details: false,
-    },
-    translate: {
-      enabled: true,
-      provider: "deeplx",
-      deeplx_url: "",
-      source_lang: "auto",
-      target_lang: "EN",
-      timeout_seconds: 15,
-      max_concurrency: 3,
-      max_requests_per_second: 3,
-      ai_provider_id: "",
-      ai_model_id: "",
-      ai_api_key: "",
-      ai_base_url: "",
-    },
-    display: {
-      english_only: true,
-      on_translate_fail: "show_cn_with_reason",
-      width: 420,
-      side: "right",
-      collapsed_display_count: 3,
-      ghost_mode: false,
-    },
-    logging: {
-      file: "logs/sidebar_listener.log",
-    },
-    dict: {
-      provider: "cambridge",
-    },
-  };
-}
 
 export function draftFromSettings(settings: AppSettings): SettingsDraft {
   // 判断是否为自定义模式：如果有 base_url 但没有 provider_id，或者 provider_id 不在已知列表中
@@ -175,9 +132,33 @@ const SECTION_FIELDS: Record<SettingsSection, (keyof SettingsDraft)[]> = {
   display: ["displayWidth", "collapsedDisplayCount", "ghostMode"],
 };
 
+function createEmptyDraft(): SettingsDraft {
+  return {
+    translateEnabled: false,
+    translateProvider: "deeplx",
+    deeplxUrl: "",
+    aiInputMode: "registry",
+    aiProviderId: "",
+    aiModelId: "",
+    aiApiKey: "",
+    aiBaseUrl: "",
+    sourceLang: "auto",
+    targetLang: "EN",
+    translateTimeout: "15",
+    translateMaxConcurrency: "3",
+    translateMaxRequestsPerSecond: "3",
+    pollInterval: "1",
+    useRightPanelDetails: false,
+    displayWidth: "420",
+    collapsedDisplayCount: "3",
+    ghostMode: false,
+    dictProvider: "cambridge",
+  };
+}
+
 export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
   settings: null,
-  draft: draftFromSettings(createDefaultSettings()),
+  draft: createEmptyDraft(),
   sectionDirty: { listen: false, translate: false, display: false },
 
   setSettings: (settings) =>
