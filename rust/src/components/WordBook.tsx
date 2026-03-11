@@ -19,7 +19,7 @@ import { Badge } from "@/components/ui/badge";
 import * as api from "@/lib/tauri-api";
 import type { FavoriteWord, Meaning } from "@/lib/tauri-api";
 
-// 播放单词发音的 hook
+// 播放单词发音的 hook（使用音频缓存）
 function useWordAudio() {
   const [playing, setPlaying] = useState(false);
   const audioRef = { current: null as HTMLAudioElement | null };
@@ -28,13 +28,16 @@ function useWordAudio() {
     if (playing) return;
     setPlaying(true);
     try {
+      // 获取词典条目
       const entry = await api.wordLookup(word);
       const audioUrl = entry.phonetics.find((p) => p.audio_url)?.audio_url;
       if (audioUrl) {
         if (audioRef.current) {
           audioRef.current.pause();
         }
-        audioRef.current = new Audio(audioUrl);
+        // 通过 Tauri 获取缓存后的本地 URL
+        const localUrl = await api.audioGetUrl(audioUrl);
+        audioRef.current = new Audio(localUrl);
         audioRef.current.onended = () => setPlaying(false);
         audioRef.current.onerror = () => setPlaying(false);
         audioRef.current.play().catch(() => setPlaying(false));

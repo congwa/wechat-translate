@@ -3,6 +3,7 @@ import { X, Volume2, Loader2, Star } from "lucide-react";
 import { useDictionaryStore } from "@/stores/dictionaryStore";
 import { useFavoriteStore } from "@/stores/favoriteStore";
 import { Skeleton } from "@/components/ui/skeleton";
+import * as api from "@/lib/tauri-api";
 import type { Definition, Meaning } from "@/lib/tauri-api";
 
 interface DefinitionItemProps {
@@ -152,15 +153,25 @@ export function WordPopover() {
     }
   }, [currentWord, clearCurrent]);
 
-  const playAudio = useCallback((url: string, region: string) => {
+  // 播放音频（使用缓存）
+  const playAudio = useCallback(async (url: string, region: string) => {
     if (audioRef.current) {
       audioRef.current.pause();
     }
-    audioRef.current = new Audio(url);
     setPlayingRegion(region);
-    audioRef.current.onended = () => setPlayingRegion(null);
-    audioRef.current.onerror = () => setPlayingRegion(null);
-    audioRef.current.play().catch(() => setPlayingRegion(null));
+    
+    try {
+      // 通过 Tauri 获取缓存后的本地 URL
+      const localUrl = await api.audioGetUrl(url);
+      
+      audioRef.current = new Audio(localUrl);
+      audioRef.current.onended = () => setPlayingRegion(null);
+      audioRef.current.onerror = () => setPlayingRegion(null);
+      audioRef.current.play().catch(() => setPlayingRegion(null));
+    } catch (error) {
+      console.error("播放音频失败:", error);
+      setPlayingRegion(null);
+    }
   }, []);
 
   if (!currentWord || !popoverPosition) return null;

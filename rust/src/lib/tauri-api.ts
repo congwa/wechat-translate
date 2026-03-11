@@ -369,3 +369,53 @@ export async function finishReviewSession(
 export async function getReviewStats(): Promise<ReviewStats> {
   return invoke("get_review_stats", {});
 }
+
+// ==================== Audio Cache API ====================
+
+/** 音频缓存统计信息 */
+export interface AudioCacheStats {
+  /** 缓存文件数量 */
+  file_count: number;
+  /** 总大小（字节） */
+  total_size_bytes: number;
+  /** 总大小（MB） */
+  total_size_mb: number;
+  /** 缓存目录路径 */
+  cache_dir: string;
+}
+
+/**
+ * 获取音频播放 URL（自动缓存）
+ * 
+ * 如果音频已缓存，返回本地文件路径；否则下载并缓存后返回。
+ * @param url 远程音频 URL
+ * @returns 可用于 HTML Audio 元素的本地 URL
+ */
+export async function audioGetUrl(url: string): Promise<string> {
+  return invoke("audio_get_url", { url });
+}
+
+/**
+ * 检查音频是否已缓存
+ * @param url 远程音频 URL
+ * @returns true: 已缓存，false: 未缓存
+ */
+export async function audioIsCached(url: string): Promise<boolean> {
+  return invoke("audio_is_cached", { url });
+}
+
+/**
+ * 获取音频缓存统计信息
+ * @returns 缓存文件数量、总大小等统计信息
+ */
+export async function audioGetStats(): Promise<AudioCacheStats> {
+  return invoke("audio_get_stats");
+}
+
+/**
+ * 清空音频缓存
+ * @returns 清理的文件数量
+ */
+export async function audioClearCache(): Promise<number> {
+  return invoke("audio_clear_cache");
+}

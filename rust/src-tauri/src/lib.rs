@@ -1,5 +1,6 @@
 pub mod adapter;
 mod app_state;
+mod audio_cache;
 mod commands;
 mod config;
 pub mod db;
@@ -359,6 +360,12 @@ pub fn run() {
                     .expect("failed to create dictionary router"),
             );
 
+            // 初始化音频缓存管理器
+            let audio_cache = Arc::new(
+                audio_cache::AudioCache::new(&data_dir)
+                    .expect("failed to create audio cache"),
+            );
+
             let image_cache = Arc::new(std::sync::Mutex::new(WeChatImageCache::new()));
             let translation_service = Arc::new(TranslationService::new());
 
@@ -375,6 +382,7 @@ pub fn run() {
             app.manage(message_db);
             app.manage(dict_db);
             app.manage(dict_router);
+            app.manage(audio_cache);
             app.manage(image_cache);
             app.manage(translation_service);
             app.manage(manager.clone());
@@ -633,6 +641,10 @@ pub fn run() {
             commands::dictionary::record_review_feedback,
             commands::dictionary::finish_review_session,
             commands::dictionary::get_review_stats,
+            commands::audio::audio_get_url,
+            commands::audio::audio_is_cached,
+            commands::audio::audio_get_stats,
+            commands::audio::audio_clear_cache,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
