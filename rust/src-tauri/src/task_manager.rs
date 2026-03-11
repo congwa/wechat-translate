@@ -6,7 +6,7 @@ use crate::db::MessageDb;
 use crate::events::{EventStore, EventType};
 use crate::image_cache::{self, WeChatImageCache};
 use crate::translator::{
-    DeepLXTranslator, TranslateConfig, TranslationLimiter, TranslationService,
+    TranslateConfig, TranslateProviderConfig, TranslationLimiter, TranslationService,
     TranslatorServiceStatus,
 };
 use anyhow::Result;
@@ -28,7 +28,7 @@ pub struct TaskState {
 
 
 struct SidebarConfig {
-    translator: Option<Arc<DeepLXTranslator>>,
+    translator: Option<Arc<dyn crate::translator::Translator>>,
     limiter: Option<Arc<TranslationLimiter>>,
     target_set: HashSet<String>,
     image_capture: bool,
@@ -219,9 +219,9 @@ impl TaskManager {
         self.first_poll_signal.wait_ready(timeout).await
     }
 
-    /// 获取当前配置的翻译器
-    pub async fn get_translator(&self) -> Option<Arc<DeepLXTranslator>> {
-        self.translation_service.get_translator().await
+    /// 获取翻译服务是否可用
+    pub async fn is_translator_available(&self) -> bool {
+        self.translation_service.is_available().await
     }
 
     /// 获取翻译服务
@@ -272,9 +272,11 @@ impl TaskManager {
     fn spawn_translator_health_check(&self, translator_generation: u64) {
         let manager = self.clone();
         tokio::spawn(async move {
+            let config = manager.translation_service.get_config().await;
+            let provider = config.provider_name().to_string();
             let next_status = match manager.translation_service.check_health().await {
-                Ok(_) => TranslatorServiceStatus::healthy(),
-                Err(error) => TranslatorServiceStatus::error(error.to_string()),
+                Ok(_) => TranslatorServiceStatus::healthy(&provider),
+                Err(error) => TranslatorServiceStatus::error(&provider, error.to_string()),
             };
             manager
                 .set_translator_status_if_current(translator_generation, next_status)
@@ -288,10 +290,28 @@ impl TaskManager {
 
         let translator_generation = self.next_translator_generation();
 
+        // 根据 provider 类型构建对应的配置
+        let provider_config = if config.translate.provider == "ai" {
+            TranslateProviderConfig::Ai {
+                provider_id: config.translate.ai_provider_id.clone(),
+                model_id: config.translate.ai_model_id.clone(),
+                api_key: config.translate.ai_api_key.clone(),
+                base_url: if config.translate.ai_base_url.is_empty() {
+                    None
+                } else {
+                    Some(config.translate.ai_base_url.clone())
+                },
+            }
+        } else {
+            TranslateProviderConfig::Deeplx {
+                url: config.translate.deeplx_url.clone(),
+            }
+        };
+
         // 更新全局翻译服务配置
         let translate_config = TranslateConfig {
             enabled: config.translate.enabled,
-            deeplx_url: config.translate.deeplx_url.clone(),
+            provider_config,
             source_lang: config.translate.source_lang.clone(),
             target_lang: config.translate.target_lang.clone(),
             timeout_seconds: config.translate.timeout_seconds,
@@ -303,9 +323,10 @@ impl TaskManager {
 
         // 更新侧边栏配置（使用全局翻译服务的 translator 和 limiter）
         if self.sidebar_enabled.load(Ordering::Relaxed) {
+            let (translator, limiter) = self.translation_service.get_translator_and_limiter().await;
             let mut sidebar_config = self.sidebar_config.lock().await;
-            sidebar_config.translator = self.translation_service.get_translator().await;
-            sidebar_config.limiter = self.translation_service.get_limiter().await;
+            sidebar_config.translator = translator;
+            sidebar_config.limiter = limiter;
         }
 
         if let Ok(app) = self.get_app_handle().await {
@@ -563,6 +584,7 @@ impl TaskManager {
                                         let config = sidebar_config.lock().await;
                                         (config.translator.clone(), config.limiter.clone())
                                     };
+                                    let translate_config = manager.translation_service.get_config().await;
                                     if let (Some(translator), Some(limiter)) =
                                         (translator, limiter)
                                     {
@@ -573,6 +595,8 @@ impl TaskManager {
                                             db.clone(),
                                             translator,
                                             limiter,
+                                            translate_config.source_lang.clone(),
+                                            translate_config.target_lang.clone(),
                                             0, // 会话预览消息没有事件ID
                                             snapshot.chat_name.clone(),
                                             sender.clone(),
@@ -850,6 +874,7 @@ impl TaskManager {
                                         let config = sidebar_config.lock().await;
                                         (config.translator.clone(), config.limiter.clone())
                                     };
+                                    let translate_config = manager.translation_service.get_config().await;
 
                                     let sidebar_event = publish_sidebar_append(
                                         &events,
@@ -874,6 +899,8 @@ impl TaskManager {
                                             db.clone(),
                                             translator,
                                             limiter,
+                                            translate_config.source_lang.clone(),
+                                            translate_config.target_lang.clone(),
                                             sidebar_event.id,
                                             chat_name.clone(),
                                             msg.sender.clone(),
@@ -931,7 +958,12 @@ impl TaskManager {
         &self,
         targets: Vec<String>,
         translate_enabled: bool,
+        provider: String,
         deeplx_url: String,
+        ai_provider_id: String,
+        ai_model_id: String,
+        ai_api_key: String,
+        ai_base_url: String,
         source_lang: String,
         target_lang: String,
         timeout_seconds: f64,
@@ -941,10 +973,22 @@ impl TaskManager {
     ) -> Result<()> {
         let translator_generation = self.next_translator_generation();
 
-        // 更新全局翻译服务配置
+        // 根据 provider 创建对应的配置
+        let provider_config = match provider.as_str() {
+            "ai" => TranslateProviderConfig::Ai {
+                provider_id: ai_provider_id,
+                model_id: ai_model_id,
+                api_key: ai_api_key,
+                base_url: if ai_base_url.is_empty() { None } else { Some(ai_base_url) },
+            },
+            _ => TranslateProviderConfig::Deeplx {
+                url: deeplx_url,
+            },
+        };
+
         let translate_config = TranslateConfig {
             enabled: translate_enabled,
-            deeplx_url,
+            provider_config,
             source_lang,
             target_lang,
             timeout_seconds,
@@ -956,10 +1000,13 @@ impl TaskManager {
 
         let target_set: HashSet<String> = targets.into_iter().filter(|t| !t.is_empty()).collect();
 
+        // 从 TranslationService 获取内部状态用于 sidebar
+        let (translator, limiter) = self.translation_service.get_translator_and_limiter().await;
+
         {
             let mut config = self.sidebar_config.lock().await;
-            config.translator = self.translation_service.get_translator().await;
-            config.limiter = self.translation_service.get_limiter().await;
+            config.translator = translator;
+            config.limiter = limiter;
             config.target_set = target_set;
             config.image_capture = image_capture;
         }
@@ -1475,8 +1522,10 @@ fn spawn_sidebar_translation_update(
     events: Arc<EventStore>,
     app_handle: AppHandle,
     db: Arc<MessageDb>,
-    translator: Arc<DeepLXTranslator>,
+    translator: Arc<dyn crate::translator::Translator>,
     limiter: Arc<TranslationLimiter>,
+    source_lang: String,
+    target_lang: String,
     message_id: u64,
     chat_name: String,
     sender: String,
@@ -1485,8 +1534,6 @@ fn spawn_sidebar_translation_update(
 ) {
     tokio::spawn(async move {
         let translator_generation = manager.translator_generation.load(Ordering::Relaxed);
-        let source_lang = translator.source_lang().to_string();
-        let target_lang = translator.target_lang().to_string();
 
         if let Ok(Some(cached)) = db.get_cached_translation(&content, &source_lang, &target_lang) {
             let _ = db.update_message_translation(
@@ -1526,7 +1573,7 @@ fn spawn_sidebar_translation_update(
         }
 
         let _permit = limiter.acquire().await;
-        match translator.translate(&content).await {
+        match translator.translate(&content, &source_lang, &target_lang).await {
             Ok(translated) => {
                 let _ =
                     db.upsert_cached_translation(&content, &source_lang, &target_lang, &translated);
@@ -1537,10 +1584,11 @@ fn spawn_sidebar_translation_update(
                     &detected_at,
                     &translated,
                 );
+                let provider = translator.provider_id().to_string();
                 manager
                     .set_translator_status_if_current(
                         translator_generation,
-                        TranslatorServiceStatus::healthy(),
+                        TranslatorServiceStatus::healthy(&provider),
                     )
                     .await;
 
@@ -1572,10 +1620,11 @@ fn spawn_sidebar_translation_update(
             }
             Err(error) => {
                 let translate_error = error.to_string();
+                let provider = translator.provider_id().to_string();
                 manager
                     .set_translator_status_if_current(
                         translator_generation,
-                        TranslatorServiceStatus::error(&translate_error),
+                        TranslatorServiceStatus::error(&provider, &translate_error),
                     )
                     .await;
                 events.publish(
@@ -1652,26 +1701,26 @@ mod tests {
             "○ 翻译未启用"
         );
         assert_eq!(
-            TranslatorServiceStatus::unconfigured().menu_text(),
+            TranslatorServiceStatus::unconfigured("deeplx").menu_text(),
             "○ 翻译未配置"
         );
         assert_eq!(
-            TranslatorServiceStatus::checking().menu_text(),
+            TranslatorServiceStatus::checking("deeplx").menu_text(),
             "◐ 翻译检测中"
         );
         assert_eq!(
-            TranslatorServiceStatus::healthy().menu_text(),
+            TranslatorServiceStatus::healthy("deeplx").menu_text(),
             "● 翻译服务可用"
         );
         assert_eq!(
-            TranslatorServiceStatus::error("boom").menu_text(),
+            TranslatorServiceStatus::error("deeplx", "boom").menu_text(),
             "⚠ 翻译服务异常"
         );
     }
 
     #[test]
     fn translator_status_json_contains_expected_fields() {
-        let status = TranslatorServiceStatus::error("request failed");
+        let status = TranslatorServiceStatus::error("deeplx", "request failed");
         let json = status.as_json();
 
         assert_eq!(json["enabled"], true);

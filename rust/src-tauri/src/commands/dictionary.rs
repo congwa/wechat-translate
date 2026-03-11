@@ -88,14 +88,14 @@ pub async fn translate_cached(
         return Ok(cached);
     }
 
-    // 2. 获取翻译器
-    let translator: std::sync::Arc<crate::translator::DeepLXTranslator> = manager
-        .get_translator()
-        .await
-        .ok_or_else(|| "Translator not configured".to_string())?;
+    // 2. 使用翻译服务翻译
+    let translation_service = manager.get_translation_service();
+    if !translation_service.is_available().await {
+        return Err("Translator not configured".to_string());
+    }
 
-    // 3. 调用 DeepLX 翻译（使用传入的语言对）
-    let translated = translator
+    // 3. 调用翻译服务（使用传入的语言对）
+    let translated = translation_service
         .translate_with_langs(&text, &source_lang, &target_lang)
         .await
         .map_err(|e| e.to_string())?;
@@ -131,11 +131,10 @@ pub async fn translate_batch(
             continue;
         }
 
-        // 获取翻译器
-        let translator = manager.get_translator().await;
-
-        if let Some(translator) = translator {
-            match translator.translate_with_langs(&text, &source_lang, &target_lang).await {
+        // 使用翻译服务翻译
+        let translation_service = manager.get_translation_service();
+        if translation_service.is_available().await {
+            match translation_service.translate_with_langs(&text, &source_lang, &target_lang).await {
                 Ok(translated) => {
                     let _ = dict_db.insert_translation(
                         &text,

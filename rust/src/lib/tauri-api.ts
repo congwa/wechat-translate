@@ -46,7 +46,12 @@ export async function sidebarStop(): Promise<ApiResponse> {
 
 export async function liveStart(params?: {
   translateEnabled?: boolean;
+  provider?: string;
   deeplxUrl?: string;
+  aiProviderId?: string;
+  aiModelId?: string;
+  aiApiKey?: string;
+  aiBaseUrl?: string;
   sourceLang?: string;
   targetLang?: string;
   intervalSeconds?: number;
@@ -165,12 +170,27 @@ export async function accessibilityOpenSettings(): Promise<AccessibilityOpenSett
 }
 
 export async function translateTest(params: {
-  deeplxUrl: string;
+  provider?: string;
+  deeplxUrl?: string;
+  aiProviderId?: string;
+  aiModelId?: string;
+  aiApiKey?: string;
+  aiBaseUrl?: string;
   sourceLang?: string;
   targetLang?: string;
   timeoutSeconds?: number;
 }): Promise<ApiResponse> {
-  return invoke("translate_test", params);
+  return invoke("translate_test", {
+    provider: params.provider,
+    deeplxUrl: params.deeplxUrl,
+    aiProviderId: params.aiProviderId,
+    aiModelId: params.aiModelId,
+    aiApiKey: params.aiApiKey,
+    aiBaseUrl: params.aiBaseUrl,
+    sourceLang: params.sourceLang,
+    targetLang: params.targetLang,
+    timeoutSeconds: params.timeoutSeconds,
+  });
 }
 
 // ==================== Dictionary API ====================

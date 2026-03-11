@@ -19,6 +19,7 @@ export interface TranslatorServiceStatus {
   checking: boolean;
   healthy: boolean | null;
   last_error: string | null;
+  provider: string;
 }
 
 export interface ListenSettings {
@@ -42,7 +43,13 @@ export interface TranslateSettings {
   timeout_seconds: number;
   max_concurrency: number;
   max_requests_per_second: number;
+  // AI 翻译相关字段
+  ai_provider_id: string;
+  ai_model_id: string;
+  ai_api_key: string;
+  ai_base_url: string;
 }
+
 
 export interface DisplaySettings {
   english_only: boolean;

@@ -42,6 +42,7 @@ export const useEventStore = create<EventStoreState>((set) => ({
               checking: boolean;
               healthy: boolean | null;
               last_error: string | null;
+              provider: string;
             }
           | undefined;
         if (state) {

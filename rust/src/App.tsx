@@ -140,14 +140,28 @@ function MainApp() {
         }
 
         const fullUrl = settings.translate.deeplx_url.trim();
-        if (settings.translate.enabled && !fullUrl) {
-          showToast("翻译接口未配置，不能启用翻译", false);
-          return;
+        const isAiProvider = settings.translate.provider === "ai";
+        
+        // 验证翻译配置
+        if (settings.translate.enabled) {
+          if (isAiProvider && !settings.translate.ai_api_key) {
+            showToast("AI 翻译未配置 API Key，不能启用翻译", false);
+            return;
+          }
+          if (!isAiProvider && !fullUrl) {
+            showToast("DeepLX 地址未配置，不能启用翻译", false);
+            return;
+          }
         }
 
         await api.liveStart({
           translateEnabled: settings.translate.enabled,
+          provider: settings.translate.provider,
           deeplxUrl: fullUrl,
+          aiProviderId: settings.translate.ai_provider_id,
+          aiModelId: settings.translate.ai_model_id,
+          aiApiKey: settings.translate.ai_api_key,
+          aiBaseUrl: settings.translate.ai_base_url,
           sourceLang: settings.translate.source_lang,
           targetLang: settings.translate.target_lang,
           timeoutSeconds: settings.translate.timeout_seconds,
@@ -281,20 +295,22 @@ function MainApp() {
         <div className="max-w-5xl mx-auto px-8 py-8">
           <PreflightBar />
 
-          {toast && (
-            <motion.div
-              initial={{ opacity: 0, y: -10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
-              className={`mb-6 rounded-xl px-4 py-3 text-sm font-medium ${
-                toast.ok
-                  ? "bg-primary/10 text-primary border border-primary/20"
-                  : "bg-red-500/10 text-red-600 border border-red-500/20"
-              }`}
-            >
-              {toast.text}
-            </motion.div>
-          )}
+          <AnimatePresence>
+            {toast && (
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: 20 }}
+                className={`fixed bottom-6 right-6 z-50 rounded-xl px-4 py-3 text-sm font-medium shadow-lg ${
+                  toast.ok
+                    ? "bg-primary/10 text-primary border border-primary/20 backdrop-blur-sm"
+                    : "bg-red-500/10 text-red-600 border border-red-500/20 backdrop-blur-sm"
+                }`}
+              >
+                {toast.text}
+              </motion.div>
+            )}
+          </AnimatePresence>
 
           <div className="mb-6 flex items-center justify-between">
             <div>

@@ -11,6 +11,20 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import {
   Monitor,
   Languages,
@@ -20,6 +34,11 @@ import {
   AlertCircle,
   Code2,
   RefreshCcw,
+  Loader2,
+  Check,
+  ChevronsUpDown,
+  Eye,
+  EyeOff,
 } from "lucide-react";
 import { SettingsSection } from "@/components/SettingsSection";
 import { motion, AnimatePresence } from "framer-motion";
@@ -32,6 +51,13 @@ import {
   useSettingsStore,
 } from "@/stores/settingsStore";
 import { useRuntimeStore } from "@/stores/runtimeStore";
+import {
+  fetchProviders,
+  getModelsForProvider,
+  getApiUrlForProvider,
+  BUILTIN_PROVIDERS,
+  type ProviderInfo,
+} from "@/lib/models-registry";
 
 const SOURCE_LANGS = [
   { value: "auto", label: "auto (自动检测)" },
@@ -160,8 +186,49 @@ export function SettingsPage() {
   const [busy, setBusy] = useState<string | null>(null);
   const [translateTestError, setTranslateTestError] = useState<string | null>(null);
 
+  // AI 渠道动态加载
+  const [aiProviders, setAiProviders] = useState<ProviderInfo[]>(BUILTIN_PROVIDERS);
+  const [aiProvidersLoading, setAiProvidersLoading] = useState(false);
+  const [showApiKey, setShowApiKey] = useState(false);
+
   const lastLoadedRef = useRef("");
   const validateTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+
+  // 加载 AI 渠道列表
+  useEffect(() => {
+    let cancelled = false;
+    setAiProvidersLoading(true);
+    fetchProviders()
+      .then((providers) => {
+        if (!cancelled) {
+          setAiProviders(providers.length > 0 ? providers : BUILTIN_PROVIDERS);
+        }
+      })
+      .catch(() => {
+        // 使用内置列表作为降级
+        if (!cancelled) {
+          setAiProviders(BUILTIN_PROVIDERS);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setAiProvidersLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // 当渠道变化时，自动填充 API 地址
+  useEffect(() => {
+    if (draft.translateProvider === "ai" && draft.aiProviderId && !draft.aiBaseUrl) {
+      const apiUrl = getApiUrlForProvider(aiProviders, draft.aiProviderId);
+      if (apiUrl) {
+        updateDraft({ aiBaseUrl: apiUrl });
+      }
+    }
+  }, [draft.aiProviderId, draft.translateProvider, aiProviders]);
 
   const canSyncTranslateTestResult =
     !!settings &&
@@ -188,6 +255,31 @@ export function SettingsPage() {
         detail: "配置仍会保留，但当前不会调用翻译接口。",
       };
     }
+    
+    // 根据选择的渠道检查配置
+    if (draft.translateProvider === "ai") {
+      if (!draft.aiApiKey.trim()) {
+        return {
+          tone: "error" as const,
+          title: "AI 翻译未配置",
+          detail: "缺少 API Key；请填写 AI 渠道的 API Key。",
+        };
+      }
+      if (!draft.aiProviderId || !draft.aiModelId) {
+        return {
+          tone: "error" as const,
+          title: "AI 翻译未配置",
+          detail: "请选择 AI 渠道和模型。",
+        };
+      }
+      return {
+        tone: "ok" as const,
+        title: "AI 翻译已配置",
+        detail: `使用 ${draft.aiProviderId} / ${draft.aiModelId}`,
+      };
+    }
+    
+    // DeepLX 渠道
     if (!draft.deeplxUrl.trim()) {
       return {
         tone: "error" as const,
@@ -198,7 +290,7 @@ export function SettingsPage() {
     return {
       tone: "ok" as const,
       title: "翻译接口已配置",
-      detail: "点击“应用更改”后，主窗口、侧边栏和菜单栏会同时使用这份配置。",
+      detail: "点击「应用更改」后，主窗口、侧边栏和菜单栏会同时使用这份配置。",
     };
   }
 
@@ -358,7 +450,12 @@ export function SettingsPage() {
     setTranslateTestError(null);
     try {
       const resp = await api.translateTest({
+        provider: draft.translateProvider,
         deeplxUrl: draft.deeplxUrl.trim(),
+        aiProviderId: draft.aiProviderId,
+        aiModelId: draft.aiModelId,
+        aiApiKey: draft.aiApiKey,
+        aiBaseUrl: draft.aiBaseUrl,
         sourceLang: draft.sourceLang,
         targetLang: draft.targetLang,
         timeoutSeconds: parseFloat(draft.translateTimeout) || 8,
@@ -370,6 +467,7 @@ export function SettingsPage() {
           checking: false,
           healthy: true,
           last_error: null,
+          provider: draft.translateProvider,
         });
       }
       showToast(`测试成功: ${resp.data}`, true);
@@ -382,6 +480,7 @@ export function SettingsPage() {
           checking: false,
           healthy: false,
           last_error: errorMsg,
+          provider: draft.translateProvider,
         });
       }
       setTranslateTestError(errorMsg);
@@ -629,25 +728,206 @@ export function SettingsPage() {
         </div>
 
         <div className="space-y-2">
-          <Label className="text-xs text-muted-foreground">DeepLX 地址</Label>
-          <Input
-            placeholder="https://api.deeplx.org"
-            value={draft.deeplxUrl}
-            onChange={(e) => updateDraft({ deeplxUrl: e.target.value })}
-          />
-          <p className="text-[11px] text-muted-foreground/70">
-            填写完整翻译接口 URL。前往{" "}
-            <a
-              href="https://connect.linux.do/dash/deeplx"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-violet-500 hover:underline"
-            >
-              connect.linux.do/dash/deeplx
-            </a>
-            {" "}获取完整 URL
-          </p>
+          <Label className="text-xs text-muted-foreground">翻译渠道</Label>
+          <Select
+            value={draft.translateProvider}
+            onValueChange={(v) => updateDraft({ translateProvider: v })}
+          >
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="deeplx">DeepLX（免费）</SelectItem>
+              <SelectItem value="ai">AI 翻译（需 API Key）</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
+
+        {draft.translateProvider === "deeplx" && (
+          <div className="space-y-2">
+            <Label className="text-xs text-muted-foreground">DeepLX 地址</Label>
+            <Input
+              placeholder="https://api.deeplx.org"
+              value={draft.deeplxUrl}
+              onChange={(e) => updateDraft({ deeplxUrl: e.target.value })}
+            />
+            <p className="text-[11px] text-muted-foreground/70">
+              填写完整翻译接口 URL。前往{" "}
+              <a
+                href="https://connect.linux.do/dash/deeplx"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-violet-500 hover:underline"
+              >
+                connect.linux.do/dash/deeplx
+              </a>
+              {" "}获取完整 URL
+            </p>
+          </div>
+        )}
+
+        {draft.translateProvider === "ai" && (
+          <div className="space-y-4">
+            <RadioGroup
+              value={draft.aiInputMode}
+              onValueChange={(v) => updateDraft({ aiInputMode: v as "registry" | "custom" })}
+              className="flex gap-4"
+            >
+              <div className="flex items-center space-x-2">
+                <RadioGroupItem value="registry" id="ai-registry" />
+                <Label htmlFor="ai-registry" className="text-xs cursor-pointer">
+                  从列表选择
+                  {aiProvidersLoading && <Loader2 className="w-3 h-3 animate-spin inline ml-1" />}
+                </Label>
+              </div>
+              <div className="flex items-center space-x-2">
+                <RadioGroupItem value="custom" id="ai-custom" />
+                <Label htmlFor="ai-custom" className="text-xs cursor-pointer">自定义</Label>
+              </div>
+            </RadioGroup>
+
+            {draft.aiInputMode === "registry" && (
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label className="text-xs text-muted-foreground">AI 渠道</Label>
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <Button
+                        variant="outline"
+                        role="combobox"
+                        className="w-full justify-between font-normal"
+                      >
+                        {draft.aiProviderId
+                          ? aiProviders.find((p) => p.id === draft.aiProviderId)?.name || draft.aiProviderId
+                          : "选择渠道..."}
+                        <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-[200px] p-0">
+                      <Command>
+                        <CommandInput placeholder="搜索渠道..." />
+                        <CommandList>
+                          <CommandEmpty>未找到渠道</CommandEmpty>
+                          <CommandGroup>
+                            {aiProviders.map((p) => (
+                              <CommandItem
+                                key={p.id}
+                                value={p.id}
+                                onSelect={(v) => {
+                                  updateDraft({ aiProviderId: v, aiModelId: "" });
+                                }}
+                              >
+                                <Check
+                                  className={`mr-2 h-4 w-4 ${draft.aiProviderId === p.id ? "opacity-100" : "opacity-0"}`}
+                                />
+                                {p.name}
+                              </CommandItem>
+                            ))}
+                          </CommandGroup>
+                        </CommandList>
+                      </Command>
+                    </PopoverContent>
+                  </Popover>
+                </div>
+                <div className="space-y-2">
+                  <Label className="text-xs text-muted-foreground">模型</Label>
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <Button
+                        variant="outline"
+                        role="combobox"
+                        className="w-full justify-between font-normal"
+                        disabled={!draft.aiProviderId}
+                      >
+                        {draft.aiModelId
+                          ? getModelsForProvider(aiProviders, draft.aiProviderId).find((m) => m.id === draft.aiModelId)?.name || draft.aiModelId
+                          : "选择模型..."}
+                        <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-[280px] p-0">
+                      <Command>
+                        <CommandInput placeholder="搜索模型..." />
+                        <CommandList>
+                          <CommandEmpty>未找到模型</CommandEmpty>
+                          <CommandGroup>
+                            {getModelsForProvider(aiProviders, draft.aiProviderId).map((m) => (
+                              <CommandItem
+                                key={m.id}
+                                value={m.id}
+                                onSelect={(v) => updateDraft({ aiModelId: v })}
+                              >
+                                <Check
+                                  className={`mr-2 h-4 w-4 ${draft.aiModelId === m.id ? "opacity-100" : "opacity-0"}`}
+                                />
+                                {m.name}
+                              </CommandItem>
+                            ))}
+                          </CommandGroup>
+                        </CommandList>
+                      </Command>
+                    </PopoverContent>
+                  </Popover>
+                </div>
+              </div>
+            )}
+
+            {draft.aiInputMode === "custom" && (
+              <div className="space-y-3">
+                <div className="space-y-2">
+                  <Label className="text-xs text-muted-foreground">API 地址</Label>
+                  <Input
+                    placeholder="https://api.openai.com/v1"
+                    value={draft.aiBaseUrl}
+                    onChange={(e) => updateDraft({ aiBaseUrl: e.target.value })}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label className="text-xs text-muted-foreground">模型名称</Label>
+                  <Input
+                    placeholder="gpt-4o-mini"
+                    value={draft.aiModelId}
+                    onChange={(e) => updateDraft({ aiModelId: e.target.value })}
+                  />
+                </div>
+              </div>
+            )}
+
+            <div className="space-y-2">
+              <Label className="text-xs text-muted-foreground">API Key</Label>
+              <div className="relative">
+                <Input
+                  type={showApiKey ? "text" : "password"}
+                  placeholder="sk-..."
+                  value={draft.aiApiKey}
+                  onChange={(e) => updateDraft({ aiApiKey: e.target.value })}
+                  className="pr-10"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowApiKey(!showApiKey)}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  {showApiKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
+            </div>
+
+            {draft.aiInputMode === "registry" && draft.aiProviderId && (
+              <div className="space-y-2">
+                <Label className="text-xs text-muted-foreground">API 地址（自动填充）</Label>
+                <Input
+                  placeholder="自动填充"
+                  value={draft.aiBaseUrl}
+                  onChange={(e) => updateDraft({ aiBaseUrl: e.target.value })}
+                />
+                <p className="text-[11px] text-muted-foreground/70">
+                  可手动修改用于代理
+                </p>
+              </div>
+            )}
+          </div>
+        )}
 
         <div
           className={`rounded-xl border px-3 py-2 text-[11px] ${
@@ -744,7 +1024,11 @@ export function SettingsPage() {
           variant="outline"
           className="w-full h-10 rounded-xl font-semibold text-sm"
           onClick={handleTranslateTest}
-          disabled={busy === "translate_test" || !draft.deeplxUrl.trim()}
+          disabled={
+            busy === "translate_test" ||
+            (draft.translateProvider === "deeplx" && !draft.deeplxUrl.trim()) ||
+            (draft.translateProvider === "ai" && !draft.aiApiKey.trim())
+          }
         >
           {busy === "translate_test" ? (
             <span className="animate-pulse">测试中…</span>

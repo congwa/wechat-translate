@@ -4,7 +4,15 @@ import type { AppSettings } from "@/lib/types";
 
 export interface SettingsDraft {
   translateEnabled: boolean;
+  translateProvider: string;
   deeplxUrl: string;
+  // AI 翻译相关
+  aiInputMode: "registry" | "custom"; // registry = models.dev, custom = 自定义
+  aiProviderId: string;
+  aiModelId: string;
+  aiApiKey: string;
+  aiBaseUrl: string;
+  // 通用配置
   sourceLang: string;
   targetLang: string;
   translateTimeout: string;
@@ -34,9 +42,13 @@ function createDefaultSettings(): AppSettings {
       deeplx_url: "",
       source_lang: "auto",
       target_lang: "EN",
-      timeout_seconds: 8,
+      timeout_seconds: 15,
       max_concurrency: 3,
       max_requests_per_second: 3,
+      ai_provider_id: "",
+      ai_model_id: "",
+      ai_api_key: "",
+      ai_base_url: "",
     },
     display: {
       english_only: true,
@@ -51,9 +63,17 @@ function createDefaultSettings(): AppSettings {
 }
 
 export function draftFromSettings(settings: AppSettings): SettingsDraft {
+  // 判断是否为自定义模式：如果有 base_url 但没有 provider_id，或者 provider_id 不在已知列表中
+  const isCustomMode = settings.translate.ai_base_url && !settings.translate.ai_provider_id;
   return {
     translateEnabled: settings.translate.enabled,
+    translateProvider: settings.translate.provider,
     deeplxUrl: settings.translate.deeplx_url,
+    aiInputMode: isCustomMode ? "custom" : "registry",
+    aiProviderId: settings.translate.ai_provider_id || "",
+    aiModelId: settings.translate.ai_model_id || "",
+    aiApiKey: settings.translate.ai_api_key || "",
+    aiBaseUrl: settings.translate.ai_base_url || "",
     sourceLang: settings.translate.source_lang,
     targetLang: settings.translate.target_lang,
     translateTimeout: String(settings.translate.timeout_seconds),
@@ -79,10 +99,15 @@ export function settingsFromDraft(
     translate: {
       ...settings.translate,
       enabled: draft.translateEnabled,
+      provider: draft.translateProvider,
       deeplx_url: draft.deeplxUrl,
+      ai_provider_id: draft.aiProviderId,
+      ai_model_id: draft.aiModelId,
+      ai_api_key: draft.aiApiKey,
+      ai_base_url: draft.aiBaseUrl,
       source_lang: draft.sourceLang,
       target_lang: draft.targetLang,
-      timeout_seconds: parseFloat(draft.translateTimeout) || 8,
+      timeout_seconds: parseFloat(draft.translateTimeout) || 15,
       max_concurrency: Math.max(1, parseInt(draft.translateMaxConcurrency, 10) || 1),
       max_requests_per_second: Math.max(1, parseInt(draft.translateMaxRequestsPerSecond, 10) || 1),
     },
@@ -117,7 +142,12 @@ const SECTION_FIELDS: Record<SettingsSection, (keyof SettingsDraft)[]> = {
   listen: ["pollInterval", "useRightPanelDetails"],
   translate: [
     "translateEnabled",
+    "translateProvider",
     "deeplxUrl",
+    "aiProviderId",
+    "aiModelId",
+    "aiApiKey",
+    "aiBaseUrl",
     "sourceLang",
     "targetLang",
     "translateTimeout",

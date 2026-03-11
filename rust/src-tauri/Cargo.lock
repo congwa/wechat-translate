@@ -5088,6 +5088,7 @@ version = "0.1.2"
 dependencies = [
  "accessibility-sys",
  "anyhow",
+ "async-trait",
  "chrono",
  "core-foundation 0.10.1",
  "core-foundation-sys",

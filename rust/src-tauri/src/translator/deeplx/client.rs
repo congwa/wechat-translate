@@ -1,4 +1,6 @@
+use crate::translator::traits::Translator;
 use anyhow::{Context, Result};
+use async_trait::async_trait;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -40,17 +42,22 @@ impl DeepLXTranslator {
         }
     }
 
-    pub async fn translate(&self, text: &str) -> Result<String> {
-        self.translate_with_langs(text, &self.source_lang, &self.target_lang)
-            .await
+    pub fn source_lang(&self) -> &str {
+        &self.source_lang
     }
 
-    pub async fn translate_with_langs(
-        &self,
-        text: &str,
-        source_lang: &str,
-        target_lang: &str,
-    ) -> Result<String> {
+    pub fn target_lang(&self) -> &str {
+        &self.target_lang
+    }
+
+    pub fn base_url(&self) -> &str {
+        &self.base_url
+    }
+}
+
+#[async_trait]
+impl Translator for DeepLXTranslator {
+    async fn translate(&self, text: &str, source_lang: &str, target_lang: &str) -> Result<String> {
         if self.base_url.is_empty() {
             return Ok(text.to_string());
         }
@@ -101,19 +108,13 @@ impl DeepLXTranslator {
         Ok(translated)
     }
 
-    pub async fn check_health(&self) -> Result<()> {
-        self.translate("你好，世界").await.map(|_| ())
+    async fn check_health(&self) -> Result<()> {
+        self.translate("你好，世界", &self.source_lang, &self.target_lang)
+            .await
+            .map(|_| ())
     }
 
-    pub fn source_lang(&self) -> &str {
-        &self.source_lang
-    }
-
-    pub fn target_lang(&self) -> &str {
-        &self.target_lang
-    }
-
-    pub fn base_url(&self) -> &str {
-        &self.base_url
+    fn provider_id(&self) -> &str {
+        "deeplx"
     }
 }

@@ -2,7 +2,7 @@ use crate::config::{load_app_config, ConfigDir};
 use crate::db::MessageDb;
 use crate::sidebar_window::{SidebarWindowState, WindowMode};
 use crate::task_manager::TaskManager;
-use crate::translator::DeepLXTranslator;
+use crate::translator::{AiTranslator, DeepLXTranslator, Translator};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -12,7 +12,12 @@ pub async fn sidebar_start(
     manager: tauri::State<'_, TaskManager>,
     targets: Option<Vec<String>>,
     translate_enabled: Option<bool>,
+    provider: Option<String>,
     deeplx_url: Option<String>,
+    ai_provider_id: Option<String>,
+    ai_model_id: Option<String>,
+    ai_api_key: Option<String>,
+    ai_base_url: Option<String>,
     source_lang: Option<String>,
     target_lang: Option<String>,
     timeout_seconds: Option<f64>,
@@ -26,13 +31,23 @@ pub async fn sidebar_start(
         .await;
 
     let translate_enabled = translate_enabled.unwrap_or(config.translate.enabled);
+    let provider = provider.unwrap_or_else(|| config.translate.provider.clone());
     let deeplx_url = deeplx_url.unwrap_or_else(|| config.translate.deeplx_url.clone());
+    let ai_provider_id = ai_provider_id.unwrap_or_else(|| config.translate.ai_provider_id.clone());
+    let ai_model_id = ai_model_id.unwrap_or_else(|| config.translate.ai_model_id.clone());
+    let ai_api_key = ai_api_key.unwrap_or_else(|| config.translate.ai_api_key.clone());
+    let ai_base_url = ai_base_url.unwrap_or_else(|| config.translate.ai_base_url.clone());
 
     manager
         .enable_sidebar(
             targets.unwrap_or_default(),
             translate_enabled,
+            provider,
             deeplx_url,
+            ai_provider_id,
+            ai_model_id,
+            ai_api_key,
+            ai_base_url,
             source_lang.unwrap_or_else(|| config.translate.source_lang.clone()),
             target_lang.unwrap_or_else(|| config.translate.target_lang.clone()),
             timeout_seconds.unwrap_or(config.translate.timeout_seconds),
@@ -64,7 +79,12 @@ pub async fn live_start(
     manager: tauri::State<'_, TaskManager>,
     sidebar_state: tauri::State<'_, Arc<SidebarWindowState>>,
     translate_enabled: Option<bool>,
+    provider: Option<String>,
     deeplx_url: Option<String>,
+    ai_provider_id: Option<String>,
+    ai_model_id: Option<String>,
+    ai_api_key: Option<String>,
+    ai_base_url: Option<String>,
     source_lang: Option<String>,
     target_lang: Option<String>,
     interval_seconds: Option<f64>,
@@ -81,7 +101,12 @@ pub async fn live_start(
         .await;
 
     let translate_enabled = translate_enabled.unwrap_or(config.translate.enabled);
+    let provider = provider.unwrap_or_else(|| config.translate.provider.clone());
     let deeplx_url = deeplx_url.unwrap_or_else(|| config.translate.deeplx_url.clone());
+    let ai_provider_id = ai_provider_id.unwrap_or_else(|| config.translate.ai_provider_id.clone());
+    let ai_model_id = ai_model_id.unwrap_or_else(|| config.translate.ai_model_id.clone());
+    let ai_api_key = ai_api_key.unwrap_or_else(|| config.translate.ai_api_key.clone());
+    let ai_base_url = ai_base_url.unwrap_or_else(|| config.translate.ai_base_url.clone());
 
     let state = manager.get_task_state();
     if !state.monitoring {
@@ -96,7 +121,12 @@ pub async fn live_start(
         .enable_sidebar(
             vec![],
             translate_enabled,
+            provider,
             deeplx_url,
+            ai_provider_id,
+            ai_model_id,
+            ai_api_key,
+            ai_base_url,
             source_lang.unwrap_or_else(|| config.translate.source_lang.clone()),
             target_lang.unwrap_or_else(|| config.translate.target_lang.clone()),
             timeout_seconds.unwrap_or(config.translate.timeout_seconds),
@@ -196,23 +226,58 @@ pub async fn sidebar_snapshot_get(
 
 #[tauri::command]
 pub async fn translate_test(
-    deeplx_url: String,
+    provider: Option<String>,
+    deeplx_url: Option<String>,
+    ai_provider_id: Option<String>,
+    ai_model_id: Option<String>,
+    ai_api_key: Option<String>,
+    ai_base_url: Option<String>,
     source_lang: Option<String>,
     target_lang: Option<String>,
     timeout_seconds: Option<f64>,
 ) -> Result<serde_json::Value, String> {
-    if deeplx_url.is_empty() {
-        return Err("DeepLX 地址不能为空".to_string());
-    }
+    let source = source_lang.unwrap_or_else(|| "auto".to_string());
+    let target = target_lang.unwrap_or_else(|| "EN".to_string());
+    let timeout = timeout_seconds.unwrap_or(8.0);
+    let provider = provider.unwrap_or_else(|| "deeplx".to_string());
 
-    let translator = DeepLXTranslator::new(
-        &deeplx_url,
-        &source_lang.unwrap_or_else(|| "auto".to_string()),
-        &target_lang.unwrap_or_else(|| "EN".to_string()),
-        timeout_seconds.unwrap_or(8.0),
-    );
+    let translator: Box<dyn Translator + Send + Sync> = match provider.as_str() {
+        "ai" => {
+            let api_key = ai_api_key.unwrap_or_default();
+            let base_url = ai_base_url.unwrap_or_default();
+            let model_id = ai_model_id.unwrap_or_default();
+            let provider_id = ai_provider_id.unwrap_or_default();
 
-    match translator.translate("你好，世界").await {
+            if api_key.is_empty() {
+                return Err("API Key 不能为空".to_string());
+            }
+            if model_id.is_empty() {
+                return Err("请选择模型".to_string());
+            }
+
+            Box::new(
+                AiTranslator::new(
+                    &provider_id,
+                    &model_id,
+                    &api_key,
+                    if base_url.is_empty() { None } else { Some(&base_url) },
+                    &source,
+                    &target,
+                    timeout,
+                )
+                .map_err(|e| e.to_string())?,
+            )
+        }
+        _ => {
+            let url = deeplx_url.unwrap_or_default();
+            if url.is_empty() {
+                return Err("DeepLX 地址不能为空".to_string());
+            }
+            Box::new(DeepLXTranslator::new(&url, &source, &target, timeout))
+        }
+    };
+
+    match translator.translate("你好，世界", &source, &target).await {
         Ok(result) => Ok(serde_json::json!({ "ok": true, "data": result })),
         Err(e) => Err(format!("{}", e)),
     }

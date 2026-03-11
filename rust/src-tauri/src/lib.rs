@@ -492,7 +492,12 @@ pub fn run() {
                                     .enable_sidebar(
                                         vec![],
                                         config.translate.enabled,
+                                        config.translate.provider.clone(),
                                         config.translate.deeplx_url.clone(),
+                                        config.translate.ai_provider_id.clone(),
+                                        config.translate.ai_model_id.clone(),
+                                        config.translate.ai_api_key.clone(),
+                                        config.translate.ai_base_url.clone(),
                                         config.translate.source_lang.clone(),
                                         config.translate.target_lang.clone(),
                                         config.translate.timeout_seconds,

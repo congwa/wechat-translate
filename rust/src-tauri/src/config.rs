@@ -65,6 +65,15 @@ pub struct TranslateConfig {
     pub max_concurrency: usize,
     #[serde(default = "default_max_requests_per_second")]
     pub max_requests_per_second: usize,
+    // AI 翻译相关字段
+    #[serde(default)]
+    pub ai_provider_id: String,
+    #[serde(default)]
+    pub ai_model_id: String,
+    #[serde(default)]
+    pub ai_api_key: String,
+    #[serde(default)]
+    pub ai_base_url: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -182,6 +191,10 @@ impl Default for TranslateConfig {
             timeout_seconds: default_timeout(),
             max_concurrency: default_max_concurrency(),
             max_requests_per_second: default_max_requests_per_second(),
+            ai_provider_id: String::new(),
+            ai_model_id: String::new(),
+            ai_api_key: String::new(),
+            ai_base_url: String::new(),
         }
     }
 }

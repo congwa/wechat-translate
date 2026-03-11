@@ -13,6 +13,7 @@ const defaultTranslatorStatus: TranslatorServiceStatus = {
   checking: false,
   healthy: null,
   last_error: null,
+  provider: "",
 };
 
 interface RuntimeStoreState {

@@ -1,35 +1,12 @@
-use crate::translator::client::DeepLXTranslator;
+use crate::translator::ai::AiTranslator;
+use crate::translator::config::{TranslateConfig, TranslateProviderConfig};
+use crate::translator::deeplx::DeepLXTranslator;
 use crate::translator::limiter::TranslationLimiter;
+use crate::translator::traits::Translator;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::RwLock;
-
-/// 翻译配置
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TranslateConfig {
-    pub enabled: bool,
-    pub deeplx_url: String,
-    pub source_lang: String,
-    pub target_lang: String,
-    pub timeout_seconds: f64,
-    pub max_concurrency: usize,
-    pub max_requests_per_second: usize,
-}
-
-impl Default for TranslateConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            deeplx_url: String::new(),
-            source_lang: "en".to_string(),
-            target_lang: "zh".to_string(),
-            timeout_seconds: 8.0,
-            max_concurrency: 3,
-            max_requests_per_second: 10,
-        }
-    }
-}
 
 /// 翻译服务状态
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -39,6 +16,8 @@ pub struct TranslatorServiceStatus {
     pub checking: bool,
     pub healthy: Option<bool>,
     pub last_error: Option<String>,
+    #[serde(default)]
+    pub provider: String,
 }
 
 impl TranslatorServiceStatus {
@@ -49,40 +28,44 @@ impl TranslatorServiceStatus {
             checking: false,
             healthy: None,
             last_error: None,
+            provider: String::new(),
         }
     }
 
-    pub fn unconfigured() -> Self {
+    pub fn unconfigured(provider: &str) -> Self {
         Self {
             enabled: true,
             configured: false,
             checking: false,
             healthy: None,
             last_error: None,
+            provider: provider.to_string(),
         }
     }
 
-    pub fn checking() -> Self {
+    pub fn checking(provider: &str) -> Self {
         Self {
             enabled: true,
             configured: true,
             checking: true,
             healthy: None,
             last_error: None,
+            provider: provider.to_string(),
         }
     }
 
-    pub fn healthy() -> Self {
+    pub fn healthy(provider: &str) -> Self {
         Self {
             enabled: true,
             configured: true,
             checking: false,
             healthy: Some(true),
             last_error: None,
+            provider: provider.to_string(),
         }
     }
 
-    pub fn error(message: impl Into<String>) -> Self {
+    pub fn error(provider: &str, message: impl Into<String>) -> Self {
         let msg = message.into();
         let short_msg = if msg.len() > 100 {
             format!("{}...", &msg[..100])
@@ -95,6 +78,7 @@ impl TranslatorServiceStatus {
             checking: false,
             healthy: Some(false),
             last_error: Some(short_msg),
+            provider: provider.to_string(),
         }
     }
 
@@ -119,14 +103,15 @@ impl TranslatorServiceStatus {
             "checking": self.checking,
             "healthy": self.healthy,
             "last_error": self.last_error,
+            "provider": self.provider,
         })
     }
 }
 
 /// 全局翻译服务
-/// 统一管理 DeepLX 客户端和限流器
+/// 统一管理翻译器和限流器，支持动态切换渠道
 pub struct TranslationService {
-    translator: RwLock<Option<Arc<DeepLXTranslator>>>,
+    translator: RwLock<Option<Arc<dyn Translator>>>,
     limiter: RwLock<Option<Arc<TranslationLimiter>>>,
     config: RwLock<TranslateConfig>,
     status: RwLock<TranslatorServiceStatus>,
@@ -142,26 +127,58 @@ impl TranslationService {
         }
     }
 
+    /// 根据配置创建对应的翻译器实例
+    fn create_translator(config: &TranslateConfig) -> Result<Arc<dyn Translator>> {
+        match &config.provider_config {
+            TranslateProviderConfig::Deeplx { url } => {
+                Ok(Arc::new(DeepLXTranslator::new(
+                    url,
+                    &config.source_lang,
+                    &config.target_lang,
+                    config.timeout_seconds,
+                )))
+            }
+            TranslateProviderConfig::Ai {
+                provider_id,
+                model_id,
+                api_key,
+                base_url,
+            } => {
+                Ok(Arc::new(AiTranslator::new(
+                    provider_id,
+                    model_id,
+                    api_key,
+                    base_url.as_deref(),
+                    &config.source_lang,
+                    &config.target_lang,
+                    config.timeout_seconds,
+                )?))
+            }
+        }
+    }
+
     /// 更新翻译配置
     pub async fn update_config(&self, config: TranslateConfig) -> TranslatorServiceStatus {
-        let deeplx_url = config.deeplx_url.trim();
+        let provider_name = config.provider_name().to_string();
 
         let (translator, limiter, status) = if !config.enabled {
             (None, None, TranslatorServiceStatus::disabled())
-        } else if deeplx_url.is_empty() {
-            (None, None, TranslatorServiceStatus::unconfigured())
+        } else if !config.is_configured() {
+            (None, None, TranslatorServiceStatus::unconfigured(&provider_name))
         } else {
-            let translator = Arc::new(DeepLXTranslator::new(
-                deeplx_url,
-                &config.source_lang,
-                &config.target_lang,
-                config.timeout_seconds,
-            ));
-            let limiter = Arc::new(TranslationLimiter::new(
-                config.max_concurrency,
-                config.max_requests_per_second,
-            ));
-            (Some(translator), Some(limiter), TranslatorServiceStatus::checking())
+            match Self::create_translator(&config) {
+                Ok(t) => {
+                    let limiter = Arc::new(TranslationLimiter::new(
+                        config.max_concurrency,
+                        config.max_requests_per_second,
+                    ));
+                    (Some(t), Some(limiter), TranslatorServiceStatus::checking(&provider_name))
+                }
+                Err(e) => {
+                    log::error!("Failed to create translator: {}", e);
+                    (None, None, TranslatorServiceStatus::error(&provider_name, e.to_string()))
+                }
+            }
         };
 
         {
@@ -207,24 +224,9 @@ impl TranslationService {
 
     /// 翻译文本（使用默认语言配置）
     pub async fn translate(&self, text: &str) -> Result<String> {
-        let translator = {
-            let guard = self.translator.read().await;
-            guard.clone()
-        };
-
-        let translator = translator.ok_or_else(|| anyhow::anyhow!("翻译服务未配置"))?;
-
-        let limiter = {
-            let guard = self.limiter.read().await;
-            guard.clone()
-        };
-
-        if let Some(limiter) = limiter {
-            let _permit = limiter.acquire().await;
-            translator.translate(text).await
-        } else {
-            translator.translate(text).await
-        }
+        let config = self.config.read().await.clone();
+        self.translate_with_langs(text, &config.source_lang, &config.target_lang)
+            .await
     }
 
     /// 翻译文本（指定语言）
@@ -248,9 +250,9 @@ impl TranslationService {
 
         if let Some(limiter) = limiter {
             let _permit = limiter.acquire().await;
-            translator.translate_with_langs(text, source_lang, target_lang).await
+            translator.translate(text, source_lang, target_lang).await
         } else {
-            translator.translate_with_langs(text, source_lang, target_lang).await
+            translator.translate(text, source_lang, target_lang).await
         }
     }
 
@@ -276,14 +278,21 @@ impl TranslationService {
         }
     }
 
-    /// 获取翻译器（供需要直接访问的场景）
-    pub async fn get_translator(&self) -> Option<Arc<DeepLXTranslator>> {
-        self.translator.read().await.clone()
-    }
-
     /// 获取限流器（供需要直接访问的场景）
     pub async fn get_limiter(&self) -> Option<Arc<TranslationLimiter>> {
         self.limiter.read().await.clone()
+    }
+
+    /// 同时获取翻译器和限流器（用于 sidebar）
+    pub async fn get_translator_and_limiter(
+        &self,
+    ) -> (
+        Option<Arc<dyn Translator>>,
+        Option<Arc<TranslationLimiter>>,
+    ) {
+        let translator = self.translator.read().await.clone();
+        let limiter = self.limiter.read().await.clone();
+        (translator, limiter)
     }
 }
 
