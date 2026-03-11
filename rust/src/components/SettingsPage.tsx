@@ -158,6 +158,7 @@ export function SettingsPage() {
   const [configValid, setConfigValid] = useState(true);
   const [configDirty, setConfigDirty] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
+  const [translateTestError, setTranslateTestError] = useState<string | null>(null);
 
   const lastLoadedRef = useRef("");
   const validateTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -354,6 +355,7 @@ export function SettingsPage() {
 
   async function handleTranslateTest() {
     setBusy("translate_test");
+    setTranslateTestError(null);
     try {
       const resp = await api.translateTest({
         deeplxUrl: draft.deeplxUrl.trim(),
@@ -372,16 +374,17 @@ export function SettingsPage() {
       }
       showToast(`测试成功: ${resp.data}`, true);
     } catch (e) {
+      const errorMsg = `${e}`;
       if (canSyncTranslateTestResult && draft.translateEnabled) {
         setTranslatorStatus({
           enabled: true,
           configured: draft.deeplxUrl.trim() !== "",
           checking: false,
           healthy: false,
-          last_error: `${e}`,
+          last_error: errorMsg,
         });
       }
-      showToast(`测试失败: ${e}`, false);
+      setTranslateTestError(errorMsg);
     } finally {
       setBusy(null);
     }
@@ -752,6 +755,13 @@ export function SettingsPage() {
             </>
           )}
         </Button>
+
+        {translateTestError && (
+          <div className="mt-3 p-3 rounded-xl bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800/50">
+            <p className="text-xs font-medium text-red-600 dark:text-red-400 mb-1">连接失败</p>
+            <p className="text-[11px] text-red-500 dark:text-red-400/80 break-all">{translateTestError}</p>
+          </div>
+        )}
       </SettingsSection>
 
       <section className="glass-card rounded-2xl p-6 shadow-sm space-y-5 border border-amber-200/50 dark:border-amber-700/30">
