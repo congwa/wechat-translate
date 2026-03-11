@@ -27,6 +27,7 @@ import {
 } from "@/components/ui/popover";
 import {
   Monitor,
+  MonitorPlay,
   Languages,
   Headphones,
   ChevronDown,
@@ -649,7 +650,19 @@ export function SettingsPage() {
           )}
         </div>
 
-        {sidebarWindowMode === "independent" && (
+      </SettingsSection>
+
+      {sidebarWindowMode === "independent" && (
+        <SettingsSection
+          icon={<MonitorPlay className="w-4 h-4 text-sky-600" />}
+          iconBg="bg-sky-50"
+          title="独立浮窗设置"
+          description="独立置顶模式的浮窗参数"
+          isDirty={sectionDirty.display}
+          isSaving={busy === "section_display"}
+          onApply={() => handleApplySection("display")}
+          onReset={() => handleResetSection("display")}
+        >
           <div className="space-y-2">
             <Label className="text-xs text-muted-foreground">浮窗显示消息数</Label>
             <div className="flex items-center gap-2">
@@ -670,11 +683,9 @@ export function SettingsPage() {
               </div>
               <span className="text-xs text-muted-foreground">条</span>
             </div>
-            <p className="text-[11px] text-muted-foreground">独立模式下浮窗显示的消息数量，重新开启浮窗后生效</p>
+            <p className="text-[11px] text-muted-foreground">浮窗显示的消息数量，重新开启浮窗后生效</p>
           </div>
-        )}
 
-        {sidebarWindowMode === "independent" && (
           <div className="flex items-center justify-between">
             <div className="space-y-0.5">
               <Label className="text-sm font-medium">隐身模式</Label>
@@ -687,8 +698,8 @@ export function SettingsPage() {
               onCheckedChange={(checked) => updateDraft({ ghostMode: checked })}
             />
           </div>
-        )}
-      </SettingsSection>
+        </SettingsSection>
+      )}
 
       <SettingsSection
         icon={<Languages className="w-4 h-4 text-violet-600" />}
