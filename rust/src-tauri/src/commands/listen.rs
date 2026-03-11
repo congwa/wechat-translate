@@ -32,7 +32,7 @@ pub async fn listen_stop(
 pub async fn get_task_status(
     manager: tauri::State<'_, TaskManager>,
 ) -> Result<serde_json::Value, String> {
-    let status = manager.service_status();
+    let status = manager.service_status().await;
     Ok(serde_json::json!({ "ok": true, "data": status }))
 }
 
@@ -40,6 +40,6 @@ pub async fn get_task_status(
 pub async fn health_check(
     manager: tauri::State<'_, TaskManager>,
 ) -> Result<serde_json::Value, String> {
-    let status = manager.service_status();
+    let status = manager.service_status().await;
     Ok(serde_json::json!({ "status": "ok", "service_status": status }))
 }

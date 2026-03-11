@@ -41,10 +41,16 @@ impl DeepLXTranslator {
     }
 
     pub async fn translate(&self, text: &str) -> Result<String> {
-        self.translate_with_langs(text, &self.source_lang, &self.target_lang).await
+        self.translate_with_langs(text, &self.source_lang, &self.target_lang)
+            .await
     }
 
-    pub async fn translate_with_langs(&self, text: &str, source_lang: &str, target_lang: &str) -> Result<String> {
+    pub async fn translate_with_langs(
+        &self,
+        text: &str,
+        source_lang: &str,
+        target_lang: &str,
+    ) -> Result<String> {
         if self.base_url.is_empty() {
             return Ok(text.to_string());
         }
@@ -60,7 +66,10 @@ impl DeepLXTranslator {
             .post(&self.base_url)
             .header("Content-Type", "application/json; charset=utf-8")
             .header("Accept", "application/json, text/plain, */*")
-            .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36");
+            .header(
+                "User-Agent",
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            );
 
         if self.base_url.contains("deeplx.org") {
             request = request
@@ -102,5 +111,9 @@ impl DeepLXTranslator {
 
     pub fn target_lang(&self) -> &str {
         &self.target_lang
+    }
+
+    pub fn base_url(&self) -> &str {
+        &self.base_url
     }
 }

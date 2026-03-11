@@ -5,16 +5,19 @@ use crate::config::AppConfig;
 use crate::db::MessageDb;
 use crate::events::{EventStore, EventType};
 use crate::image_cache::{self, WeChatImageCache};
-use crate::translator::DeepLXTranslator;
+use crate::translator::{
+    DeepLXTranslator, TranslateConfig, TranslationLimiter, TranslationService,
+    TranslatorServiceStatus,
+};
 use anyhow::Result;
 use log::debug;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager};
-use tokio::sync::{watch, Mutex, OwnedSemaphorePermit, Semaphore};
+use tokio::sync::{watch, Mutex};
 use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -23,90 +26,6 @@ pub struct TaskState {
     pub sidebar: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct TranslatorServiceStatus {
-    pub enabled: bool,
-    pub configured: bool,
-    pub checking: bool,
-    pub healthy: Option<bool>,
-    pub last_error: Option<String>,
-}
-
-impl TranslatorServiceStatus {
-    fn disabled() -> Self {
-        Self {
-            enabled: false,
-            configured: false,
-            checking: false,
-            healthy: None,
-            last_error: None,
-        }
-    }
-
-    fn unconfigured() -> Self {
-        Self {
-            enabled: true,
-            configured: false,
-            checking: false,
-            healthy: None,
-            last_error: None,
-        }
-    }
-
-    fn checking() -> Self {
-        Self {
-            enabled: true,
-            configured: true,
-            checking: true,
-            healthy: None,
-            last_error: None,
-        }
-    }
-
-    fn healthy() -> Self {
-        Self {
-            enabled: true,
-            configured: true,
-            checking: false,
-            healthy: Some(true),
-            last_error: None,
-        }
-    }
-
-    fn error(message: impl Into<String>) -> Self {
-        Self {
-            enabled: true,
-            configured: true,
-            checking: false,
-            healthy: Some(false),
-            last_error: Some(short_error_text(&message.into())),
-        }
-    }
-
-    fn menu_text(&self) -> &'static str {
-        if !self.enabled {
-            "○ 翻译未启用"
-        } else if !self.configured {
-            "○ 翻译未配置"
-        } else if self.checking {
-            "◐ 翻译检测中"
-        } else if self.healthy == Some(true) {
-            "● 翻译服务可用"
-        } else {
-            "⚠ 翻译服务异常"
-        }
-    }
-
-    fn as_json(&self) -> serde_json::Value {
-        serde_json::json!({
-            "enabled": self.enabled,
-            "configured": self.configured,
-            "checking": self.checking,
-            "healthy": self.healthy,
-            "last_error": self.last_error,
-        })
-    }
-}
 
 struct SidebarConfig {
     translator: Option<Arc<DeepLXTranslator>>,
@@ -211,64 +130,6 @@ struct MonitorConfig {
     use_right_panel_details: bool,
 }
 
-struct TranslationLimiter {
-    semaphore: Arc<Semaphore>,
-    recent_requests: Mutex<VecDeque<Instant>>,
-    max_requests_per_second: usize,
-}
-
-impl TranslationLimiter {
-    fn new(max_concurrency: usize, max_requests_per_second: usize) -> Self {
-        Self {
-            semaphore: Arc::new(Semaphore::new(max_concurrency.max(1))),
-            recent_requests: Mutex::new(VecDeque::new()),
-            max_requests_per_second: max_requests_per_second.max(1),
-        }
-    }
-
-    async fn acquire(&self) -> OwnedSemaphorePermit {
-        self.wait_for_window_slot().await;
-        self.semaphore
-            .clone()
-            .acquire_owned()
-            .await
-            .expect("translation semaphore closed")
-    }
-
-    async fn wait_for_window_slot(&self) {
-        let window = Duration::from_secs(1);
-        loop {
-            let wait_duration = {
-                let mut requests = self.recent_requests.lock().await;
-                let now = Instant::now();
-
-                while let Some(oldest) = requests.front() {
-                    if now.duration_since(*oldest) >= window {
-                        requests.pop_front();
-                    } else {
-                        break;
-                    }
-                }
-
-                if requests.len() < self.max_requests_per_second {
-                    requests.push_back(now);
-                    None
-                } else {
-                    requests
-                        .front()
-                        .map(|oldest| window.saturating_sub(now.duration_since(*oldest)))
-                }
-            };
-
-            if let Some(delay) = wait_duration {
-                tokio::time::sleep(delay).await;
-                continue;
-            }
-
-            break;
-        }
-    }
-}
 
 #[derive(Clone)]
 pub struct TaskManager {
@@ -276,6 +137,7 @@ pub struct TaskManager {
     events: Arc<EventStore>,
     db: Arc<MessageDb>,
     image_cache: Arc<std::sync::Mutex<WeChatImageCache>>,
+    translation_service: Arc<TranslationService>,
     monitor_token: Arc<Mutex<Option<CancellationToken>>>,
     monitoring_active: Arc<AtomicBool>,
     monitor_config: Arc<Mutex<MonitorConfig>>,
@@ -283,7 +145,6 @@ pub struct TaskManager {
     sidebar_enabled: Arc<AtomicBool>,
     sidebar_config: Arc<Mutex<SidebarConfig>>,
     sidebar_runtime: Arc<SidebarRuntime>,
-    translator_status: Arc<std::sync::Mutex<TranslatorServiceStatus>>,
     translator_generation: Arc<AtomicU64>,
     app_handle: Arc<Mutex<Option<AppHandle>>>,
 }
@@ -294,12 +155,14 @@ impl TaskManager {
         events: Arc<EventStore>,
         db: Arc<MessageDb>,
         image_cache: Arc<std::sync::Mutex<WeChatImageCache>>,
+        translation_service: Arc<TranslationService>,
     ) -> Self {
         Self {
             adapter,
             events,
             db,
             image_cache,
+            translation_service,
             monitor_token: Arc::new(Mutex::new(None)),
             monitoring_active: Arc::new(AtomicBool::new(false)),
             monitor_config: Arc::new(Mutex::new(MonitorConfig {
@@ -314,7 +177,6 @@ impl TaskManager {
                 image_capture: false,
             })),
             sidebar_runtime: Arc::new(SidebarRuntime::new()),
-            translator_status: Arc::new(std::sync::Mutex::new(TranslatorServiceStatus::disabled())),
             translator_generation: Arc::new(AtomicU64::new(0)),
             app_handle: Arc::new(Mutex::new(None)),
         }
@@ -343,8 +205,8 @@ impl TaskManager {
         }
     }
 
-    pub fn get_translator_status(&self) -> TranslatorServiceStatus {
-        self.translator_status.lock().unwrap().clone()
+    pub async fn get_translator_status(&self) -> TranslatorServiceStatus {
+        self.translation_service.get_status().await
     }
 
     pub fn get_sidebar_runtime(&self) -> &Arc<SidebarRuntime> {
@@ -359,11 +221,17 @@ impl TaskManager {
 
     /// 获取当前配置的翻译器
     pub async fn get_translator(&self) -> Option<Arc<DeepLXTranslator>> {
-        self.sidebar_config.lock().await.translator.clone()
+        self.translation_service.get_translator().await
     }
 
-    pub fn service_status(&self) -> serde_json::Value {
+    /// 获取翻译服务
+    pub fn get_translation_service(&self) -> Arc<TranslationService> {
+        self.translation_service.clone()
+    }
+
+    pub async fn service_status(&self) -> serde_json::Value {
         let state = self.get_task_state();
+        let translator_status = self.get_translator_status().await;
         serde_json::json!({
             "adapter": {
                 "platform": self.adapter.is_supported().then_some("macos").unwrap_or("unsupported"),
@@ -371,7 +239,7 @@ impl TaskManager {
                 "reason": self.adapter.support_reason(),
             },
             "tasks": state,
-            "translator": self.get_translator_status().as_json(),
+            "translator": translator_status.as_json(),
         })
     }
 
@@ -401,59 +269,17 @@ impl TaskManager {
         self.translator_generation.fetch_add(1, Ordering::Relaxed) + 1
     }
 
-    fn build_sidebar_translation_runtime(
-        translate_enabled: bool,
-        deeplx_url: &str,
-        source_lang: &str,
-        target_lang: &str,
-        timeout_seconds: f64,
-        max_concurrency: usize,
-        max_requests_per_second: usize,
-    ) -> (
-        Option<Arc<DeepLXTranslator>>,
-        Option<Arc<TranslationLimiter>>,
-        TranslatorServiceStatus,
-    ) {
-        let deeplx_url = deeplx_url.trim();
-        if !translate_enabled {
-            return (None, None, TranslatorServiceStatus::disabled());
-        }
-        if deeplx_url.is_empty() {
-            return (None, None, TranslatorServiceStatus::unconfigured());
-        }
-
-        (
-            Some(Arc::new(DeepLXTranslator::new(
-                deeplx_url,
-                source_lang,
-                target_lang,
-                timeout_seconds,
-            ))),
-            Some(Arc::new(TranslationLimiter::new(
-                max_concurrency,
-                max_requests_per_second,
-            ))),
-            TranslatorServiceStatus::checking(),
-        )
-    }
-
-    fn spawn_translator_health_check(
-        &self,
-        translator_generation: u64,
-        translator: Option<Arc<DeepLXTranslator>>,
-    ) {
-        if let Some(translator) = translator {
-            let manager = self.clone();
-            tokio::spawn(async move {
-                let next_status = match translator.check_health().await {
-                    Ok(_) => TranslatorServiceStatus::healthy(),
-                    Err(error) => TranslatorServiceStatus::error(error.to_string()),
-                };
-                manager
-                    .set_translator_status_if_current(translator_generation, next_status)
-                    .await;
-            });
-        }
+    fn spawn_translator_health_check(&self, translator_generation: u64) {
+        let manager = self.clone();
+        tokio::spawn(async move {
+            let next_status = match manager.translation_service.check_health().await {
+                Ok(_) => TranslatorServiceStatus::healthy(),
+                Err(error) => TranslatorServiceStatus::error(error.to_string()),
+            };
+            manager
+                .set_translator_status_if_current(translator_generation, next_status)
+                .await;
+        });
     }
 
     pub async fn apply_runtime_config(&self, config: &AppConfig) {
@@ -461,24 +287,26 @@ impl TaskManager {
             .await;
 
         let translator_generation = self.next_translator_generation();
-        let (translator, limiter, translator_status) = Self::build_sidebar_translation_runtime(
-            config.translate.enabled,
-            &config.translate.deeplx_url,
-            &config.translate.source_lang,
-            &config.translate.target_lang,
-            config.translate.timeout_seconds,
-            config.translate.max_concurrency,
-            config.translate.max_requests_per_second,
-        );
-        let translator_for_check = translator.clone();
 
+        // 更新全局翻译服务配置
+        let translate_config = TranslateConfig {
+            enabled: config.translate.enabled,
+            deeplx_url: config.translate.deeplx_url.clone(),
+            source_lang: config.translate.source_lang.clone(),
+            target_lang: config.translate.target_lang.clone(),
+            timeout_seconds: config.translate.timeout_seconds,
+            max_concurrency: config.translate.max_concurrency,
+            max_requests_per_second: config.translate.max_requests_per_second,
+        };
+
+        let translator_status = self.translation_service.update_config(translate_config).await;
+
+        // 更新侧边栏配置（使用全局翻译服务的 translator 和 limiter）
         if self.sidebar_enabled.load(Ordering::Relaxed) {
             let mut sidebar_config = self.sidebar_config.lock().await;
-            sidebar_config.translator = translator;
-            sidebar_config.limiter = limiter;
+            sidebar_config.translator = self.translation_service.get_translator().await;
+            sidebar_config.limiter = self.translation_service.get_limiter().await;
         }
-
-        self.set_translator_status(translator_status.clone()).await;
 
         if let Ok(app) = self.get_app_handle().await {
             let state = self.get_task_state();
@@ -486,22 +314,9 @@ impl TaskManager {
             app_state::emit_runtime_updated(&app, self);
         }
 
-        self.spawn_translator_health_check(translator_generation, translator_for_check);
-    }
-
-    async fn set_translator_status(&self, status: TranslatorServiceStatus) {
-        {
-            let mut current = self.translator_status.lock().unwrap();
-            *current = status.clone();
-        }
-
-        let task_state = self.get_task_state();
-        self.publish_task_state_event("translator", status.enabled, &task_state, &status)
-            .await;
-
-        if let Ok(app) = self.get_app_handle().await {
-            update_tray_menu(&app, &task_state, &status);
-            app_state::emit_runtime_updated(&app, self);
+        // 如果翻译服务已配置，启动健康检查
+        if translator_status.configured {
+            self.spawn_translator_health_check(translator_generation);
         }
     }
 
@@ -514,13 +329,7 @@ impl TaskManager {
             return;
         }
 
-        {
-            let mut current = self.translator_status.lock().unwrap();
-            if self.translator_generation.load(Ordering::Relaxed) != generation {
-                return;
-            }
-            *current = status.clone();
-        }
+        self.translation_service.set_status(status.clone()).await;
 
         if self.translator_generation.load(Ordering::Relaxed) != generation {
             return;
@@ -554,7 +363,7 @@ impl TaskManager {
 
         let app = self.get_app_handle().await?;
         let state = self.get_task_state();
-        let translator_status = self.get_translator_status();
+        let translator_status = self.get_translator_status().await;
         self.publish_task_state_event("monitoring", true, &state, &translator_status)
             .await;
         update_tray_menu(&app, &state, &translator_status);
@@ -1096,12 +905,10 @@ impl TaskManager {
 
             if !next_state.sidebar {
                 manager.next_translator_generation();
-                manager
-                    .set_translator_status(TranslatorServiceStatus::disabled())
-                    .await;
+                manager.translation_service.set_status(TranslatorServiceStatus::disabled()).await;
             }
 
-            let translator_status = manager.get_translator_status();
+            let translator_status = manager.get_translator_status().await;
             manager
                 .publish_task_state_event("monitoring", false, &next_state, &translator_status)
                 .await;
@@ -1133,30 +940,31 @@ impl TaskManager {
         image_capture: bool,
     ) -> Result<()> {
         let translator_generation = self.next_translator_generation();
-        let (translator, limiter, translator_status) = Self::build_sidebar_translation_runtime(
-            translate_enabled,
-            &deeplx_url,
-            &source_lang,
-            &target_lang,
+
+        // 更新全局翻译服务配置
+        let translate_config = TranslateConfig {
+            enabled: translate_enabled,
+            deeplx_url,
+            source_lang,
+            target_lang,
             timeout_seconds,
             max_concurrency,
             max_requests_per_second,
-        );
-        let translator_for_check = translator.clone();
+        };
+
+        let translator_status = self.translation_service.update_config(translate_config).await;
 
         let target_set: HashSet<String> = targets.into_iter().filter(|t| !t.is_empty()).collect();
 
         {
             let mut config = self.sidebar_config.lock().await;
-            config.translator = translator;
-            config.limiter = limiter;
+            config.translator = self.translation_service.get_translator().await;
+            config.limiter = self.translation_service.get_limiter().await;
             config.target_set = target_set;
             config.image_capture = image_capture;
         }
 
         self.sidebar_enabled.store(true, Ordering::Relaxed);
-
-        self.set_translator_status(translator_status.clone()).await;
 
         let app = self.get_app_handle().await?;
         let state = self.get_task_state();
@@ -1165,7 +973,10 @@ impl TaskManager {
         update_tray_menu(&app, &state, &translator_status);
         app_state::emit_runtime_updated(&app, self);
 
-        self.spawn_translator_health_check(translator_generation, translator_for_check);
+        // 如果翻译服务已配置，启动健康检查
+        if translator_status.configured {
+            self.spawn_translator_health_check(translator_generation);
+        }
 
         Ok(())
     }
@@ -1184,12 +995,11 @@ impl TaskManager {
 
         self.sidebar_runtime.clear();
 
-        self.set_translator_status(TranslatorServiceStatus::disabled())
-            .await;
+        self.translation_service.set_status(TranslatorServiceStatus::disabled()).await;
 
         let app = self.get_app_handle().await?;
         let state = self.get_task_state();
-        let translator_status = self.get_translator_status();
+        let translator_status = self.get_translator_status().await;
         self.publish_task_state_event("sidebar", false, &state, &translator_status)
             .await;
         update_tray_menu(&app, &state, &translator_status);

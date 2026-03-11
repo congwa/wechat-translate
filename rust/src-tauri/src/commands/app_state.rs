@@ -22,7 +22,7 @@ pub async fn save_settings(
     app_state::emit_settings_updated(app, &settings);
     app_state::emit_runtime_updated(app, manager);
 
-    let snapshot = app_state::snapshot(settings, manager, close_to_tray);
+    let snapshot = app_state::snapshot(settings, manager, close_to_tray).await;
     Ok(serde_json::json!({
         "ok": true,
         "message": "settings saved",
@@ -37,7 +37,7 @@ pub async fn app_state_get(
     manager: tauri::State<'_, TaskManager>,
     close_to_tray: tauri::State<'_, CloseToTray>,
 ) -> Result<serde_json::Value, String> {
-    let snapshot = app_state::load_snapshot(&config_dir, &manager, &close_to_tray)?;
+    let snapshot = app_state::load_snapshot(&config_dir, &manager, &close_to_tray).await?;
     Ok(serde_json::json!({ "ok": true, "data": snapshot }))
 }
 

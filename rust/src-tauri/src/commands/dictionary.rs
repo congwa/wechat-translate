@@ -2,6 +2,7 @@ use crate::dictionary::api::DictionaryApiClient;
 use crate::dictionary::db::hash_text;
 use crate::dictionary::{DictionaryDb, FavoriteWord, ReviewSession, ReviewStats, TranslationWorker, WordEntry};
 use crate::task_manager::TaskManager;
+use crate::translator::TranslationService;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tauri::AppHandle;
@@ -11,7 +12,7 @@ use tauri::AppHandle;
 pub async fn word_lookup(
     app_handle: AppHandle,
     dict_db: tauri::State<'_, Arc<DictionaryDb>>,
-    manager: tauri::State<'_, TaskManager>,
+    translation_service: tauri::State<'_, Arc<TranslationService>>,
     word: String,
 ) -> Result<WordEntry, String> {
     let word = word.to_lowercase().trim().to_string();
@@ -26,7 +27,7 @@ pub async fn word_lookup(
             return Ok(cached);
         }
         // 否则启动异步翻译并返回当前数据
-        spawn_translation_task(&app_handle, &dict_db, &manager, &word, cached.clone()).await;
+        spawn_translation_task(&app_handle, &dict_db, &translation_service, &word, cached.clone()).await;
         return Ok(cached);
     }
 
@@ -40,7 +41,7 @@ pub async fn word_lookup(
         .map_err(|e| e.to_string())?;
 
     // 4. 启动异步翻译任务
-    spawn_translation_task(&app_handle, &dict_db, &manager, &word, entry.clone()).await;
+    spawn_translation_task(&app_handle, &dict_db, &translation_service, &word, entry.clone()).await;
 
     // 5. 立即返回（英文释义 + 空中文）
     Ok(entry)
@@ -50,19 +51,22 @@ pub async fn word_lookup(
 async fn spawn_translation_task(
     app_handle: &AppHandle,
     dict_db: &Arc<DictionaryDb>,
-    manager: &TaskManager,
+    translation_service: &Arc<crate::translator::TranslationService>,
     word: &str,
     entry: WordEntry,
 ) {
-    // 获取翻译器
-    let translator = match manager.get_translator().await {
-        Some(t) => t,
-        None => return, // 无翻译器，不启动翻译
-    };
+    // 检查翻译服务是否可用
+    if !translation_service.is_available().await {
+        return; // 无翻译服务，不启动翻译
+    }
 
     // 创建翻译工作器并启动任务
-    let worker = TranslationWorker::new(app_handle.clone(), dict_db.clone());
-    worker.spawn_translation(word.to_string(), entry, translator);
+    let worker = TranslationWorker::new(
+        app_handle.clone(),
+        dict_db.clone(),
+        translation_service.clone(),
+    );
+    worker.spawn_translation(word.to_string(), entry);
 }
 
 /// 翻译文本（带缓存）
@@ -85,7 +89,7 @@ pub async fn translate_cached(
     }
 
     // 2. 获取翻译器
-    let translator = manager
+    let translator: std::sync::Arc<crate::translator::DeepLXTranslator> = manager
         .get_translator()
         .await
         .ok_or_else(|| "Translator not configured".to_string())?;

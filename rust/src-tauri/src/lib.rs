@@ -18,6 +18,7 @@ use image_cache::WeChatImageCache;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use task_manager::TaskManager;
+use translator::TranslationService;
 use tauri::menu::{CheckMenuItemBuilder, Menu, MenuBuilder, MenuItemBuilder, SubmenuBuilder};
 use tauri::tray::TrayIconBuilder;
 use tauri::Manager;
@@ -85,7 +86,7 @@ fn handle_tray_toggle_translate(app: &tauri::AppHandle) {
         let manager = app_handle.state::<TaskManager>().inner().clone();
         let close_to_tray = CloseToTray(app_handle.state::<CloseToTray>().0.clone());
 
-        let snapshot = match app_state::load_snapshot(&config_dir, &manager, &close_to_tray) {
+        let snapshot = match app_state::load_snapshot_sync(&config_dir, &manager, &close_to_tray) {
             Ok(snapshot) => snapshot,
             Err(error) => {
                 sync_tray_translate_toggle(&app_handle, false);
@@ -153,7 +154,7 @@ fn handle_toggle_translate_enabled_menu(app: &tauri::AppHandle) {
         let manager = app_handle.state::<TaskManager>().inner().clone();
         let close_to_tray = CloseToTray(app_handle.state::<CloseToTray>().0.clone());
 
-        let snapshot = match app_state::load_snapshot(&config_dir, &manager, &close_to_tray) {
+        let snapshot = match app_state::load_snapshot_sync(&config_dir, &manager, &close_to_tray) {
             Ok(snapshot) => snapshot,
             Err(error) => {
                 sync_translate_enabled_menu(&app_handle, false);
@@ -349,12 +350,14 @@ pub fn run() {
             );
 
             let image_cache = Arc::new(std::sync::Mutex::new(WeChatImageCache::new()));
+            let translation_service = Arc::new(TranslationService::new());
 
             let manager = TaskManager::new(
                 adapter.clone(),
                 event_store.clone(),
                 message_db.clone(),
                 image_cache.clone(),
+                translation_service.clone(),
             );
             let sidebar_state = sidebar_window::create_state();
 
@@ -362,6 +365,7 @@ pub fn run() {
             app.manage(message_db);
             app.manage(dict_db);
             app.manage(image_cache);
+            app.manage(translation_service);
             app.manage(manager.clone());
             app.manage(sidebar_state);
 

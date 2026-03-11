@@ -182,12 +182,13 @@ pub async fn sidebar_snapshot_get(
         Vec::new()
     };
 
+    let translator_status = manager.get_translator_status().await;
     Ok(serde_json::json!({
         "ok": true,
         "data": {
             "current_chat": selected_chat,
             "messages": messages,
-            "translator": manager.get_translator_status(),
+            "translator": translator_status,
             "refresh_version": refresh_version,
         }
     }))

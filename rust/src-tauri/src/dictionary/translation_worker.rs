@@ -3,12 +3,9 @@ use crate::dictionary::events::{
     FieldTranslatedEvent, TranslationDoneEvent, EVENT_FIELD_TRANSLATED, EVENT_TRANSLATION_DONE,
 };
 use crate::dictionary::{DictionaryDb, WordEntry};
-use crate::translator::DeepLXTranslator;
+use crate::translator::TranslationService;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
-use tokio::sync::Semaphore;
-
-const MAX_CONCURRENCY: usize = 3;
 
 /// 翻译任务类型
 #[derive(Debug, Clone)]
@@ -58,28 +55,27 @@ impl TranslationTask {
 pub struct TranslationWorker {
     app_handle: AppHandle,
     dict_db: Arc<DictionaryDb>,
-    semaphore: Arc<Semaphore>,
+    translation_service: Arc<TranslationService>,
 }
 
 impl TranslationWorker {
-    pub fn new(app_handle: AppHandle, dict_db: Arc<DictionaryDb>) -> Self {
+    pub fn new(
+        app_handle: AppHandle,
+        dict_db: Arc<DictionaryDb>,
+        translation_service: Arc<TranslationService>,
+    ) -> Self {
         Self {
             app_handle,
             dict_db,
-            semaphore: Arc::new(Semaphore::new(MAX_CONCURRENCY)),
+            translation_service,
         }
     }
 
     /// 启动单词翻译任务（异步，不阻塞）
-    pub fn spawn_translation(
-        &self,
-        word: String,
-        entry: WordEntry,
-        translator: Arc<DeepLXTranslator>,
-    ) {
+    pub fn spawn_translation(&self, word: String, entry: WordEntry) {
         let worker = self.clone_inner();
         tokio::spawn(async move {
-            worker.translate_word(word, entry, translator).await;
+            worker.translate_word(word, entry).await;
         });
     }
 
@@ -87,7 +83,7 @@ impl TranslationWorker {
         TranslationWorkerInner {
             app_handle: self.app_handle.clone(),
             dict_db: self.dict_db.clone(),
-            semaphore: self.semaphore.clone(),
+            translation_service: self.translation_service.clone(),
         }
     }
 }
@@ -95,16 +91,11 @@ impl TranslationWorker {
 struct TranslationWorkerInner {
     app_handle: AppHandle,
     dict_db: Arc<DictionaryDb>,
-    semaphore: Arc<Semaphore>,
+    translation_service: Arc<TranslationService>,
 }
 
 impl TranslationWorkerInner {
-    async fn translate_word(
-        &self,
-        word: String,
-        entry: WordEntry,
-        translator: Arc<DeepLXTranslator>,
-    ) {
+    async fn translate_word(&self, word: String, entry: WordEntry) {
         // 收集所有需要翻译的任务
         let mut tasks = Vec::new();
 
@@ -140,13 +131,8 @@ impl TranslationWorkerInner {
         let total = tasks.len() as u32;
         let mut translated = 0u32;
 
-        // 3. 逐个执行翻译（受并发限制）
+        // 3. 逐个执行翻译（通过 TranslationService 统一限流）
         for task in tasks {
-            let permit = self.semaphore.acquire().await;
-            if permit.is_err() {
-                break;
-            }
-
             let field_name = task.field_name();
             let text = task.text();
 
@@ -157,8 +143,8 @@ impl TranslationWorkerInner {
             let translated_text = if let Some(cached) = cached {
                 Some(cached)
             } else {
-                // 调用翻译
-                match translator.translate_with_langs(text, "en", "zh").await {
+                // 调用翻译服务（自动限流）
+                match self.translation_service.translate_with_langs(text, "en", "zh").await {
                     Ok(result) => {
                         // 缓存翻译结果
                         let _ = self
@@ -169,8 +155,6 @@ impl TranslationWorkerInner {
                     Err(_) => None,
                 }
             };
-
-            drop(permit);
 
             // 更新数据库
             if let Some(ref translated_str) = translated_text {
