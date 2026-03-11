@@ -8,6 +8,7 @@ import { useState } from "react";
 import { ChevronDown, ChevronUp } from "lucide-react";
 import type { Definition, Meaning } from "@/lib/tauri-api";
 import { Skeleton } from "@/components/ui/skeleton";
+import { TranslatedText } from "@/components/ui/press-to-reveal";
 
 // ==================== DefinitionItem ====================
 
@@ -31,16 +32,15 @@ export function DefinitionItem({
 }: DefinitionItemProps) {
   return (
     <div className="py-1.5 border-b border-border last:border-b-0">
-      {/* 中文释义为主 */}
-      {definition.chinese ? (
-        <p className="text-xs text-foreground leading-relaxed">
-          {definition.chinese}
-        </p>
-      ) : translating ? (
+      {/* 中文释义为主，按住显示英文原文 */}
+      {translating ? (
         <Skeleton className="h-4 w-3/4" />
       ) : (
         <p className="text-xs text-foreground leading-relaxed">
-          {definition.english}
+          <TranslatedText
+            chinese={definition.chinese}
+            english={definition.english}
+          />
         </p>
       )}
       
@@ -51,14 +51,17 @@ export function DefinitionItem({
         </p>
       )}
       
-      {/* 例句中文翻译 */}
+      {/* 例句中文翻译，按住显示英文原文 */}
       {showExample && definition.example && (
-        definition.example_chinese ? (
-          <p className="text-[11px] text-primary/70 mt-0.5">
-            {definition.example_chinese}
-          </p>
-        ) : translating ? (
+        translating ? (
           <Skeleton className="h-3 w-2/3 mt-0.5" />
+        ) : definition.example_chinese ? (
+          <p className="text-[11px] text-primary/70 mt-0.5">
+            <TranslatedText
+              chinese={definition.example_chinese}
+              english={definition.example}
+            />
+          </p>
         ) : null
       )}
     </div>
@@ -213,8 +216,15 @@ export function WordMeaningsCard({
             <span className="text-foreground">
               {meaning.definitions
                 .slice(0, 2)
-                .map((d) => d.chinese || d.english)
-                .join("；")}
+                .map((d, idx) => (
+                  <span key={idx}>
+                    {idx > 0 && "；"}
+                    <TranslatedText
+                      chinese={d.chinese}
+                      english={d.english}
+                    />
+                  </span>
+                ))}
             </span>
           </div>
         ))}
