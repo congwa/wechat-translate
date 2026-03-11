@@ -12,6 +12,7 @@ interface SidebarStoreState {
   setCurrentChat: (chatName: string) => void;
   requestRefresh: (chatName?: string, remoteVersion?: number) => void;
   hydrateSnapshot: (chatName: string, dbMessages: StoredMessage[], remoteVersion?: number) => void;
+  updateMessageTranslation: (messageId: number, textEn: string, translateError: string) => void;
   clearMessages: () => void;
 }
 
@@ -76,6 +77,16 @@ export const useSidebarStore = create<SidebarStoreState>((set) => ({
         currentChat: chatName || state.currentChat,
         remoteRefreshVersion: remoteVersion ?? state.remoteRefreshVersion,
       };
+    }),
+
+  updateMessageTranslation: (messageId, textEn, translateError) =>
+    set((state) => {
+      const items = state.items.map((item) =>
+        item.id === messageId
+          ? { ...item, textEn, translateError }
+          : item
+      );
+      return { items };
     }),
 
   clearMessages: () =>

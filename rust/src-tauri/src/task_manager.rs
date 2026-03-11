@@ -239,18 +239,22 @@ impl TaskManager {
         content: String,
         detected_at: String,
     ) -> Result<(), String> {
+        log::info!("[TaskManager] translate_message_manually 开始");
         let config = self.translation_service.get_config().await;
+        log::info!("[TaskManager] 翻译配置: enabled={}", config.enabled);
         if !config.enabled {
             return Err("翻译服务未启用".to_string());
         }
 
         let (translator, limiter) = self.translation_service.get_translator_and_limiter().await;
+        log::info!("[TaskManager] translator={}, limiter={}", translator.is_some(), limiter.is_some());
         let translator = translator.ok_or_else(|| "翻译服务未配置".to_string())?;
         let limiter = limiter.ok_or_else(|| "翻译限流器未配置".to_string())?;
 
         let source_lang = config.source_lang.clone();
         let target_lang = config.target_lang.clone();
 
+        log::info!("[TaskManager] 准备启动翻译任务: {}→{}", source_lang, target_lang);
         // 复用已有的翻译更新逻辑
         spawn_sidebar_translation_update(
             self.clone(),
@@ -268,6 +272,7 @@ impl TaskManager {
             detected_at,
         );
 
+        log::info!("[TaskManager] translate_message_manually 完成");
         Ok(())
     }
 
@@ -1575,9 +1580,11 @@ fn spawn_sidebar_translation_update(
     detected_at: String,
 ) {
     tokio::spawn(async move {
+        log::info!("[spawn_sidebar_translation_update] 翻译任务启动: message_id={}", message_id);
         let translator_generation = manager.translator_generation.load(Ordering::Relaxed);
 
         if let Ok(Some(cached)) = db.get_cached_translation(&content, &source_lang, &target_lang) {
+            log::info!("[spawn_sidebar_translation_update] 使用缓存翻译: {}", &cached.translated_text[..cached.translated_text.len().min(50)]);
             let _ = db.update_message_translation(
                 &chat_name,
                 &sender,
@@ -1614,9 +1621,12 @@ fn spawn_sidebar_translation_update(
             return;
         }
 
+        log::info!("[spawn_sidebar_translation_update] 开始实际翻译");
         let _permit = limiter.acquire().await;
+        log::info!("[spawn_sidebar_translation_update] 获得限流许可");
         match translator.translate(&content, &source_lang, &target_lang).await {
             Ok(translated) => {
+                log::info!("[spawn_sidebar_translation_update] 翻译成功: {}", &translated[..translated.len().min(50)]);
                 let _ =
                     db.upsert_cached_translation(&content, &source_lang, &target_lang, &translated);
                 let _ = db.update_message_translation(

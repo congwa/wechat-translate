@@ -258,8 +258,13 @@ fn build_macos_app_menu(
     let data_menu = SubmenuBuilder::with_id(app, "data_menu", "数据")
         .text("clear_db_restart", "清空数据库并重启")
         .build()?;
+    let dev_menu = SubmenuBuilder::with_id(app, "dev_menu", "开发")
+        .text("open_devtools", "打开主窗口开发者工具")
+        .text("open_sidebar_devtools", "打开侧边栏开发者工具")
+        .build()?;
     menu.append(&translate_menu)?;
     menu.append(&data_menu)?;
+    menu.append(&dev_menu)?;
     Ok((menu, translate_enabled_check))
 }
 
@@ -490,6 +495,16 @@ pub fn run() {
                 .menu(&menu)
                 .tooltip("WeChat PC Auto")
                 .on_menu_event(|app, event| match event.id().as_ref() {
+                    "open_devtools" => {
+                        if let Some(window) = app.get_webview_window("main") {
+                            window.open_devtools();
+                        }
+                    }
+                    "open_sidebar_devtools" => {
+                        if let Some(window) = app.get_webview_window("sidebar") {
+                            window.open_devtools();
+                        }
+                    }
                     "show" => {
                         if let Some(window) = app.get_webview_window("main") {
                             let _ = window.show();

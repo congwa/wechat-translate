@@ -269,11 +269,11 @@ export async function translateSidebarMessage(params: {
   detectedAt: string;
 }): Promise<void> {
   return invoke("translate_sidebar_message", {
-    message_id: params.messageId,
-    chat_name: params.chatName,
+    messageId: params.messageId,
+    chatName: params.chatName,
     sender: params.sender,
     content: params.content,
-    detected_at: params.detectedAt,
+    detectedAt: params.detectedAt,
   });
 }
 

@@ -309,7 +309,13 @@ pub async fn translate_sidebar_message(
     content: String,
     detected_at: String,
 ) -> Result<(), String> {
-    manager
+    log::info!(
+        "[Sidebar] 收到手动翻译请求: message_id={}, chat_name={}, content={}",
+        message_id,
+        chat_name,
+        &content[..content.len().min(50)]
+    );
+    let result = manager
         .translate_message_manually(
             app,
             message_id,
@@ -318,5 +324,11 @@ pub async fn translate_sidebar_message(
             content,
             detected_at,
         )
-        .await
+        .await;
+    if let Err(ref e) = result {
+        log::error!("[Sidebar] 手动翻译失败: {}", e);
+    } else {
+        log::info!("[Sidebar] 手动翻译请求已提交");
+    }
+    result
 }

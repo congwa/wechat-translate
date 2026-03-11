@@ -125,6 +125,10 @@ impl SidebarWindowState {
             .shadow(true)
             .build()?;
 
+        // 开发模式下自动打开开发者工具
+        #[cfg(debug_assertions)]
+        win.open_devtools();
+
         if ghost && mode == WindowMode::Independent {
             win.set_ignore_cursor_events(true).ok();
         }

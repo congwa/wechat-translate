@@ -2,7 +2,7 @@ import { useRef, useEffect, useState, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { listen } from "@tauri-apps/api/event";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { X, MessageCircle, Languages, AlertCircle, BookOpen, Users, User } from "lucide-react";
+import { X, MessageCircle, Languages, AlertCircle, BookOpen, Users, User, Loader2 } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useSidebarStore } from "@/stores/sidebarStore";
@@ -158,7 +158,12 @@ function useSidebarWindowAppearance() {
   return { isDarkMode, isWindowFocused };
 }
 
-function renderMessageCard(msg: SidebarMessage, displayMode: DisplayMode) {
+function renderMessageCard(
+  msg: SidebarMessage,
+  displayMode: DisplayMode,
+  translatingIds: Set<number>,
+  setTranslatingIds: React.Dispatch<React.SetStateAction<Set<number>>>
+) {
   const hasSender = msg.sender !== "";
   const sender = msg.sender || msg.chatName;
   const color = getSenderColor(sender);
@@ -255,29 +260,56 @@ function renderMessageCard(msg: SidebarMessage, displayMode: DisplayMode) {
               }
               
               // 历史未翻译：显示中文 + 翻译按钮
+              const isTranslating = translatingIds.has(msg.id);
               return (
                 <div className="flex items-start gap-1.5">
                   <p className="text-[12px] text-gray-800 dark:text-gray-200 leading-relaxed whitespace-pre-wrap break-words flex-1">
                     {msg.textCn}
                   </p>
-                  <TooltipProvider delayDuration={300}>
+                  <TooltipProvider delayDuration={200}>
                     <Tooltip>
                       <TooltipTrigger asChild>
                         <button 
-                          className="shrink-0 mt-0.5 p-1 rounded hover:bg-gray-200/50 dark:hover:bg-white/10 transition-colors"
-                          onClick={() => api.translateSidebarMessage({
-                            messageId: msg.id,
-                            chatName: msg.chatName,
-                            sender: msg.sender,
-                            content: msg.textCn,
-                            detectedAt: msg.timestamp,
-                          }).catch(() => {})}
+                          className="shrink-0 mt-0.5 p-1 rounded hover:bg-gray-200/50 dark:hover:bg-white/10 transition-colors cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
+                          disabled={isTranslating}
+                          onClick={async (e) => {
+                            e.stopPropagation();
+                            if (isTranslating) return;
+                            console.log("[Sidebar] 点击翻译按钮", {
+                              messageId: msg.id,
+                              chatName: msg.chatName,
+                              sender: msg.sender,
+                              content: msg.textCn.substring(0, 50),
+                            });
+                            setTranslatingIds(prev => new Set(prev).add(msg.id));
+                            try {
+                              await api.translateSidebarMessage({
+                                messageId: msg.id,
+                                chatName: msg.chatName,
+                                sender: msg.sender,
+                                content: msg.textCn,
+                                detectedAt: msg.timestamp,
+                              });
+                              console.log("[Sidebar] 翻译请求发送成功");
+                            } catch (err) {
+                              console.error("[Sidebar] 翻译请求失败", err);
+                              setTranslatingIds(prev => {
+                                const next = new Set(prev);
+                                next.delete(msg.id);
+                                return next;
+                              });
+                            }
+                          }}
                         >
-                          <Languages className="w-3 h-3 text-gray-400 dark:text-gray-500" />
+                          {isTranslating ? (
+                            <Loader2 className="w-3 h-3 text-gray-400 dark:text-gray-500 animate-spin" />
+                          ) : (
+                            <Languages className="w-3 h-3 text-gray-400 dark:text-gray-500" />
+                          )}
                         </button>
                       </TooltipTrigger>
-                      <TooltipContent side="top" className="text-xs">
-                        点击翻译
+                      <TooltipContent side="left" className="text-xs">
+                        {isTranslating ? "翻译中..." : "点击翻译"}
                       </TooltipContent>
                     </Tooltip>
                   </TooltipProvider>
@@ -342,6 +374,7 @@ export function SidebarView() {
   const currentChat = useSidebarStore((s) => s.currentChat);
   const refreshVersion = useSidebarStore((s) => s.refreshVersion);
   const hydrateSnapshot = useSidebarStore((s) => s.hydrateSnapshot);
+  const updateMessageTranslation = useSidebarStore((s) => s.updateMessageTranslation);
   const displayMode = useFormStore((s) => s.displayMode);
   const setSettings = useFormStore((s) => s.setSettings);
   const settings = useSettingsStore((s) => s.settings);
@@ -351,6 +384,7 @@ export function SidebarView() {
   const [visible, setVisible] = useState(true);
   const [snapshotLoading, setSnapshotLoading] = useState(false);
   const [showWordBook, setShowWordBook] = useState(false);
+  const [translatingIds, setTranslatingIds] = useState<Set<number>>(new Set());
   const translateEnabled = settings?.translate.enabled ?? false;
   const deeplxUrl = settings?.translate.deeplx_url ?? "";
   const canSwitchDisplayMode = !settings || (translateEnabled && deeplxUrl.trim() !== "");
@@ -391,6 +425,42 @@ export function SidebarView() {
       unlisten.then((fn) => fn());
     };
   }, [isIndependent]);
+
+  // 监听单条消息翻译更新事件
+  useEffect(() => {
+    const unlisten = listen<{
+      type: string;
+      source: string;
+      payload: {
+        kind: string;
+        message_id: number;
+        chat_name: string;
+        text_en: string;
+        translate_error: string;
+      };
+    }>("wechat-event", (e) => {
+      console.log("[Sidebar] 收到事件", e.payload);
+      if (e.payload.type === "message" && e.payload.source === "sidebar" && e.payload.payload.kind === "update") {
+        console.log("[Sidebar] 更新消息翻译", {
+          messageId: e.payload.payload.message_id,
+          textEn: e.payload.payload.text_en.substring(0, 50),
+        });
+        updateMessageTranslation(
+          e.payload.payload.message_id,
+          e.payload.payload.text_en,
+          e.payload.payload.translate_error
+        );
+        setTranslatingIds(prev => {
+          const next = new Set(prev);
+          next.delete(e.payload.payload.message_id);
+          return next;
+        });
+      }
+    });
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, [updateMessageTranslation]);
 
   // 滚动到底部：当消息数量变化或最后一条消息内容更新时触发（仅跟随模式）
   // 这样翻译完成后内容增多也会自动滚动到底部
@@ -511,7 +581,7 @@ export function SidebarView() {
           <div className="flex flex-col gap-1.5">
             {items
               .slice(-displayCount)
-              .map((msg) => renderMessageCard(msg, effectiveDisplayMode))}
+              .map((msg) => renderMessageCard(msg, effectiveDisplayMode, translatingIds, setTranslatingIds))}
           </div>
         </div>
       )}
@@ -562,7 +632,7 @@ export function SidebarView() {
 
           <div className="flex flex-col gap-1.5">
             <AnimatePresence initial={false}>
-              {items.map((msg) => renderMessageCard(msg, effectiveDisplayMode))}
+              {items.map((msg) => renderMessageCard(msg, effectiveDisplayMode, translatingIds, setTranslatingIds))}
             </AnimatePresence>
           </div>
           <div ref={bottomRef} />
