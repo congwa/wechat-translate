@@ -1,9 +1,10 @@
-import { ReactNode } from "react";
+import { ReactNode, forwardRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Check, RotateCcw, Loader2 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 
 interface SettingsSectionProps {
+  id?: string;
   icon: ReactNode;
   iconBg: string;
   title: string;
@@ -15,19 +16,24 @@ interface SettingsSectionProps {
   children: ReactNode;
 }
 
-export function SettingsSection({
-  icon,
-  iconBg,
-  title,
-  description,
-  isDirty,
-  isSaving,
-  onApply,
-  onReset,
-  children,
-}: SettingsSectionProps) {
-  return (
-    <section className="glass-card rounded-2xl p-6 shadow-sm space-y-5">
+export const SettingsSection = forwardRef<HTMLElement, SettingsSectionProps>(
+  function SettingsSection(
+    {
+      id,
+      icon,
+      iconBg,
+      title,
+      description,
+      isDirty,
+      isSaving,
+      onApply,
+      onReset,
+      children,
+    },
+    ref
+  ) {
+    return (
+      <section id={id} ref={ref} className="glass-card rounded-2xl p-6 shadow-sm space-y-5">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
           <div className={`w-9 h-9 rounded-xl ${iconBg} flex items-center justify-center`}>
@@ -92,5 +98,6 @@ export function SettingsSection({
 
       {children}
     </section>
-  );
-}
+    );
+  }
+);

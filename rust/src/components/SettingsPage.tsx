@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
@@ -498,8 +498,67 @@ export function SettingsPage() {
     );
   }
 
+  // 导航项定义
+  const NAV_ITEMS = [
+    { id: "general", label: "通用", isDirty: false },
+    { id: "listen", label: "监听", isDirty: sectionDirty.listen },
+    ...(sidebarWindowMode === "independent" ? [{ id: "display", label: "浮窗", isDirty: sectionDirty.display }] : []),
+    { id: "translate", label: "翻译", isDirty: sectionDirty.translate },
+    { id: "dict", label: "词典", isDirty: false },
+  ];
+
+  // 当前可见的 section
+  const [activeSection, setActiveSection] = useState("general");
+  const sectionRefs = useRef<Record<string, HTMLElement | null>>({});
+
+  // Intersection Observer 监听滚动
+  useEffect(() => {
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting && entry.intersectionRatio >= 0.3) {
+            setActiveSection(entry.target.id);
+          }
+        });
+      },
+      { threshold: [0.3, 0.5, 0.7], rootMargin: "-100px 0px -50% 0px" }
+    );
+
+    Object.values(sectionRefs.current).forEach((el) => {
+      if (el) observer.observe(el);
+    });
+
+    return () => observer.disconnect();
+  }, [sidebarWindowMode]);
+
+  // 点击导航项滚动到对应 section
+  const scrollToSection = useCallback((id: string) => {
+    sectionRefs.current[id]?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, []);
+
   return (
-    <div className="max-w-2xl space-y-6">
+    <div className="relative">
+      {/* 右侧固定导航 */}
+      <nav className="fixed right-6 top-1/2 -translate-y-1/2 z-50 hidden xl:flex flex-col gap-1.5 py-2 px-1.5 rounded-xl bg-background/80 backdrop-blur-sm border border-border/50 shadow-sm">
+        {NAV_ITEMS.map((item) => (
+          <button
+            key={item.id}
+            onClick={() => scrollToSection(item.id)}
+            className={`relative px-2.5 py-1.5 text-[11px] font-medium rounded-lg transition-all duration-150 ${
+              activeSection === item.id
+                ? "bg-primary text-primary-foreground"
+                : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
+            }`}
+          >
+            {item.label}
+            {item.isDirty && (
+              <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-red-500" />
+            )}
+          </button>
+        ))}
+      </nav>
+
+      <div className="max-w-2xl space-y-6">
       <section className="glass-card rounded-2xl p-4 shadow-sm border border-muted/50">
         <div className="flex items-center justify-between">
           <p className="text-[11px] text-muted-foreground">
@@ -518,7 +577,11 @@ export function SettingsPage() {
         </div>
       </section>
 
-      <section className="glass-card rounded-2xl p-6 shadow-sm space-y-5">
+      <section
+        id="general"
+        ref={(el) => { sectionRefs.current.general = el; }}
+        className="glass-card rounded-2xl p-6 shadow-sm space-y-5"
+      >
         <div className="flex items-center gap-3">
           <div className="w-9 h-9 rounded-xl bg-slate-100 flex items-center justify-center">
             <Monitor className="w-4 h-4 text-slate-600" />
@@ -544,6 +607,8 @@ export function SettingsPage() {
       </section>
 
       <SettingsSection
+        id="listen"
+        ref={(el) => { sectionRefs.current.listen = el; }}
         icon={<Headphones className="w-4 h-4 text-emerald-600" />}
         iconBg="bg-emerald-50"
         title="消息监听"
@@ -654,6 +719,8 @@ export function SettingsPage() {
 
       {sidebarWindowMode === "independent" && (
         <SettingsSection
+          id="display"
+          ref={(el) => { sectionRefs.current.display = el; }}
           icon={<MonitorPlay className="w-4 h-4 text-sky-600" />}
           iconBg="bg-sky-50"
           title="独立浮窗设置"
@@ -800,6 +867,8 @@ export function SettingsPage() {
       )}
 
       <SettingsSection
+        id="translate"
+        ref={(el) => { sectionRefs.current.translate = el; }}
         icon={<Languages className="w-4 h-4 text-violet-600" />}
         iconBg="bg-violet-50"
         title="翻译设置"
@@ -1138,7 +1207,11 @@ export function SettingsPage() {
         )}
       </SettingsSection>
 
-      <section className="glass-card rounded-2xl p-6 shadow-sm space-y-5">
+      <section
+        id="dict"
+        ref={(el) => { sectionRefs.current.dict = el; }}
+        className="glass-card rounded-2xl p-6 shadow-sm space-y-5"
+      >
         <div className="flex items-center gap-3">
           <div className="w-9 h-9 rounded-xl bg-blue-50 dark:bg-blue-900/30 flex items-center justify-center">
             <BookOpen className="w-4 h-4 text-blue-600 dark:text-blue-400" />
@@ -1322,6 +1395,7 @@ export function SettingsPage() {
           )}
         </AnimatePresence>
       </section>
+      </div>
     </div>
   );
 }
