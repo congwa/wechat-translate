@@ -155,3 +155,9 @@ wechat_auto/
 ## 开源协议
 
 MIT License
+
+## 交流群
+
+欢迎加入我们的交流群，一起探讨技术、分享经验，共同让这个项目变得更好！
+
+![交流群二维码](./rust/screenshot/jiaoliu.jpeg)
