@@ -130,6 +130,11 @@ wechat_auto/
 └── window.py
 ```
 
+
+## 以上为pc版本，下面为macos版本
+
+[macos版本介绍文档](./rust/README.md)
+
 ## 开源协议
 
 MIT License
