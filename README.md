@@ -135,6 +135,23 @@ wechat_auto/
 
 [macos版本介绍文档](./rust/README.md)
 
+### macOS 版本界面预览
+
+#### 浮窗功能
+| 跟随微信窗口模式 | 独立置顶模式 |
+|---|---|
+| ![浮窗跟随模式](./rust/screenshot/floating_window_left.webp) | ![浮窗独立模式](./rust/screenshot/floting_window_left2.webp) |
+
+#### 查词功能
+| 点词查询 | 词典窗口 | 音标释义 | 例句展示 |
+|---|---|---|---|
+| ![点词查询](./rust/screenshot/dcit5.webp) | ![词典窗口](./rust/screenshot/dictionary_window.webp) | ![音标释义](./rust/screenshot/dict2.webp) | ![例句展示](./rust/screenshot/dict3.webp) |
+
+#### 设置中心
+| 主设置页 | 工具栏设置 | 完整设置 |
+|---|---|---|
+| ![主设置](./rust/screenshot/setting_main.webp) | ![工具栏设置](./rust/screenshot/setting-tobbar.webp) | ![完整设置](./rust/screenshot/setting_all.webp) |
+
 ## 开源协议
 
 MIT License

@@ -16,6 +16,23 @@
 | **翻译** | DeepLX HTTP |
 | **macOS 自动化** | accessibility-sys + AppleScript |
 
+## 界面预览
+
+### 浮窗功能
+| 跟随微信窗口模式 | 独立置顶模式 |
+|---|---|
+| ![浮窗跟随模式](./screenshot/floating_window_left.webp) | ![浮窗独立模式](./screenshot/floting_window_left2.webp) |
+
+### 查词功能
+| 点词查询 | 词典窗口 | 音标释义 | 例句展示 |
+|---|---|---|---|
+| ![点词查询](./screenshot/dcit5.webp) | ![词典窗口](./screenshot/dictionary_window.webp) | ![音标释义](./screenshot/dict2.webp) | ![例句展示](./screenshot/dict3.webp) |
+
+### 设置中心
+| 主设置页 | 工具栏设置 | 完整设置 |
+|---|---|---|
+| ![主设置](./screenshot/setting_main.webp) | ![工具栏设置](./screenshot/setting-tobbar.webp) | ![完整设置](./screenshot/setting_all.webp) |
+
 ## 功能概览
 
 - **智能消息监听** — 左侧会话预览 + 右侧详情补充双路径采集，结合锚点、尾部追加和 Bag Diff 算法识别新消息，并区分群聊/私聊/自己发送
