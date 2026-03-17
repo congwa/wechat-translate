@@ -1,11 +1,17 @@
 use crate::adapter::ax_reader;
+use crate::config::{load_app_config, ConfigDir};
+use crate::events::{EventStore, EventType};
+use crate::task_manager::TaskManager;
 use core_foundation::base::{CFType, TCFType};
 use core_foundation::boolean::CFBoolean;
 use core_foundation::dictionary::CFDictionary;
 use log::{debug, info, warn};
 use serde::Serialize;
 use serde_json::Value;
+use std::sync::Arc;
 use std::time::Duration;
+use tauri::Manager;
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
 const ACCESSIBILITY_SETTINGS_URL: &str =
     "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
@@ -222,6 +228,103 @@ pub fn accessibility_open_settings() -> Value {
             })
         }
     }
+}
+
+#[tauri::command]
+pub async fn accessibility_recover_listener(
+    app: tauri::AppHandle,
+    config_dir: tauri::State<'_, ConfigDir>,
+    manager: tauri::State<'_, TaskManager>,
+) -> Result<Value, String> {
+    if !is_process_trusted() {
+        return Err("辅助功能权限尚未授权".to_string());
+    }
+
+    let config = load_app_config(&config_dir.0).map_err(|e| e.to_string())?;
+    manager
+        .set_use_right_panel_details(config.listen.use_right_panel_details)
+        .await;
+
+    if let Some(events) = app.try_state::<Arc<EventStore>>() {
+        events.publish(
+            &app,
+            EventType::Status,
+            "preflight",
+            serde_json::json!({
+                "type": "accessibility-recover-started",
+            }),
+        );
+    }
+
+    info!("accessibility_recover_listener restarting monitor after trust recovery");
+    match manager
+        .restart_monitoring(config.listen.interval_seconds, Duration::from_secs(5), true)
+        .await
+    {
+        Ok(first_chat) => {
+            if let Some(events) = app.try_state::<Arc<EventStore>>() {
+                events.publish(
+                    &app,
+                    EventType::Status,
+                    "preflight",
+                    serde_json::json!({
+                        "type": "accessibility-recover-succeeded",
+                        "chat_name": first_chat.clone().unwrap_or_default(),
+                    }),
+                );
+            }
+
+            Ok(serde_json::json!({
+                "ok": true,
+                "message": "监听已重建",
+                "chat_name": first_chat,
+                "sidebar_refreshed": manager.get_task_state().sidebar,
+            }))
+        }
+        Err(error) => {
+            let error_text = error.to_string();
+            warn!("accessibility_recover_listener failed: {}", error_text);
+            if let Some(events) = app.try_state::<Arc<EventStore>>() {
+                events.publish(
+                    &app,
+                    EventType::Error,
+                    "preflight",
+                    serde_json::json!({
+                        "type": "accessibility-recover-failed",
+                        "message": error_text.clone(),
+                    }),
+                );
+            }
+            Err(error_text)
+        }
+    }
+}
+
+#[tauri::command]
+pub fn preflight_prompt_restart(app: tauri::AppHandle) -> Value {
+    info!("preflight_prompt_restart showing restart dialog");
+    let app_handle = app.clone();
+    let mut dialog = app
+        .dialog()
+        .message("权限已恢复，但监听重建失败。请点击“立即重启”后重新进入应用。")
+        .title("重启应用")
+        .kind(MessageDialogKind::Warning)
+        .buttons(MessageDialogButtons::OkCustom("立即重启".into()));
+
+    if let Some(window) = app.get_webview_window("main") {
+        dialog = dialog.parent(&window);
+    }
+
+    dialog.show(move |confirmed| {
+        if confirmed {
+            app_handle.request_restart();
+        }
+    });
+
+    serde_json::json!({
+        "ok": true,
+        "prompt_shown": true,
+    })
 }
 
 #[cfg(test)]

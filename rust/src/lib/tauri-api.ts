@@ -161,12 +161,29 @@ export interface AccessibilityOpenSettingsResult {
   message?: string;
 }
 
+export interface AccessibilityRecoverListenerResult extends ApiResponse {
+  chat_name?: string | null;
+  sidebar_refreshed?: boolean;
+}
+
+export interface PreflightPromptRestartResult extends ApiResponse {
+  prompt_shown?: boolean;
+}
+
 export async function accessibilityRequestAccess(): Promise<AccessibilityRequestResult> {
   return invoke("accessibility_request_access");
 }
 
 export async function accessibilityOpenSettings(): Promise<AccessibilityOpenSettingsResult> {
   return invoke("accessibility_open_settings");
+}
+
+export async function accessibilityRecoverListener(): Promise<AccessibilityRecoverListenerResult> {
+  return invoke("accessibility_recover_listener");
+}
+
+export async function preflightPromptRestart(): Promise<PreflightPromptRestartResult> {
+  return invoke("preflight_prompt_restart");
 }
 
 export async function translateTest(params: {

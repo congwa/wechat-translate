@@ -9,9 +9,15 @@ pub async fn clear_restart(
     db: Arc<MessageDb>,
     manager: TaskManager,
 ) -> Result<serde_json::Value, String> {
-    manager.stop_all().await;
+    manager
+        .stop_all_and_wait(std::time::Duration::from_secs(3))
+        .await
+        .map_err(|e| e.to_string())?;
     db.clear_all().map_err(|e| e.to_string())?;
-    let _ = manager.start_monitoring(1.0).await;
+    manager
+        .start_monitoring(1.0)
+        .await
+        .map_err(|e| e.to_string())?;
 
     if let Some(events) = app.try_state::<Arc<EventStore>>() {
         events.publish(

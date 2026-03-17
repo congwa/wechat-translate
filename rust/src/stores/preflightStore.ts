@@ -13,6 +13,19 @@ function logPreflight(message: string, extra?: unknown) {
   console.info(PREFLIGHT_LOG_PREFIX, message);
 }
 
+function shouldAutoRecoverListener(
+  previous: PreflightResult | null,
+  next: PreflightResult,
+  awaitingUserAction: boolean,
+) {
+  return (
+    !!previous &&
+    previous.accessibility_ok === false &&
+    next.accessibility_ok === true &&
+    awaitingUserAction
+  );
+}
+
 interface PreflightStoreState {
   result: PreflightResult | null;
   loading: boolean;
@@ -21,11 +34,15 @@ interface PreflightStoreState {
   lastPromptAt: number | null;
   settingsOpened: boolean;
   awaitingUserAction: boolean;
-  justRecovered: boolean;
+  recoveringListener: boolean;
+  recoveryAttempted: boolean;
+  recoveryFailed: boolean;
   check: () => Promise<void>;
   runAccessibilityFlow: () => Promise<void>;
   openAccessibilitySettings: () => Promise<void>;
   retryAccessibilityCheck: () => Promise<void>;
+  recoverListener: () => Promise<void>;
+  promptRestartFallback: () => Promise<void>;
 }
 
 export const usePreflightStore = create<PreflightStoreState>((set, get) => {
@@ -33,31 +50,62 @@ export const usePreflightStore = create<PreflightStoreState>((set, get) => {
     set({ loading: true });
     try {
       const result = await api.preflightCheck();
-      const previous = get().result;
-      const recovered =
-        !!previous &&
-        previous.accessibility_ok === false &&
-        result.accessibility_ok === true &&
-        get().awaitingUserAction;
-
       set({
         result,
         loading: false,
-        justRecovered: recovered,
-        awaitingUserAction: recovered ? false : get().awaitingUserAction,
       });
       logPreflight("check result", {
         wechat_running: result.wechat_running,
         accessibility_ok: result.accessibility_ok,
+        wechat_accessible: result.wechat_accessible,
         wechat_has_window: result.wechat_has_window,
-        recovered,
       });
       return result;
     } catch {
-      const fallback = { wechat_running: false, accessibility_ok: false, wechat_has_window: false };
+      const fallback = {
+        wechat_running: false,
+        accessibility_ok: false,
+        wechat_has_window: false,
+      };
       set({ result: fallback, loading: false });
       logPreflight("check failed, use fallback result");
       return fallback;
+    }
+  };
+
+  const recoverListener = async () => {
+    const state = get();
+    if (state.recoveringListener) {
+      logPreflight("listener recovery already in progress");
+      return;
+    }
+
+    set({
+      recoveringListener: true,
+      recoveryFailed: false,
+      recoveryAttempted: true,
+      awaitingUserAction: false,
+      promptingAccessibility: false,
+    });
+    logPreflight("start listener recovery");
+
+    try {
+      const response = await api.accessibilityRecoverListener();
+      logPreflight("listener recovery succeeded", response);
+      set({
+        recoveringListener: false,
+        recoveryFailed: false,
+        accessibilityFlowStarted: false,
+        settingsOpened: false,
+        lastPromptAt: null,
+      });
+      await fetchPreflight();
+    } catch (error) {
+      set({
+        recoveringListener: false,
+        recoveryFailed: true,
+      });
+      logPreflight("listener recovery failed", error);
     }
   };
 
@@ -76,7 +124,8 @@ export const usePreflightStore = create<PreflightStoreState>((set, get) => {
       accessibilityFlowStarted: true,
       promptingAccessibility: true,
       lastPromptAt: Date.now(),
-      justRecovered: false,
+      recoveryFailed: false,
+      recoveryAttempted: false,
     });
     logPreflight("start accessibility flow");
 
@@ -106,13 +155,29 @@ export const usePreflightStore = create<PreflightStoreState>((set, get) => {
     lastPromptAt: null,
     settingsOpened: false,
     awaitingUserAction: false,
-    justRecovered: false,
+    recoveringListener: false,
+    recoveryAttempted: false,
+    recoveryFailed: false,
 
     check: async () => {
+      const previous = get().result;
+      const awaitingUserAction = get().awaitingUserAction;
       const result = await fetchPreflight();
+
+      if (shouldAutoRecoverListener(previous, result, awaitingUserAction)) {
+        if (!get().recoveryAttempted) {
+          await get().recoverListener();
+        }
+        return;
+      }
+
       if (result.wechat_running && !result.accessibility_ok) {
+        set({
+          recoveryAttempted: false,
+          recoveryFailed: false,
+        });
         await get().runAccessibilityFlow();
-      } else if (result.accessibility_ok) {
+      } else if (result.accessibility_ok && !get().recoveringListener) {
         set({ awaitingUserAction: false, promptingAccessibility: false });
       }
     },
@@ -124,18 +189,30 @@ export const usePreflightStore = create<PreflightStoreState>((set, get) => {
         const response = await api.accessibilityOpenSettings();
         logPreflight("open settings result", response);
         if (response.ok) {
-          set({ settingsOpened: true, awaitingUserAction: true });
+          set({
+            settingsOpened: true,
+            awaitingUserAction: true,
+          });
         }
       } catch {
-        // no-op: keep current state, user can retry manually
         logPreflight("open settings failed");
       }
     },
 
     retryAccessibilityCheck: async () => {
-      set({ justRecovered: false });
       logPreflight("manual retry check");
       await get().check();
+    },
+
+    recoverListener,
+
+    promptRestartFallback: async () => {
+      try {
+        const response = await api.preflightPromptRestart();
+        logPreflight("prompt restart fallback", response);
+      } catch (error) {
+        logPreflight("prompt restart fallback failed", error);
+      }
     },
   };
 });

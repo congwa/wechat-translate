@@ -664,6 +664,8 @@ pub fn run() {
             commands::preflight::preflight_check,
             commands::preflight::accessibility_request_access,
             commands::preflight::accessibility_open_settings,
+            commands::preflight::accessibility_recover_listener,
+            commands::preflight::preflight_prompt_restart,
             commands::dictionary::word_lookup,
             commands::dictionary::list_dict_providers,
             commands::dictionary::get_dict_provider,

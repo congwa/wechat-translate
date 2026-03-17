@@ -219,6 +219,80 @@ impl TaskManager {
         self.first_poll_signal.wait_ready(timeout).await
     }
 
+    async fn wait_for_monitor_stop(&self, timeout: Duration) -> Result<()> {
+        let started_at = Instant::now();
+        loop {
+            if self.monitor_token.lock().await.is_none() {
+                return Ok(());
+            }
+
+            if started_at.elapsed() >= timeout {
+                anyhow::bail!("等待监听任务停止超时");
+            }
+
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+
+    pub async fn stop_monitoring_and_wait(&self, timeout: Duration) -> Result<()> {
+        self.stop_monitoring().await?;
+        self.wait_for_monitor_stop(timeout).await
+    }
+
+    async fn restore_sidebar_after_monitor_restart(&self, chat_name: &str) {
+        if chat_name.trim().is_empty() || !self.sidebar_enabled.load(Ordering::Relaxed) {
+            return;
+        }
+
+        let refresh_version = self.sidebar_runtime.update_chat_and_version(chat_name);
+        if let Ok(app) = self.get_app_handle().await {
+            self.events.publish(
+                &app,
+                EventType::Status,
+                "sidebar",
+                serde_json::json!({
+                    "type": "sidebar-refresh",
+                    "chat_name": chat_name,
+                    "refresh_version": refresh_version,
+                }),
+            );
+        }
+    }
+
+    pub async fn restart_monitoring(
+        &self,
+        interval_seconds: f64,
+        ready_timeout: Duration,
+        recover_sidebar_runtime: bool,
+    ) -> Result<Option<String>> {
+        let was_running = self.monitor_token.lock().await.is_some();
+        if was_running {
+            self.stop_monitoring_and_wait(Duration::from_secs(3)).await?;
+        }
+
+        if recover_sidebar_runtime && self.sidebar_enabled.load(Ordering::Relaxed) {
+            self.sidebar_runtime.clear();
+        }
+
+        self.start_monitoring(interval_seconds).await?;
+
+        let first_chat = match self.wait_first_poll(ready_timeout).await {
+            Some(chat_name) => Some(chat_name),
+            None => {
+                let _ = self.stop_monitoring_and_wait(Duration::from_secs(3)).await;
+                anyhow::bail!("监听恢复失败：首次轮询超时");
+            }
+        };
+
+        if recover_sidebar_runtime {
+            if let Some(chat_name) = first_chat.as_deref() {
+                self.restore_sidebar_after_monitor_restart(chat_name).await;
+            }
+        }
+
+        Ok(first_chat)
+    }
+
     /// 获取翻译服务是否可用
     pub async fn is_translator_available(&self) -> bool {
         self.translation_service.is_available().await
@@ -1102,9 +1176,15 @@ impl TaskManager {
         Ok(())
     }
 
-    pub async fn stop_all(&self) {
+    pub async fn stop_all_and_wait(&self, timeout: Duration) -> Result<()> {
         let _ = self.stop_monitoring().await;
-        let _ = self.disable_sidebar().await;
+        self.wait_for_monitor_stop(timeout).await?;
+        self.disable_sidebar().await?;
+        Ok(())
+    }
+
+    pub async fn stop_all(&self) {
+        let _ = self.stop_all_and_wait(Duration::from_secs(3)).await;
     }
 }
 
@@ -1743,8 +1823,11 @@ fn update_tray_menu(
 mod tests {
     use super::{
         short_error_text, should_forward_session_preview, should_forward_sidebar_chat,
-        TranslatorServiceStatus,
+        MacOSAdapter, TaskManager, TranslatorServiceStatus,
     };
+    use crate::{db::MessageDb, events::EventStore, translator::TranslationService};
+    use std::{path::PathBuf, sync::Arc, time::Duration};
+    use tokio_util::sync::CancellationToken;
 
     #[test]
     fn translator_status_menu_text_matches_state() {
@@ -1803,5 +1886,59 @@ mod tests {
         assert!(should_forward_sidebar_chat("项目群"));
         assert!(should_forward_sidebar_chat("另一个群"));
         assert!(!should_forward_sidebar_chat(""));
+    }
+
+    fn temp_db_path(tag: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        std::env::temp_dir().join(format!("wechat_pc_auto_task_manager_{tag}_{nanos}.sqlite3"))
+    }
+
+    fn build_test_manager() -> TaskManager {
+        let db_path = temp_db_path("wait_for_stop");
+        let db = Arc::new(MessageDb::new(&db_path).expect("create db"));
+        TaskManager::new(
+            Arc::new(MacOSAdapter::new()),
+            Arc::new(EventStore::new()),
+            db,
+            Arc::new(std::sync::Mutex::new(crate::image_cache::WeChatImageCache::new())),
+            Arc::new(TranslationService::new()),
+        )
+    }
+
+    #[tokio::test]
+    async fn stop_monitoring_and_wait_waits_until_monitor_token_is_cleared() {
+        let manager = build_test_manager();
+        let token = CancellationToken::new();
+        *manager.monitor_token.lock().await = Some(token.clone());
+
+        let monitor_token = manager.monitor_token.clone();
+        tokio::spawn(async move {
+            token.cancel();
+            tokio::time::sleep(Duration::from_millis(80)).await;
+            *monitor_token.lock().await = None;
+        });
+
+        manager
+            .stop_monitoring_and_wait(Duration::from_secs(1))
+            .await
+            .expect("wait for monitor stop");
+
+        assert!(manager.monitor_token.lock().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn stop_monitoring_and_wait_times_out_when_monitor_token_stays_alive() {
+        let manager = build_test_manager();
+        *manager.monitor_token.lock().await = Some(CancellationToken::new());
+
+        let error = manager
+            .stop_monitoring_and_wait(Duration::from_millis(120))
+            .await
+            .expect_err("should time out");
+
+        assert!(error.to_string().contains("等待监听任务停止超时"));
     }
 }
