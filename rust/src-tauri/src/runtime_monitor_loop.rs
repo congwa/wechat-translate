@@ -7,6 +7,7 @@ use crate::application::runtime::monitor_ingest::{
     should_forward_session_preview, should_forward_sidebar_chat, trim_for_log, ChatKind,
     PreviewSenderHint, SessionListenState,
 };
+use crate::application::runtime::state::{FirstPollSignal, MonitorConfig, SidebarConfig};
 use crate::application::runtime::translator_runtime::{
     publish_sidebar_append, spawn_sidebar_translation_update,
 };
@@ -14,7 +15,7 @@ use crate::application::sidebar::projection_service::{emit_sidebar_invalidated, 
 use crate::db::MessageDb;
 use crate::events::{EventStore, EventType};
 use crate::image_cache::{self, WeChatImageCache};
-use crate::task_manager::{FirstPollSignal, MonitorConfig, SidebarConfig, TaskManager};
+use crate::task_manager::TaskManager;
 use anyhow::Result;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};

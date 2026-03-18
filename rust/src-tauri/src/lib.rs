@@ -9,6 +9,7 @@ pub mod dictionary;
 mod events;
 mod history_summary;
 mod image_cache;
+mod infrastructure;
 mod interface;
 mod runtime_monitor_ingest;
 mod runtime_monitor_loop;

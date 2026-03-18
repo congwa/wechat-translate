@@ -1,86 +1,29 @@
 use crate::adapter::MacOSAdapter;
 use crate::app_state;
 use crate::application::runtime::monitor_loop::{spawn_monitor_loop, MonitorLoopContext};
+use crate::application::runtime::state::{FirstPollSignal, MonitorConfig, SidebarConfig};
+use crate::application::runtime::translation_config::{
+    build_translate_config_from_app_config, build_translate_config_from_sidebar_params,
+    SidebarTranslationRuntimeParams,
+};
 use crate::application::runtime::translator_runtime::spawn_sidebar_translation_update;
 use crate::application::sidebar::projection_service::{emit_sidebar_invalidated, SidebarRuntime};
 use crate::config::AppConfig;
 use crate::db::MessageDb;
 use crate::events::{EventStore, EventType};
 use crate::image_cache::WeChatImageCache;
-use crate::translator::{
-    TranslateConfig, TranslateProviderConfig, TranslationLimiter, TranslationService,
-    TranslatorServiceStatus,
-};
+use crate::infrastructure::tauri::tray_adapter::update_tray_menu;
+use crate::translator::{TranslationService, TranslatorServiceStatus};
 use anyhow::Result;
-use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Manager};
-use tokio::sync::{watch, Mutex};
+use tauri::AppHandle;
+use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TaskState {
-    pub monitoring: bool,
-    pub sidebar: bool,
-}
-
-pub(crate) struct SidebarConfig {
-    pub(crate) translator: Option<Arc<dyn crate::translator::Translator>>,
-    pub(crate) limiter: Option<Arc<TranslationLimiter>>,
-    pub(crate) target_set: HashSet<String>,
-    pub(crate) image_capture: bool,
-}
-
-/// 监听循环首次 poll 完成信号
-/// 用于 live_start 等待监听就绪后再打开窗口
-pub struct FirstPollSignal {
-    tx: watch::Sender<Option<String>>,
-    rx: watch::Receiver<Option<String>>,
-}
-
-impl FirstPollSignal {
-    fn new() -> Self {
-        let (tx, rx) = watch::channel(None);
-        Self { tx, rx }
-    }
-
-    /// 监听循环调用：标记首次 poll 完成，并传递当前聊天名称
-    pub(crate) fn signal_ready(&self, chat_name: &str) {
-        let _ = self.tx.send(Some(chat_name.to_string()));
-    }
-
-    /// 重置信号（监听重启时调用）
-    pub(crate) fn reset(&self) {
-        let _ = self.tx.send(None);
-    }
-
-    /// 等待首次 poll 完成，返回当前聊天名称
-    /// 带超时保护，避免无限等待
-    pub async fn wait_ready(&self, timeout: Duration) -> Option<String> {
-        let mut rx = self.rx.clone();
-        tokio::select! {
-            result = async {
-                loop {
-                    if let Some(chat_name) = rx.borrow().clone() {
-                        return Some(chat_name);
-                    }
-                    if rx.changed().await.is_err() {
-                        return None;
-                    }
-                }
-            } => result,
-            _ = tokio::time::sleep(timeout) => None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct MonitorConfig {
-    pub(crate) use_right_panel_details: bool,
-}
+pub use crate::application::runtime::state::TaskState;
 
 #[derive(Clone)]
 pub struct TaskManager {
@@ -366,34 +309,7 @@ impl TaskManager {
 
         let translator_generation = self.next_translator_generation();
 
-        // 根据 provider 类型构建对应的配置
-        let provider_config = if config.translate.provider == "ai" {
-            TranslateProviderConfig::Ai {
-                provider_id: config.translate.ai_provider_id.clone(),
-                model_id: config.translate.ai_model_id.clone(),
-                api_key: config.translate.ai_api_key.clone(),
-                base_url: if config.translate.ai_base_url.is_empty() {
-                    None
-                } else {
-                    Some(config.translate.ai_base_url.clone())
-                },
-            }
-        } else {
-            TranslateProviderConfig::Deeplx {
-                url: config.translate.deeplx_url.clone(),
-            }
-        };
-
-        // 更新全局翻译服务配置
-        let translate_config = TranslateConfig {
-            enabled: config.translate.enabled,
-            provider_config,
-            source_lang: config.translate.source_lang.clone(),
-            target_lang: config.translate.target_lang.clone(),
-            timeout_seconds: config.translate.timeout_seconds,
-            max_concurrency: config.translate.max_concurrency,
-            max_requests_per_second: config.translate.max_requests_per_second,
-        };
+        let translate_config = build_translate_config_from_app_config(config);
 
         let translator_status = self
             .translation_service
@@ -552,30 +468,21 @@ impl TaskManager {
     ) -> Result<()> {
         let translator_generation = self.next_translator_generation();
 
-        // 根据 provider 创建对应的配置
-        let provider_config = match provider.as_str() {
-            "ai" => TranslateProviderConfig::Ai {
-                provider_id: ai_provider_id,
-                model_id: ai_model_id,
-                api_key: ai_api_key,
-                base_url: if ai_base_url.is_empty() {
-                    None
-                } else {
-                    Some(ai_base_url)
-                },
-            },
-            _ => TranslateProviderConfig::Deeplx { url: deeplx_url },
-        };
-
-        let translate_config = TranslateConfig {
-            enabled: translate_enabled,
-            provider_config,
-            source_lang,
-            target_lang,
-            timeout_seconds,
-            max_concurrency,
-            max_requests_per_second,
-        };
+        let translate_config =
+            build_translate_config_from_sidebar_params(SidebarTranslationRuntimeParams {
+                translate_enabled,
+                provider,
+                deeplx_url,
+                ai_provider_id,
+                ai_model_id,
+                ai_api_key,
+                ai_base_url,
+                source_lang,
+                target_lang,
+                timeout_seconds,
+                max_concurrency,
+                max_requests_per_second,
+            });
 
         let translator_status = self
             .translation_service
@@ -650,39 +557,6 @@ impl TaskManager {
 
     pub async fn stop_all(&self) {
         let _ = self.stop_all_and_wait(Duration::from_secs(3)).await;
-    }
-}
-
-fn update_tray_menu(
-    app: &AppHandle,
-    state: &TaskState,
-    translator_status: &TranslatorServiceStatus,
-) {
-    if let Some(tray) = app.try_state::<crate::TrayMenuState>() {
-        let _ = tray.sidebar_status.set_text(if state.sidebar {
-            "● 浮窗运行中"
-        } else {
-            "○ 浮窗未运行"
-        });
-        let _ = tray.sidebar_toggle.set_text(if state.sidebar {
-            "关闭浮窗"
-        } else {
-            "开启实时浮窗"
-        });
-
-        let _ = tray.listen_status.set_text(if state.monitoring {
-            "● 监听运行中"
-        } else {
-            "○ 监听未运行"
-        });
-        let _ = tray.listen_toggle.set_text(if state.monitoring {
-            "暂停监听"
-        } else {
-            "开启监听"
-        });
-        let _ = tray
-            .translate_status
-            .set_text(translator_status.menu_text());
     }
 }
 

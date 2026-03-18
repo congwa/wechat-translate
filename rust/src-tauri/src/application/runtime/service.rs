@@ -1,7 +1,8 @@
 //! 运行时应用服务：为 command/query 层提供稳定的运行态访问入口，
 //! 避免上层继续直接依赖 TaskManager 的内部组织方式。
+use crate::application::runtime::state::TaskState;
 use crate::config::AppConfig;
-use crate::task_manager::{TaskManager, TaskState};
+use crate::task_manager::TaskManager;
 use crate::translator::{TranslationService, TranslatorServiceStatus};
 use anyhow::Result;
 use std::sync::Arc;

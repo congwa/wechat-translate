@@ -1,5 +1,6 @@
+use crate::application::runtime::state::TaskState;
 use crate::config::{load_app_config, AppConfig, ConfigDir};
-use crate::task_manager::{TaskManager, TaskState};
+use crate::task_manager::TaskManager;
 use crate::translator::TranslatorServiceStatus;
 use crate::CloseToTray;
 use serde::{Deserialize, Serialize};

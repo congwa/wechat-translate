@@ -2,4 +2,6 @@
 pub(crate) mod monitor_ingest;
 pub(crate) mod monitor_loop;
 pub(crate) mod service;
+pub(crate) mod state;
+pub(crate) mod translation_config;
 pub(crate) mod translator_runtime;
