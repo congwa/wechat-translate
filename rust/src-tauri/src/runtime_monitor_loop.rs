@@ -1,20 +1,19 @@
 use crate::adapter::ax_reader::{self, ChatMessage};
 use crate::adapter::MacOSAdapter;
+use crate::application::runtime::monitor_ingest::{
+    apply_cached_preview_sender_hint, apply_sender_defaults, apply_session_preview_sender_hint,
+    cleanup_preview_sender_hints, diff_messages, inherit_sender_from_reference,
+    remember_preview_sender_hint, self_source_label, should_emit_session_snapshot,
+    should_forward_session_preview, should_forward_sidebar_chat, trim_for_log, ChatKind,
+    PreviewSenderHint, SessionListenState,
+};
+use crate::application::runtime::translator_runtime::{
+    publish_sidebar_append, spawn_sidebar_translation_update,
+};
+use crate::application::sidebar::projection_service::{emit_sidebar_invalidated, SidebarRuntime};
 use crate::db::MessageDb;
 use crate::events::{EventStore, EventType};
 use crate::image_cache::{self, WeChatImageCache};
-use crate::runtime_monitor_ingest::{
-    apply_cached_preview_sender_hint, apply_sender_defaults,
-    apply_session_preview_sender_hint, cleanup_preview_sender_hints, diff_messages,
-    inherit_sender_from_reference, remember_preview_sender_hint, self_source_label,
-    should_emit_session_snapshot, should_forward_session_preview,
-    should_forward_sidebar_chat, ChatKind, PreviewSenderHint, SessionListenState,
-    trim_for_log,
-};
-use crate::runtime_translator_runtime::{
-    publish_sidebar_append, spawn_sidebar_translation_update,
-};
-use crate::sidebar_projection::{emit_sidebar_invalidated, SidebarRuntime};
 use crate::task_manager::{FirstPollSignal, MonitorConfig, SidebarConfig, TaskManager};
 use anyhow::Result;
 use std::collections::HashMap;
@@ -316,8 +315,7 @@ pub(crate) fn spawn_monitor_loop(ctx: MonitorLoopContext) {
                     }
 
                     if let Some(snapshot) = snapshot_map.get(&chat_name) {
-                        let prev_unread =
-                            prev_unread_counts.get(&chat_name).copied().unwrap_or(0);
+                        let prev_unread = prev_unread_counts.get(&chat_name).copied().unwrap_or(0);
                         let unread_increased = snapshot.unread_count > prev_unread;
                         apply_session_preview_sender_hint(
                             &mut messages,
@@ -418,8 +416,7 @@ pub(crate) fn spawn_monitor_loop(ctx: MonitorLoopContext) {
                                     )
                                 };
 
-                                if image_capture
-                                    && image_cache::is_image_placeholder(&msg.content)
+                                if image_capture && image_cache::is_image_placeholder(&msg.content)
                                 {
                                     let now_ts = std::time::SystemTime::now()
                                         .duration_since(std::time::UNIX_EPOCH)
@@ -428,7 +425,8 @@ pub(crate) fn spawn_monitor_loop(ctx: MonitorLoopContext) {
                                         as i64;
                                     let cn = chat_name.clone();
                                     if let Ok(mut cache) = image_cache.lock() {
-                                        if let Some(path) = cache.find_image_for_message(&cn, now_ts)
+                                        if let Some(path) =
+                                            cache.find_image_for_message(&cn, now_ts)
                                         {
                                             found_image_path =
                                                 Some(path.to_string_lossy().to_string());

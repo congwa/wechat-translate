@@ -239,8 +239,8 @@ pub(crate) fn apply_cached_preview_sender_hint(
             &msg.content,
             Some(&hint.preview_body_key),
         );
-        let image_equivalent =
-            is_image_placeholder_like(&hint.preview_body) && is_image_placeholder_like(&msg.content);
+        let image_equivalent = is_image_placeholder_like(&hint.preview_body)
+            && is_image_placeholder_like(&msg.content);
         if !text_matched && !image_equivalent {
             continue;
         }
@@ -277,7 +277,10 @@ pub(crate) fn is_image_placeholder_like(text: &str) -> bool {
     )
 }
 
-pub(crate) fn inherit_sender_from_reference(current: &mut [ChatMessage], reference: &[ChatMessage]) {
+pub(crate) fn inherit_sender_from_reference(
+    current: &mut [ChatMessage],
+    reference: &[ChatMessage],
+) {
     if current.is_empty() || reference.is_empty() {
         return;
     }

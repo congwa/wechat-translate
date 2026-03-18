@@ -128,7 +128,9 @@ pub fn emit_settings_updated(app: &AppHandle, settings: &AppConfig) {
             let _ = toggle.set_checked(settings.translate.enabled);
         }
         // 同步系统托盘菜单的翻译开关
-        let _ = menu_state.translate_toggle.set_checked(settings.translate.enabled);
+        let _ = menu_state
+            .translate_toggle
+            .set_checked(settings.translate.enabled);
     }
     if let Some(versions) = app.try_state::<SnapshotVersionState>() {
         let snapshot = SettingsStateSnapshot {

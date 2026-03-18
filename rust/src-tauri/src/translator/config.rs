@@ -26,9 +26,7 @@ pub enum TranslateProviderConfig {
 
 impl Default for TranslateProviderConfig {
     fn default() -> Self {
-        Self::Deeplx {
-            url: String::new(),
-        }
+        Self::Deeplx { url: String::new() }
     }
 }
 

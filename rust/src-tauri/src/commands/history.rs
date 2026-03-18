@@ -93,8 +93,8 @@ pub async fn history_summary_generate(
     }
 
     let config = load_app_config(&config_dir.0).map_err(|e| e.to_string())?;
-    let service =
-        HistorySummaryService::from_translate_config(&config.translate).map_err(|e| e.to_string())?;
+    let service = HistorySummaryService::from_translate_config(&config.translate)
+        .map_err(|e| e.to_string())?;
 
     let result = service
         .summarize(

@@ -1,4 +1,5 @@
 use crate::adapter::ax_reader;
+use crate::application::runtime::service::RuntimeService;
 use crate::config::{load_app_config, ConfigDir};
 use crate::events::{EventStore, EventType};
 use crate::task_manager::TaskManager;
@@ -236,12 +237,13 @@ pub async fn accessibility_recover_listener(
     config_dir: tauri::State<'_, ConfigDir>,
     manager: tauri::State<'_, TaskManager>,
 ) -> Result<Value, String> {
+    let runtime = RuntimeService::new(manager.inner().clone());
     if !is_process_trusted() {
         return Err("辅助功能权限尚未授权".to_string());
     }
 
     let config = load_app_config(&config_dir.0).map_err(|e| e.to_string())?;
-    manager
+    runtime
         .set_use_right_panel_details(config.listen.use_right_panel_details)
         .await;
 
@@ -257,7 +259,7 @@ pub async fn accessibility_recover_listener(
     }
 
     info!("accessibility_recover_listener restarting monitor after trust recovery");
-    match manager
+    match runtime
         .restart_monitoring(config.listen.interval_seconds, Duration::from_secs(5), true)
         .await
     {
@@ -278,7 +280,7 @@ pub async fn accessibility_recover_listener(
                 "ok": true,
                 "message": "监听已重建",
                 "chat_name": first_chat,
-                "sidebar_refreshed": manager.get_task_state().sidebar,
+                "sidebar_refreshed": runtime.task_state().sidebar,
             }))
         }
         Err(error) => {

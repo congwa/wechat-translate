@@ -96,7 +96,10 @@ pub(crate) fn spawn_sidebar_translation_update(
         log::info!("[spawn_sidebar_translation_update] 开始实际翻译");
         let _permit = limiter.acquire().await;
         log::info!("[spawn_sidebar_translation_update] 获得限流许可");
-        match translator.translate(&content, &source_lang, &target_lang).await {
+        match translator
+            .translate(&content, &source_lang, &target_lang)
+            .await
+        {
             Ok(translated) => {
                 log::info!(
                     "[spawn_sidebar_translation_update] 翻译成功: {}",

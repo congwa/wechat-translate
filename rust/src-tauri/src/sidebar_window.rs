@@ -108,10 +108,16 @@ impl SidebarWindowState {
 
         let appearance_json = serde_json::to_string(&appearance).unwrap_or_default();
         let appearance_b64 = base64::engine::general_purpose::STANDARD.encode(&appearance_json);
-        
+
         let url_query = match mode {
-            WindowMode::Follow => format!("index.html?view=sidebar&mode=follow&appearance={}", appearance_b64),
-            WindowMode::Independent => format!("index.html?view=sidebar&mode=independent&count={}&ghost={}&appearance={}", count, ghost, appearance_b64),
+            WindowMode::Follow => format!(
+                "index.html?view=sidebar&mode=follow&appearance={}",
+                appearance_b64
+            ),
+            WindowMode::Independent => format!(
+                "index.html?view=sidebar&mode=independent&count={}&ghost={}&appearance={}",
+                count, ghost, appearance_b64
+            ),
         };
 
         let win = WebviewWindowBuilder::new(app, SIDEBAR_LABEL, WebviewUrl::App(url_query.into()))

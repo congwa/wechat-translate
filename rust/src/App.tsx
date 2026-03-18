@@ -9,11 +9,11 @@ import {
   Square,
 } from "lucide-react";
 import { PreflightBar } from "@/components/PreflightBar";
-import { SettingsPage } from "@/components/SettingsPage";
+import { SettingsPage } from "@/features/settings/SettingsPage";
 import { EventStream } from "@/components/EventStream";
 import { ServiceLogs } from "@/components/ServiceLogs";
 import { MessageHistory } from "@/components/MessageHistory";
-import { SidebarView } from "@/components/SidebarView";
+import { SidebarView } from "@/features/sidebar/SidebarView";
 import { AboutDialog } from "@/components/AboutDialog";
 import { useEventStore } from "@/stores/eventStore";
 import { useToastStore } from "@/stores/toastStore";

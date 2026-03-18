@@ -1,3 +1,4 @@
+use crate::application::runtime::service::RuntimeService;
 use crate::config::{load_app_config, ConfigDir};
 use crate::db::MessageDb;
 use crate::sidebar_window::{SidebarWindowState, WindowMode};
@@ -25,8 +26,9 @@ pub async fn sidebar_start(
     max_requests_per_second: Option<usize>,
     image_capture: Option<bool>,
 ) -> Result<serde_json::Value, String> {
+    let runtime = RuntimeService::new(manager.inner().clone());
     let config = load_app_config(&config_dir.0).map_err(|e| e.to_string())?;
-    manager
+    runtime
         .set_use_right_panel_details(config.listen.use_right_panel_details)
         .await;
 
@@ -38,7 +40,7 @@ pub async fn sidebar_start(
     let ai_api_key = ai_api_key.unwrap_or_else(|| config.translate.ai_api_key.clone());
     let ai_base_url = ai_base_url.unwrap_or_else(|| config.translate.ai_base_url.clone());
 
-    manager
+    runtime
         .enable_sidebar(
             targets.unwrap_or_default(),
             translate_enabled,
@@ -67,7 +69,8 @@ pub async fn sidebar_stop(
     manager: tauri::State<'_, TaskManager>,
     sidebar_state: tauri::State<'_, Arc<SidebarWindowState>>,
 ) -> Result<serde_json::Value, String> {
-    manager.disable_sidebar().await.map_err(|e| e.to_string())?;
+    let runtime = RuntimeService::new(manager.inner().clone());
+    runtime.disable_sidebar().await.map_err(|e| e.to_string())?;
     let _ = sidebar_state.close(&app).await;
     Ok(serde_json::json!({ "ok": true, "message": "sidebar disabled" }))
 }
@@ -94,9 +97,10 @@ pub async fn live_start(
     image_capture: Option<bool>,
     window_mode: Option<String>,
 ) -> Result<serde_json::Value, String> {
+    let runtime = RuntimeService::new(manager.inner().clone());
     let mode = WindowMode::from_str_opt(window_mode.as_deref());
     let config = load_app_config(&config_dir.0).map_err(|e| e.to_string())?;
-    manager
+    runtime
         .set_use_right_panel_details(config.listen.use_right_panel_details)
         .await;
 
@@ -108,16 +112,16 @@ pub async fn live_start(
     let ai_api_key = ai_api_key.unwrap_or_else(|| config.translate.ai_api_key.clone());
     let ai_base_url = ai_base_url.unwrap_or_else(|| config.translate.ai_base_url.clone());
 
-    let state = manager.get_task_state();
+    let state = runtime.task_state();
     if !state.monitoring {
         let interval = interval_seconds.unwrap_or(1.0);
-        manager
+        runtime
             .start_monitoring(interval)
             .await
             .map_err(|e| e.to_string())?;
     }
 
-    manager
+    runtime
         .enable_sidebar(
             vec![],
             translate_enabled,
@@ -139,15 +143,13 @@ pub async fn live_start(
 
     // 等待监听循环首次 poll 完成后再打开窗口
     // 确保 SidebarRuntime.current_chat 已经被设置，避免显示错误数据
-    let first_chat = manager
-        .wait_first_poll(Duration::from_secs(5))
-        .await;
+    let first_chat = runtime.wait_first_poll(Duration::from_secs(5)).await;
 
     if let Some(chat_name) = first_chat {
         // 确保 sidebar_runtime 的 current_chat 已设置
-        let runtime = manager.get_sidebar_runtime();
-        if runtime.get_current_chat().is_empty() {
-            runtime.set_current_chat(&chat_name);
+        let sidebar_runtime = runtime.sidebar_runtime();
+        if sidebar_runtime.get_current_chat().is_empty() {
+            sidebar_runtime.set_current_chat(&chat_name);
         }
     }
 
@@ -205,15 +207,20 @@ pub async fn sidebar_snapshot_get(
     chat_name: Option<String>,
     limit: Option<i64>,
 ) -> Result<serde_json::Value, String> {
-    let runtime = manager.get_sidebar_runtime();
-    let runtime_chat = runtime.get_current_chat();
-    let refresh_version = runtime.get_refresh_version();
+    let runtime = RuntimeService::new(manager.inner().clone());
+    let sidebar_runtime = runtime.sidebar_runtime();
+    let runtime_chat = sidebar_runtime.get_current_chat();
+    let refresh_version = sidebar_runtime.get_refresh_version();
 
     // 优先使用后端运行态的 current_chat，前端传入的 chat_name 作为备选
     let selected_chat = if !runtime_chat.is_empty() {
         Some(runtime_chat)
     } else {
-        match chat_name.as_deref().map(str::trim).filter(|name| !name.is_empty()) {
+        match chat_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+        {
             Some(name) => Some(name.to_string()),
             None => db.latest_chat_name().map_err(|e| e.to_string())?,
         }
@@ -226,7 +233,7 @@ pub async fn sidebar_snapshot_get(
         Vec::new()
     };
 
-    let translator_status = manager.get_translator_status().await;
+    let translator_status = runtime.translator_status().await;
     Ok(serde_json::json!({
         "ok": true,
         "data": {
@@ -275,7 +282,11 @@ pub async fn translate_test(
                     &provider_id,
                     &model_id,
                     &api_key,
-                    if base_url.is_empty() { None } else { Some(&base_url) },
+                    if base_url.is_empty() {
+                        None
+                    } else {
+                        Some(&base_url)
+                    },
                     &source,
                     &target,
                     timeout,
@@ -316,15 +327,9 @@ pub async fn translate_sidebar_message(
         chat_name,
         &content[..content.len().min(50)]
     );
-    let result = manager
-        .translate_message_manually(
-            app,
-            message_id,
-            chat_name,
-            sender,
-            content,
-            detected_at,
-        )
+    let runtime = RuntimeService::new(manager.inner().clone());
+    let result = runtime
+        .translate_message_manually(app, message_id, chat_name, sender, content, detected_at)
         .await;
     if let Err(ref e) = result {
         log::error!("[Sidebar] 手动翻译失败: {}", e);

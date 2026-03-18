@@ -1,6 +1,10 @@
+use crate::application::runtime::service::RuntimeService;
 use crate::config::{load_app_config, ConfigDir};
 use crate::dictionary::db::hash_text;
-use crate::dictionary::{DictionaryDb, DictionaryRouter, FavoriteWord, ProviderInfo, ReviewSession, ReviewStats, TranslationWorker, WordEntry};
+use crate::dictionary::{
+    DictionaryDb, DictionaryRouter, FavoriteWord, ProviderInfo, ReviewSession, ReviewStats,
+    TranslationWorker, WordEntry,
+};
 use crate::task_manager::TaskManager;
 use crate::translator::TranslationService;
 use std::collections::HashMap;
@@ -24,11 +28,8 @@ pub async fn word_lookup(
     }
 
     // 获取用户配置的词典提供者
-    let provider_id = provider.or_else(|| {
-        load_app_config(&config_dir.0)
-            .ok()
-            .map(|c| c.dict.provider)
-    });
+    let provider_id =
+        provider.or_else(|| load_app_config(&config_dir.0).ok().map(|c| c.dict.provider));
 
     // 1. 检查数据库缓存（考虑词典来源）
     if let Ok(Some(cached)) = dict_db.get_word(&word) {
@@ -44,7 +45,14 @@ pub async fn word_lookup(
 
         // 如果来源匹配但未翻译完成，启动异步翻译并返回
         if cache_matches_provider {
-            spawn_translation_task(&app_handle, &dict_db, &translation_service, &word, cached.clone()).await;
+            spawn_translation_task(
+                &app_handle,
+                &dict_db,
+                &translation_service,
+                &word,
+                cached.clone(),
+            )
+            .await;
             return Ok(cached);
         }
         // 如果来源不匹配，继续查询新的词典源
@@ -62,7 +70,14 @@ pub async fn word_lookup(
         .map_err(|e| e.to_string())?;
 
     // 4. 启动异步翻译任务
-    spawn_translation_task(&app_handle, &dict_db, &translation_service, &word, entry.clone()).await;
+    spawn_translation_task(
+        &app_handle,
+        &dict_db,
+        &translation_service,
+        &word,
+        entry.clone(),
+    )
+    .await;
 
     // 5. 立即返回（英文释义 + 空中文）
     Ok(entry)
@@ -78,9 +93,7 @@ pub async fn list_dict_providers(
 
 /// 获取当前配置的词典提供者
 #[tauri::command]
-pub async fn get_dict_provider(
-    config_dir: tauri::State<'_, ConfigDir>,
-) -> Result<String, String> {
+pub async fn get_dict_provider(config_dir: tauri::State<'_, ConfigDir>) -> Result<String, String> {
     let config = load_app_config(&config_dir.0).map_err(|e| e.to_string())?;
     Ok(config.dict.provider)
 }
@@ -117,6 +130,7 @@ pub async fn translate_cached(
     source_lang: Option<String>,
     target_lang: Option<String>,
 ) -> Result<String, String> {
+    let runtime = RuntimeService::new(manager.inner().clone());
     let source_lang = source_lang.unwrap_or_else(|| "en".to_string());
     let target_lang = target_lang.unwrap_or_else(|| "zh".to_string());
     let hash = hash_text(&text);
@@ -127,7 +141,7 @@ pub async fn translate_cached(
     }
 
     // 2. 使用翻译服务翻译
-    let translation_service = manager.get_translation_service();
+    let translation_service = runtime.translation_service();
     if !translation_service.is_available().await {
         return Err("Translator not configured".to_string());
     }
@@ -155,8 +169,10 @@ pub async fn translate_batch(
     source_lang: Option<String>,
     target_lang: Option<String>,
 ) -> Result<Vec<Option<String>>, String> {
+    let runtime = RuntimeService::new(manager.inner().clone());
     let source_lang = source_lang.unwrap_or_else(|| "en".to_string());
     let target_lang = target_lang.unwrap_or_else(|| "zh".to_string());
+    let translation_service = runtime.translation_service();
 
     let mut results = Vec::with_capacity(texts.len());
 
@@ -170,9 +186,11 @@ pub async fn translate_batch(
         }
 
         // 使用翻译服务翻译
-        let translation_service = manager.get_translation_service();
         if translation_service.is_available().await {
-            match translation_service.translate_with_langs(&text, &source_lang, &target_lang).await {
+            match translation_service
+                .translate_with_langs(&text, &source_lang, &target_lang)
+                .await
+            {
                 Ok(translated) => {
                     let _ = dict_db.insert_translation(
                         &text,
@@ -231,9 +249,7 @@ pub async fn is_word_favorited(
     dict_db: tauri::State<'_, Arc<DictionaryDb>>,
     word: String,
 ) -> Result<bool, String> {
-    dict_db
-        .is_favorited(&word)
-        .map_err(|e| e.to_string())
+    dict_db.is_favorited(&word).map_err(|e| e.to_string())
 }
 
 /// 批量检查收藏状态
@@ -245,7 +261,7 @@ pub async fn get_favorites_batch(
     let results = dict_db
         .get_favorites_batch(&words)
         .map_err(|e| e.to_string())?;
-    
+
     Ok(results.into_iter().collect())
 }
 
@@ -258,7 +274,7 @@ pub async fn list_favorites(
 ) -> Result<Vec<FavoriteWord>, String> {
     let offset = offset.unwrap_or(0);
     let limit = limit.unwrap_or(50);
-    
+
     dict_db
         .list_favorites(offset, limit)
         .map_err(|e| e.to_string())
@@ -282,19 +298,13 @@ pub async fn record_review(
     dict_db: tauri::State<'_, Arc<DictionaryDb>>,
     word: String,
 ) -> Result<bool, String> {
-    dict_db
-        .record_review(&word)
-        .map_err(|e| e.to_string())
+    dict_db.record_review(&word).map_err(|e| e.to_string())
 }
 
 /// 获取收藏总数
 #[tauri::command]
-pub async fn count_favorites(
-    dict_db: tauri::State<'_, Arc<DictionaryDb>>,
-) -> Result<u32, String> {
-    dict_db
-        .count_favorites()
-        .map_err(|e| e.to_string())
+pub async fn count_favorites(dict_db: tauri::State<'_, Arc<DictionaryDb>>) -> Result<u32, String> {
+    dict_db.count_favorites().map_err(|e| e.to_string())
 }
 
 // ========== 复习功能 ==========
@@ -353,7 +363,5 @@ pub async fn finish_review_session(
 pub async fn get_review_stats(
     dict_db: tauri::State<'_, Arc<DictionaryDb>>,
 ) -> Result<ReviewStats, String> {
-    dict_db
-        .get_review_stats()
-        .map_err(|e| e.to_string())
+    dict_db.get_review_stats().map_err(|e| e.to_string())
 }

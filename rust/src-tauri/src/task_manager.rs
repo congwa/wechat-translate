@@ -1,14 +1,12 @@
 use crate::adapter::MacOSAdapter;
 use crate::app_state;
+use crate::application::runtime::monitor_loop::{spawn_monitor_loop, MonitorLoopContext};
+use crate::application::runtime::translator_runtime::spawn_sidebar_translation_update;
+use crate::application::sidebar::projection_service::{emit_sidebar_invalidated, SidebarRuntime};
 use crate::config::AppConfig;
 use crate::db::MessageDb;
 use crate::events::{EventStore, EventType};
 use crate::image_cache::WeChatImageCache;
-use crate::runtime_monitor_loop::{spawn_monitor_loop, MonitorLoopContext};
-use crate::runtime_translator_runtime::{
-    spawn_sidebar_translation_update,
-};
-use crate::sidebar_projection::{emit_sidebar_invalidated, SidebarRuntime};
 use crate::translator::{
     TranslateConfig, TranslateProviderConfig, TranslationLimiter, TranslationService,
     TranslatorServiceStatus,
@@ -28,7 +26,6 @@ pub struct TaskState {
     pub monitoring: bool,
     pub sidebar: bool,
 }
-
 
 pub(crate) struct SidebarConfig {
     pub(crate) translator: Option<Arc<dyn crate::translator::Translator>>,
@@ -84,7 +81,6 @@ impl FirstPollSignal {
 pub(crate) struct MonitorConfig {
     pub(crate) use_right_panel_details: bool,
 }
-
 
 #[derive(Clone)]
 pub struct TaskManager {
@@ -213,7 +209,8 @@ impl TaskManager {
     ) -> Result<Option<String>> {
         let was_running = self.monitor_token.lock().await.is_some();
         if was_running {
-            self.stop_monitoring_and_wait(Duration::from_secs(3)).await?;
+            self.stop_monitoring_and_wait(Duration::from_secs(3))
+                .await?;
         }
 
         if recover_sidebar_runtime && self.sidebar_enabled.load(Ordering::Relaxed) {
@@ -267,14 +264,22 @@ impl TaskManager {
         }
 
         let (translator, limiter) = self.translation_service.get_translator_and_limiter().await;
-        log::info!("[TaskManager] translator={}, limiter={}", translator.is_some(), limiter.is_some());
+        log::info!(
+            "[TaskManager] translator={}, limiter={}",
+            translator.is_some(),
+            limiter.is_some()
+        );
         let translator = translator.ok_or_else(|| "翻译服务未配置".to_string())?;
         let limiter = limiter.ok_or_else(|| "翻译限流器未配置".to_string())?;
 
         let source_lang = config.source_lang.clone();
         let target_lang = config.target_lang.clone();
 
-        log::info!("[TaskManager] 准备启动翻译任务: {}→{}", source_lang, target_lang);
+        log::info!(
+            "[TaskManager] 准备启动翻译任务: {}→{}",
+            source_lang,
+            target_lang
+        );
         // 复用已有的翻译更新逻辑
         spawn_sidebar_translation_update(
             self.clone(),
@@ -390,7 +395,10 @@ impl TaskManager {
             max_requests_per_second: config.translate.max_requests_per_second,
         };
 
-        let translator_status = self.translation_service.update_config(translate_config).await;
+        let translator_status = self
+            .translation_service
+            .update_config(translate_config)
+            .await;
 
         // 更新侧边栏配置（使用全局翻译服务的 translator 和 limiter）
         if self.sidebar_enabled.load(Ordering::Relaxed) {
@@ -550,11 +558,13 @@ impl TaskManager {
                 provider_id: ai_provider_id,
                 model_id: ai_model_id,
                 api_key: ai_api_key,
-                base_url: if ai_base_url.is_empty() { None } else { Some(ai_base_url) },
+                base_url: if ai_base_url.is_empty() {
+                    None
+                } else {
+                    Some(ai_base_url)
+                },
             },
-            _ => TranslateProviderConfig::Deeplx {
-                url: deeplx_url,
-            },
+            _ => TranslateProviderConfig::Deeplx { url: deeplx_url },
         };
 
         let translate_config = TranslateConfig {
@@ -567,7 +577,10 @@ impl TaskManager {
             max_requests_per_second,
         };
 
-        let translator_status = self.translation_service.update_config(translate_config).await;
+        let translator_status = self
+            .translation_service
+            .update_config(translate_config)
+            .await;
 
         let target_set: HashSet<String> = targets.into_iter().filter(|t| !t.is_empty()).collect();
 
@@ -613,7 +626,9 @@ impl TaskManager {
 
         self.sidebar_runtime.clear();
 
-        self.translation_service.set_status(TranslatorServiceStatus::disabled()).await;
+        self.translation_service
+            .set_status(TranslatorServiceStatus::disabled())
+            .await;
 
         let app = self.get_app_handle().await?;
         let state = self.get_task_state();
@@ -674,10 +689,10 @@ fn update_tray_menu(
 #[cfg(test)]
 mod tests {
     use super::{MacOSAdapter, TaskManager, TranslatorServiceStatus};
-    use crate::{db::MessageDb, events::EventStore, translator::TranslationService};
     use crate::runtime_monitor_ingest::{
         short_error_text, should_forward_session_preview, should_forward_sidebar_chat,
     };
+    use crate::{db::MessageDb, events::EventStore, translator::TranslationService};
     use std::{path::PathBuf, sync::Arc, time::Duration};
     use tokio_util::sync::CancellationToken;
 
@@ -755,7 +770,9 @@ mod tests {
             Arc::new(MacOSAdapter::new()),
             Arc::new(EventStore::new()),
             db,
-            Arc::new(std::sync::Mutex::new(crate::image_cache::WeChatImageCache::new())),
+            Arc::new(std::sync::Mutex::new(
+                crate::image_cache::WeChatImageCache::new(),
+            )),
             Arc::new(TranslationService::new()),
         )
     }

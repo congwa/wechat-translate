@@ -1,3 +1,4 @@
+use crate::application::runtime::service::RuntimeService;
 use crate::db::MessageDb;
 use crate::events::{EventStore, EventType};
 use crate::task_manager::TaskManager;
@@ -9,12 +10,13 @@ pub async fn clear_restart(
     db: Arc<MessageDb>,
     manager: TaskManager,
 ) -> Result<serde_json::Value, String> {
-    manager
+    let runtime = RuntimeService::new(manager);
+    runtime
         .stop_all_and_wait(std::time::Duration::from_secs(3))
         .await
         .map_err(|e| e.to_string())?;
     db.clear_all().map_err(|e| e.to_string())?;
-    manager
+    runtime
         .start_monitoring(1.0)
         .await
         .map_err(|e| e.to_string())?;

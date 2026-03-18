@@ -24,7 +24,7 @@ impl DictionaryDb {
 
     fn init_tables(&self) -> Result<()> {
         let conn = self.conn.lock().unwrap();
-        
+
         // 创建基础表
         conn.execute_batch(
             r#"
@@ -128,9 +128,8 @@ impl DictionaryDb {
     /// 获取缓存的单词条目
     pub fn get_word(&self, word: &str) -> Result<Option<WordEntry>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
-            "SELECT raw_json, fetched_at FROM word_dictionary WHERE word = ?1",
-        )?;
+        let mut stmt =
+            conn.prepare("SELECT raw_json, fetched_at FROM word_dictionary WHERE word = ?1")?;
 
         let result = stmt.query_row(params![word.to_lowercase()], |row| {
             let raw_json: String = row.get(0)?;
@@ -222,7 +221,9 @@ impl DictionaryDb {
             // 解析 def_{m}_{d}
             let parts: Vec<&str> = field.split('_').collect();
             if parts.len() == 3 {
-                if let (Ok(m_idx), Ok(d_idx)) = (parts[1].parse::<usize>(), parts[2].parse::<usize>()) {
+                if let (Ok(m_idx), Ok(d_idx)) =
+                    (parts[1].parse::<usize>(), parts[2].parse::<usize>())
+                {
                     if let Some(meaning) = entry.meanings.get_mut(m_idx) {
                         if let Some(def) = meaning.definitions.get_mut(d_idx) {
                             def.chinese = Some(value.to_string());
@@ -234,7 +235,9 @@ impl DictionaryDb {
             // 解析 ex_{m}_{d}
             let parts: Vec<&str> = field.split('_').collect();
             if parts.len() == 3 {
-                if let (Ok(m_idx), Ok(d_idx)) = (parts[1].parse::<usize>(), parts[2].parse::<usize>()) {
+                if let (Ok(m_idx), Ok(d_idx)) =
+                    (parts[1].parse::<usize>(), parts[2].parse::<usize>())
+                {
                     if let Some(meaning) = entry.meanings.get_mut(m_idx) {
                         if let Some(def) = meaning.definitions.get_mut(d_idx) {
                             def.example_chinese = Some(value.to_string());
@@ -294,14 +297,11 @@ impl DictionaryDb {
             "#,
         )?;
 
-        let result = stmt.query_row(
-            params![source_hash, source_lang, target_lang],
-            |row| {
-                let translated: String = row.get(0)?;
-                let created_at: String = row.get(1)?;
-                Ok((translated, created_at))
-            },
-        );
+        let result = stmt.query_row(params![source_hash, source_lang, target_lang], |row| {
+            let translated: String = row.get(0)?;
+            let created_at: String = row.get(1)?;
+            Ok((translated, created_at))
+        });
 
         match result {
             Ok((translated, created_at)) => {
@@ -331,7 +331,13 @@ impl DictionaryDb {
             (source_text, source_hash, translated_text, source_lang, target_lang, created_at)
             VALUES (?1, ?2, ?3, ?4, ?5, datetime('now'))
             "#,
-            params![source_text, source_hash, translated_text, source_lang, target_lang],
+            params![
+                source_text,
+                source_hash,
+                translated_text,
+                source_lang,
+                target_lang
+            ],
         )?;
         Ok(())
     }
@@ -364,7 +370,11 @@ impl DictionaryDb {
         let word_lower = word.to_lowercase();
 
         let (phonetic, meanings_json, summary_zh) = if let Some(e) = entry {
-            let phonetic = e.phonetics.iter().find(|p| p.text.is_some()).and_then(|p| p.text.clone());
+            let phonetic = e
+                .phonetics
+                .iter()
+                .find(|p| p.text.is_some())
+                .and_then(|p| p.text.clone());
             let meanings_json = serde_json::to_string(&e.meanings).ok();
             (phonetic, meanings_json, e.summary_zh.clone())
         } else {
@@ -398,7 +408,7 @@ impl DictionaryDb {
         let word_lower = word.to_lowercase();
 
         let meanings_json = serde_json::to_string(&entry.meanings).ok();
-        
+
         let result = conn.execute(
             r#"
             UPDATE word_favorites 
@@ -472,11 +482,16 @@ impl DictionaryDb {
             // 优先从词典表的 raw_json 解析最新数据
             let (phonetic, meanings_json) = if let Some(json) = raw_json {
                 if let Ok(entry) = serde_json::from_str::<WordEntry>(&json) {
-                    let phonetic = entry.phonetics.iter()
+                    let phonetic = entry
+                        .phonetics
+                        .iter()
                         .find(|p| p.text.is_some())
                         .and_then(|p| p.text.clone());
                     let meanings = serde_json::to_string(&entry.meanings).ok();
-                    (phonetic.or(fallback_phonetic), meanings.or(fallback_meanings_json))
+                    (
+                        phonetic.or(fallback_phonetic),
+                        meanings.or(fallback_meanings_json),
+                    )
                 } else {
                     (fallback_phonetic, fallback_meanings_json)
                 }
@@ -540,11 +555,8 @@ impl DictionaryDb {
     /// 获取收藏总数
     pub fn count_favorites(&self) -> Result<u32> {
         let conn = self.conn.lock().unwrap();
-        let count: u32 = conn.query_row(
-            "SELECT COUNT(*) FROM word_favorites",
-            [],
-            |row| row.get(0),
-        )?;
+        let count: u32 =
+            conn.query_row("SELECT COUNT(*) FROM word_favorites", [], |row| row.get(0))?;
         Ok(count)
     }
 
@@ -625,11 +637,13 @@ impl DictionaryDb {
         )?;
 
         // 获取当前状态
-        let (current_consecutive, _current_mastery): (i32, i32) = conn.query_row(
-            "SELECT consecutive_correct, mastery_level FROM word_favorites WHERE word = ?1",
-            params![word_lower],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        ).unwrap_or((0, 0));
+        let (current_consecutive, _current_mastery): (i32, i32) = conn
+            .query_row(
+                "SELECT consecutive_correct, mastery_level FROM word_favorites WHERE word = ?1",
+                params![word_lower],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap_or((0, 0));
 
         // 计算新状态（艾宾浩斯算法）
         let (new_consecutive, new_mastery, next_review_days) = match feedback {
@@ -666,7 +680,13 @@ impl DictionaryDb {
                 updated_at = datetime('now')
             WHERE word = ?5
             "#,
-            params![feedback, new_consecutive, new_mastery, next_review_days, word_lower],
+            params![
+                feedback,
+                new_consecutive,
+                new_mastery,
+                next_review_days,
+                word_lower
+            ],
         )?;
 
         // 更新会话统计
@@ -745,18 +765,16 @@ impl DictionaryDb {
                     fuzzy_count: row.get(8)?,
                 })
             },
-        ).map_err(Into::into)
+        )
+        .map_err(Into::into)
     }
 
     /// 获取复习统计
     pub fn get_review_stats(&self) -> Result<ReviewStats> {
         let conn = self.conn.lock().unwrap();
 
-        let total_favorites: u32 = conn.query_row(
-            "SELECT COUNT(*) FROM word_favorites",
-            [],
-            |row| row.get(0),
-        )?;
+        let total_favorites: u32 =
+            conn.query_row("SELECT COUNT(*) FROM word_favorites", [], |row| row.get(0))?;
 
         let mastered_count: u32 = conn.query_row(
             "SELECT COUNT(*) FROM word_favorites WHERE mastery_level = 2",
@@ -782,11 +800,8 @@ impl DictionaryDb {
             |row| row.get(0),
         )?;
 
-        let total_reviews: u32 = conn.query_row(
-            "SELECT COUNT(*) FROM review_records",
-            [],
-            |row| row.get(0),
-        )?;
+        let total_reviews: u32 =
+            conn.query_row("SELECT COUNT(*) FROM review_records", [], |row| row.get(0))?;
 
         Ok(ReviewStats {
             total_favorites,

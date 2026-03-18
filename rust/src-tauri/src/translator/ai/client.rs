@@ -132,7 +132,11 @@ impl AiTranslator {
                 .header("anthropic-version", "2023-06-01");
         }
 
-        let resp = req.json(&request).send().await.context("AI API request failed")?;
+        let resp = req
+            .json(&request)
+            .send()
+            .await
+            .context("AI API request failed")?;
 
         let status = resp.status();
         if !status.is_success() {

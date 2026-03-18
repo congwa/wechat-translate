@@ -1,5 +1,6 @@
 pub mod adapter;
 mod app_state;
+mod application;
 mod audio_cache;
 mod commands;
 mod config;
@@ -8,8 +9,9 @@ pub mod dictionary;
 mod events;
 mod history_summary;
 mod image_cache;
-mod runtime_monitor_loop;
+mod interface;
 mod runtime_monitor_ingest;
+mod runtime_monitor_loop;
 mod runtime_translator_runtime;
 mod sidebar_projection;
 pub mod sidebar_window;
@@ -94,24 +96,20 @@ fn handle_tray_toggle_translate(app: &tauri::AppHandle) {
         let close_to_tray = CloseToTray(app_handle.state::<CloseToTray>().0.clone());
         let versions = app_handle.state::<app_state::SnapshotVersionState>();
 
-        let snapshot = match app_state::load_snapshot_sync(
-            &config_dir,
-            &manager,
-            &close_to_tray,
-            &versions,
-        ) {
-            Ok(snapshot) => snapshot,
-            Err(error) => {
-                sync_tray_translate_toggle(&app_handle, false);
-                show_app_message(
-                    &app_handle,
-                    "更新翻译设置失败",
-                    format!("读取当前配置失败：{error}"),
-                    MessageDialogKind::Error,
-                );
-                return;
-            }
-        };
+        let snapshot =
+            match app_state::load_snapshot_sync(&config_dir, &manager, &close_to_tray, &versions) {
+                Ok(snapshot) => snapshot,
+                Err(error) => {
+                    sync_tray_translate_toggle(&app_handle, false);
+                    show_app_message(
+                        &app_handle,
+                        "更新翻译设置失败",
+                        format!("读取当前配置失败：{error}"),
+                        MessageDialogKind::Error,
+                    );
+                    return;
+                }
+            };
 
         let mut new_settings = serde_json::to_value(&snapshot.settings.data).unwrap_or_default();
         if let Some(translate) = new_settings.get_mut("translate") {
@@ -168,27 +166,31 @@ fn handle_toggle_translate_enabled_menu(app: &tauri::AppHandle) {
         let close_to_tray = CloseToTray(app_handle.state::<CloseToTray>().0.clone());
         let versions = app_handle.state::<app_state::SnapshotVersionState>();
 
-        let snapshot = match app_state::load_snapshot_sync(
-            &config_dir,
-            &manager,
-            &close_to_tray,
-            &versions,
-        ) {
-            Ok(snapshot) => snapshot,
-            Err(error) => {
-                sync_translate_enabled_menu(&app_handle, false);
-                show_app_message(
-                    &app_handle,
-                    "更新翻译设置失败",
-                    format!("读取当前配置失败：{error}"),
-                    MessageDialogKind::Error,
-                );
-                return;
-            }
-        };
+        let snapshot =
+            match app_state::load_snapshot_sync(&config_dir, &manager, &close_to_tray, &versions) {
+                Ok(snapshot) => snapshot,
+                Err(error) => {
+                    sync_translate_enabled_menu(&app_handle, false);
+                    show_app_message(
+                        &app_handle,
+                        "更新翻译设置失败",
+                        format!("读取当前配置失败：{error}"),
+                        MessageDialogKind::Error,
+                    );
+                    return;
+                }
+            };
 
         let previous_enabled = snapshot.settings.data.translate.enabled;
-        if desired_enabled && snapshot.settings.data.translate.deeplx_url.trim().is_empty() {
+        if desired_enabled
+            && snapshot
+                .settings
+                .data
+                .translate
+                .deeplx_url
+                .trim()
+                .is_empty()
+        {
             sync_translate_enabled_menu(&app_handle, previous_enabled);
             show_app_message(
                 &app_handle,

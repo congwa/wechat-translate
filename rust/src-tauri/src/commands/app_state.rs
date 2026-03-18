@@ -1,4 +1,5 @@
 use crate::app_state;
+use crate::application::runtime::service::RuntimeService;
 use crate::config::{self as app_config, ConfigDir};
 use crate::task_manager::TaskManager;
 use crate::CloseToTray;
@@ -11,6 +12,7 @@ pub async fn save_settings(
     close_to_tray: &CloseToTray,
     settings: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
+    let runtime = RuntimeService::new(manager.clone());
     let (errors, path) = app_config::validate_and_write_config(&config_dir.0, &settings)
         .map_err(|error| error.to_string())?;
 
@@ -19,7 +21,7 @@ pub async fn save_settings(
     }
 
     let settings = app_config::load_app_config(&config_dir.0).map_err(|error| error.to_string())?;
-    manager.apply_runtime_config(&settings).await;
+    runtime.apply_runtime_config(&settings).await;
     app_state::emit_settings_updated(app, &settings);
     app_state::emit_runtime_updated(app, manager);
 
@@ -40,7 +42,8 @@ pub async fn app_state_get(
     close_to_tray: tauri::State<'_, CloseToTray>,
     versions: tauri::State<'_, app_state::SnapshotVersionState>,
 ) -> Result<serde_json::Value, String> {
-    let snapshot = app_state::load_snapshot(&config_dir, &manager, &close_to_tray, &versions).await?;
+    let snapshot =
+        app_state::load_snapshot(&config_dir, &manager, &close_to_tray, &versions).await?;
     Ok(serde_json::json!({ "ok": true, "data": snapshot }))
 }
 

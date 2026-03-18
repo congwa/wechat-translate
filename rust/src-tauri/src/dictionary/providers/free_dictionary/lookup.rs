@@ -4,8 +4,10 @@ use reqwest::Client;
 use std::time::Duration;
 
 use super::types::FreeDictionaryApiResponse;
-use crate::dictionary::types::{part_of_speech_to_chinese, Definition, Meaning, Phonetic, WordEntry};
 use crate::dictionary::providers::DictionaryProvider;
+use crate::dictionary::types::{
+    part_of_speech_to_chinese, Definition, Meaning, Phonetic, WordEntry,
+};
 
 const API_BASE_URL: &str = "https://api.dictionaryapi.dev/api/v2/entries/en";
 const REQUEST_TIMEOUT_SECS: u64 = 10;

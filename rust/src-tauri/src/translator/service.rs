@@ -130,30 +130,26 @@ impl TranslationService {
     /// 根据配置创建对应的翻译器实例
     fn create_translator(config: &TranslateConfig) -> Result<Arc<dyn Translator>> {
         match &config.provider_config {
-            TranslateProviderConfig::Deeplx { url } => {
-                Ok(Arc::new(DeepLXTranslator::new(
-                    url,
-                    &config.source_lang,
-                    &config.target_lang,
-                    config.timeout_seconds,
-                )))
-            }
+            TranslateProviderConfig::Deeplx { url } => Ok(Arc::new(DeepLXTranslator::new(
+                url,
+                &config.source_lang,
+                &config.target_lang,
+                config.timeout_seconds,
+            ))),
             TranslateProviderConfig::Ai {
                 provider_id,
                 model_id,
                 api_key,
                 base_url,
-            } => {
-                Ok(Arc::new(AiTranslator::new(
-                    provider_id,
-                    model_id,
-                    api_key,
-                    base_url.as_deref(),
-                    &config.source_lang,
-                    &config.target_lang,
-                    config.timeout_seconds,
-                )?))
-            }
+            } => Ok(Arc::new(AiTranslator::new(
+                provider_id,
+                model_id,
+                api_key,
+                base_url.as_deref(),
+                &config.source_lang,
+                &config.target_lang,
+                config.timeout_seconds,
+            )?)),
         }
     }
 
@@ -164,7 +160,11 @@ impl TranslationService {
         let (translator, limiter, status) = if !config.enabled {
             (None, None, TranslatorServiceStatus::disabled())
         } else if !config.is_configured() {
-            (None, None, TranslatorServiceStatus::unconfigured(&provider_name))
+            (
+                None,
+                None,
+                TranslatorServiceStatus::unconfigured(&provider_name),
+            )
         } else {
             match Self::create_translator(&config) {
                 Ok(t) => {
@@ -172,11 +172,19 @@ impl TranslationService {
                         config.max_concurrency,
                         config.max_requests_per_second,
                     ));
-                    (Some(t), Some(limiter), TranslatorServiceStatus::checking(&provider_name))
+                    (
+                        Some(t),
+                        Some(limiter),
+                        TranslatorServiceStatus::checking(&provider_name),
+                    )
                 }
                 Err(e) => {
                     log::error!("Failed to create translator: {}", e);
-                    (None, None, TranslatorServiceStatus::error(&provider_name, e.to_string()))
+                    (
+                        None,
+                        None,
+                        TranslatorServiceStatus::error(&provider_name, e.to_string()),
+                    )
                 }
             }
         };
@@ -286,10 +294,7 @@ impl TranslationService {
     /// 同时获取翻译器和限流器（用于 sidebar）
     pub async fn get_translator_and_limiter(
         &self,
-    ) -> (
-        Option<Arc<dyn Translator>>,
-        Option<Arc<TranslationLimiter>>,
-    ) {
+    ) -> (Option<Arc<dyn Translator>>, Option<Arc<TranslationLimiter>>) {
         let translator = self.translator.read().await.clone();
         let limiter = self.limiter.read().await.clone();
         (translator, limiter)

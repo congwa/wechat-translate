@@ -1,4 +1,5 @@
 use crate::app_state;
+use crate::application::runtime::service::RuntimeService;
 use crate::config::{self as app_config, ConfigDir};
 use crate::task_manager::TaskManager;
 use tauri::{Emitter, Manager};
@@ -18,6 +19,7 @@ pub async fn config_put(
     manager: tauri::State<'_, TaskManager>,
     config: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
+    let runtime = RuntimeService::new(manager.inner().clone());
     let (errors, path) =
         app_config::validate_and_write_config(&config_dir.0, &config).map_err(|e| e.to_string())?;
 
@@ -26,7 +28,7 @@ pub async fn config_put(
     }
 
     let app_config = app_config::load_app_config(&config_dir.0).map_err(|e| e.to_string())?;
-    manager.apply_runtime_config(&app_config).await;
+    runtime.apply_runtime_config(&app_config).await;
     app_state::emit_settings_updated(&app, &app_config);
     app_state::emit_runtime_updated(&app, &manager);
     let _ = app.emit(

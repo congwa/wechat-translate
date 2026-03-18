@@ -6,7 +6,9 @@ use std::sync::Mutex;
 
 use super::types::CambridgePosItem;
 use crate::dictionary::providers::DictionaryProvider;
-use crate::dictionary::types::{part_of_speech_to_chinese, Definition, Meaning, Phonetic, WordEntry};
+use crate::dictionary::types::{
+    part_of_speech_to_chinese, Definition, Meaning, Phonetic, WordEntry,
+};
 
 pub struct CambridgeProvider {
     conn: Mutex<Connection>,
@@ -102,9 +104,8 @@ impl DictionaryProvider for CambridgeProvider {
 
         let conn = self.conn.lock().map_err(|e| anyhow!("Lock error: {}", e))?;
 
-        let mut stmt = conn.prepare(
-            "SELECT word, pos_items FROM camdict WHERE word = ?1 LIMIT 1",
-        )?;
+        let mut stmt =
+            conn.prepare("SELECT word, pos_items FROM camdict WHERE word = ?1 LIMIT 1")?;
 
         let result = stmt.query_row(params![word], |row| {
             let db_word: String = row.get(0)?;

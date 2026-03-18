@@ -101,9 +101,7 @@ impl TranslationWorkerInner {
 
         // 1. summary_zh 最先翻译（翻译单词本身）
         if entry.summary_zh.is_none() {
-            tasks.push(TranslationTask::SummaryZh {
-                text: word.clone(),
-            });
+            tasks.push(TranslationTask::SummaryZh { text: word.clone() });
         }
 
         // 2. 按词性顺序添加释义和例句
@@ -138,13 +136,21 @@ impl TranslationWorkerInner {
 
             // 检查缓存
             let hash = hash_text(text);
-            let cached = self.dict_db.get_translation(&hash, "en", "zh").ok().flatten();
+            let cached = self
+                .dict_db
+                .get_translation(&hash, "en", "zh")
+                .ok()
+                .flatten();
 
             let translated_text = if let Some(cached) = cached {
                 Some(cached)
             } else {
                 // 调用翻译服务（自动限流）
-                match self.translation_service.translate_with_langs(text, "en", "zh").await {
+                match self
+                    .translation_service
+                    .translate_with_langs(text, "en", "zh")
+                    .await
+                {
                     Ok(result) => {
                         // 缓存翻译结果
                         let _ = self
@@ -158,7 +164,10 @@ impl TranslationWorkerInner {
 
             // 更新数据库
             if let Some(ref translated_str) = translated_text {
-                if let Err(e) = self.dict_db.update_word_field(&word, &field_name, translated_str) {
+                if let Err(e) = self
+                    .dict_db
+                    .update_word_field(&word, &field_name, translated_str)
+                {
                     log::warn!("Failed to update word field: {}", e);
                     continue;
                 }

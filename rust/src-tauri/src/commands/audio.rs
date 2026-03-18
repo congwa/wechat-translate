@@ -21,24 +21,21 @@ pub async fn audio_get_url(
     url: String,
 ) -> Result<String, String> {
     println!("[audio_get_url] 收到请求: {}", url);
-    
+
     // 验证 URL
     if url.is_empty() {
         return Err("音频 URL 不能为空".to_string());
     }
-    
+
     // 获取或下载音频
-    let cache_path = audio_cache
-        .get_or_download(&url)
-        .await
-        .map_err(|e| {
-            println!("[audio_get_url] 获取失败: {}", e);
-            format!("获取音频失败: {}", e)
-        })?;
-    
+    let cache_path = audio_cache.get_or_download(&url).await.map_err(|e| {
+        println!("[audio_get_url] 获取失败: {}", e);
+        format!("获取音频失败: {}", e)
+    })?;
+
     let result = cache_path.display().to_string();
     println!("[audio_get_url] 返回路径: {}", result);
-    
+
     // 返回纯文件路径，前端使用 convertFileSrc 转换为 asset:// 协议
     Ok(result)
 }
