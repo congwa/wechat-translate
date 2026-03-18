@@ -1,4 +1,5 @@
 use crate::app_state;
+use crate::application::runtime::service::RuntimeService;
 use crate::CloseToTray;
 use std::sync::atomic::Ordering;
 use tauri::{AppHandle, Manager, State};
@@ -19,5 +20,6 @@ pub fn set_close_to_tray(
     if let Some(tray) = app.try_state::<crate::TrayMenuState>() {
         let _ = tray.close_to_tray_check.set_checked(enabled);
     }
-    app_state::emit_runtime_updated(&app, &manager);
+    let runtime = RuntimeService::new(manager.inner().clone());
+    app_state::emit_runtime_updated(&app, runtime);
 }

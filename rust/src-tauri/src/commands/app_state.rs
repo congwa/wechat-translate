@@ -14,7 +14,7 @@ pub async fn save_settings(
     settings: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
     let runtime = RuntimeService::new(manager.clone());
-    let settings_service = SettingsService::new(config_dir, runtime);
+    let settings_service = SettingsService::new(config_dir, runtime.clone());
     let result = settings_service.save_raw_config(&settings).await?;
     if !result.errors.is_empty() {
         return Ok(serde_json::json!({ "ok": false, "errors": result.errors }));
@@ -24,10 +24,10 @@ pub async fn save_settings(
         .settings
         .ok_or_else(|| "配置保存后未生成有效快照".to_string())?;
     app_state::emit_settings_updated(app, &settings);
-    app_state::emit_runtime_updated(app, manager);
+    app_state::emit_runtime_updated(app, runtime.clone());
 
     let versions = app.state::<app_state::SnapshotVersionState>();
-    let snapshot = app_state::snapshot(settings, manager, close_to_tray, &versions).await;
+    let snapshot = app_state::snapshot(settings, &runtime, close_to_tray, &versions).await;
     Ok(serde_json::json!({
         "ok": true,
         "message": "settings saved",
@@ -43,8 +43,9 @@ pub async fn app_state_get(
     close_to_tray: tauri::State<'_, CloseToTray>,
     versions: tauri::State<'_, app_state::SnapshotVersionState>,
 ) -> Result<serde_json::Value, String> {
+    let runtime = RuntimeService::new(manager.inner().clone());
     let snapshot =
-        app_state::load_snapshot(&config_dir, &manager, &close_to_tray, &versions).await?;
+        app_state::load_snapshot(&config_dir, &runtime, &close_to_tray, &versions).await?;
     Ok(serde_json::json!({ "ok": true, "data": snapshot }))
 }
 

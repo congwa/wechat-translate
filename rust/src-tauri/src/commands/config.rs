@@ -21,7 +21,7 @@ pub async fn config_put(
     config: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
     let runtime = RuntimeService::new(manager.inner().clone());
-    let settings_service = SettingsService::new(&config_dir, runtime);
+    let settings_service = SettingsService::new(&config_dir, runtime.clone());
     let result = settings_service.save_raw_config(&config).await?;
 
     if !result.errors.is_empty() {
@@ -32,7 +32,7 @@ pub async fn config_put(
         .settings
         .ok_or_else(|| "配置保存后未生成有效快照".to_string())?;
     app_state::emit_settings_updated(&app, &app_config);
-    app_state::emit_runtime_updated(&app, &manager);
+    app_state::emit_runtime_updated(&app, runtime.clone());
     let _ = app.emit(
         "config-updated",
         serde_json::to_value(app_state::SettingsStateSnapshot {

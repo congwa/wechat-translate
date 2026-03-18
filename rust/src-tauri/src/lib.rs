@@ -97,9 +97,10 @@ fn handle_tray_toggle_translate(app: &tauri::AppHandle) {
         let manager = app_handle.state::<TaskManager>().inner().clone();
         let close_to_tray = CloseToTray(app_handle.state::<CloseToTray>().0.clone());
         let versions = app_handle.state::<app_state::SnapshotVersionState>();
+        let runtime = RuntimeService::new(manager.clone());
 
         let snapshot =
-            match app_state::load_snapshot_sync(&config_dir, &manager, &close_to_tray, &versions) {
+            match app_state::load_snapshot_sync(&config_dir, &runtime, &close_to_tray, &versions) {
                 Ok(snapshot) => snapshot,
                 Err(error) => {
                     sync_tray_translate_toggle(&app_handle, false);
@@ -167,9 +168,10 @@ fn handle_toggle_translate_enabled_menu(app: &tauri::AppHandle) {
         let manager = app_handle.state::<TaskManager>().inner().clone();
         let close_to_tray = CloseToTray(app_handle.state::<CloseToTray>().0.clone());
         let versions = app_handle.state::<app_state::SnapshotVersionState>();
+        let runtime = RuntimeService::new(manager.clone());
 
         let snapshot =
-            match app_state::load_snapshot_sync(&config_dir, &manager, &close_to_tray, &versions) {
+            match app_state::load_snapshot_sync(&config_dir, &runtime, &close_to_tray, &versions) {
                 Ok(snapshot) => snapshot,
                 Err(error) => {
                     sync_translate_enabled_menu(&app_handle, false);
@@ -626,10 +628,11 @@ pub fn run() {
                     "toggle_close_to_tray" => {
                         let close = app.state::<CloseToTray>();
                         let manager = app.state::<TaskManager>();
+                        let runtime = RuntimeService::new(manager.inner().clone());
                         let tray = app.state::<TrayMenuState>();
                         let checked = tray.close_to_tray_check.is_checked().unwrap_or(true);
                         close.0.store(checked, Ordering::Relaxed);
-                        app_state::emit_runtime_updated(app, &manager);
+                        app_state::emit_runtime_updated(app, runtime);
                     }
                     "clear_db_restart" => {
                         handle_clear_db_restart_menu(app);

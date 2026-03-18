@@ -1,6 +1,10 @@
 //! 运行时应用服务：为 command/query 层提供稳定的运行态访问入口，
 //! 避免上层继续直接依赖 TaskManager 的内部组织方式。
+use crate::application::runtime::lifecycle as runtime_lifecycle;
+use crate::application::runtime::sidebar_runtime as app_sidebar_runtime;
 use crate::application::runtime::state::TaskState;
+use crate::application::runtime::status_sync as runtime_status_sync;
+use crate::application::runtime::translator_runtime as app_translator_runtime;
 use crate::config::AppConfig;
 use crate::task_manager::TaskManager;
 use crate::translator::{TranslationService, TranslatorServiceStatus};
@@ -23,7 +27,14 @@ impl RuntimeService {
 
     /// 同步监听配置到运行时，确保保存配置后后台行为与配置文件保持一致。
     pub(crate) async fn apply_runtime_config(&self, config: &AppConfig) {
-        self.manager.apply_runtime_config(config).await;
+        self.manager
+            .set_use_right_panel_details(config.listen.use_right_panel_details)
+            .await;
+        app_translator_runtime::apply_runtime_config(
+            &self.manager.translator_runtime_context(),
+            config,
+        )
+        .await;
     }
 
     /// 更新监听采集策略，保证监听循环按最新 UI 细节模式读取微信内容。
@@ -45,17 +56,19 @@ impl RuntimeService {
 
     /// 启动监听主循环。
     pub(crate) async fn start_monitoring(&self, interval_seconds: f64) -> Result<()> {
-        self.manager.start_monitoring(interval_seconds).await
+        runtime_lifecycle::start_monitoring(&self.manager.lifecycle_context(), interval_seconds)
+            .await
     }
 
     /// 停止监听主循环。
     pub(crate) async fn stop_monitoring(&self) -> Result<()> {
-        self.manager.stop_monitoring().await
+        runtime_lifecycle::stop_monitoring(&self.manager.lifecycle_context()).await
     }
 
     /// 停止监听并等待旧任务完全退出，避免 cancel 后立即 restart 的竞态。
     pub(crate) async fn stop_monitoring_and_wait(&self, timeout: Duration) -> Result<()> {
-        self.manager.stop_monitoring_and_wait(timeout).await
+        runtime_lifecycle::stop_monitoring_and_wait(&self.manager.lifecycle_context(), timeout)
+            .await
     }
 
     /// 重建监听运行态，并在需要时恢复 sidebar 当前聊天投影。
@@ -65,9 +78,13 @@ impl RuntimeService {
         ready_timeout: Duration,
         recover_sidebar_runtime: bool,
     ) -> Result<Option<String>> {
-        self.manager
-            .restart_monitoring(interval_seconds, ready_timeout, recover_sidebar_runtime)
-            .await
+        runtime_lifecycle::restart_monitoring(
+            &self.manager.lifecycle_context(),
+            interval_seconds,
+            ready_timeout,
+            recover_sidebar_runtime,
+        )
+        .await
     }
 
     /// 等待监听首次成功轮询，供 live start 与授权恢复链路判断监听是否真正可用。
@@ -94,34 +111,34 @@ impl RuntimeService {
         max_requests_per_second: usize,
         image_capture: bool,
     ) -> Result<()> {
-        self.manager
-            .enable_sidebar(
-                targets,
-                translate_enabled,
-                provider,
-                deeplx_url,
-                ai_provider_id,
-                ai_model_id,
-                ai_api_key,
-                ai_base_url,
-                source_lang,
-                target_lang,
-                timeout_seconds,
-                max_concurrency,
-                max_requests_per_second,
-                image_capture,
-            )
-            .await
+        app_sidebar_runtime::enable_sidebar(
+            &self.manager.sidebar_runtime_context(),
+            targets,
+            translate_enabled,
+            provider,
+            deeplx_url,
+            ai_provider_id,
+            ai_model_id,
+            ai_api_key,
+            ai_base_url,
+            source_lang,
+            target_lang,
+            timeout_seconds,
+            max_concurrency,
+            max_requests_per_second,
+            image_capture,
+        )
+        .await
     }
 
     /// 关闭 sidebar 相关运行态。
     pub(crate) async fn disable_sidebar(&self) -> Result<()> {
-        self.manager.disable_sidebar().await
+        app_sidebar_runtime::disable_sidebar(&self.manager.sidebar_runtime_context()).await
     }
 
     /// 返回运行时健康快照，供 listen health 接口与设置页诊断区展示。
     pub(crate) async fn service_status(&self) -> serde_json::Value {
-        self.manager.service_status().await
+        runtime_status_sync::service_status(&self.manager.status_context()).await
     }
 
     /// 返回翻译服务健康状态，供 runtime 快照与诊断展示使用。
@@ -145,13 +162,20 @@ impl RuntimeService {
         content: String,
         detected_at: String,
     ) -> Result<(), String> {
-        self.manager
-            .translate_message_manually(app, message_id, chat_name, sender, content, detected_at)
-            .await
+        app_translator_runtime::translate_message_manually(
+            &self.manager.translator_runtime_context(),
+            app,
+            message_id,
+            chat_name,
+            sender,
+            content,
+            detected_at,
+        )
+        .await
     }
 
     /// 清空数据后重启监听时，统一通过等待式关闭保证运行态先回到干净基线。
     pub(crate) async fn stop_all_and_wait(&self, timeout: Duration) -> Result<()> {
-        self.manager.stop_all_and_wait(timeout).await
+        runtime_lifecycle::stop_all_and_wait(&self.manager.lifecycle_context(), timeout).await
     }
 }

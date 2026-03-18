@@ -2,6 +2,8 @@
 //! 让 TaskManager 退回为聚合入口，而不是继续承载完整生命周期编排细节。
 use crate::app_state;
 use crate::application::runtime::monitor_loop::{spawn_monitor_loop, MonitorLoopContext};
+use crate::application::runtime::service::RuntimeService;
+use crate::application::runtime::sidebar_runtime as app_sidebar_runtime;
 use crate::application::runtime::state::{
     FirstPollSignal, MonitorConfig, SidebarConfig, TaskState,
 };
@@ -105,7 +107,7 @@ pub(crate) async fn restart_monitoring(
 
     start_monitoring(ctx, interval_seconds).await?;
 
-    let first_chat = match ctx.manager.wait_first_poll(ready_timeout).await {
+    let first_chat = match ctx.first_poll_signal.wait_ready(ready_timeout).await {
         Some(chat_name) => Some(chat_name),
         None => {
             let _ = stop_monitoring_and_wait(ctx, Duration::from_secs(3)).await;
@@ -141,7 +143,7 @@ pub(crate) async fn finalize_monitor_loop(ctx: &RuntimeLifecycleContext, app_han
         .publish_task_state_event("monitoring", false, &next_state, &translator_status)
         .await;
     update_tray_menu(app_handle, &next_state, &translator_status);
-    app_state::emit_runtime_updated(app_handle, &ctx.manager);
+    app_state::emit_runtime_updated(app_handle, RuntimeService::new(ctx.manager.clone()));
 }
 
 /// 启动监听主循环并发布运行态变更，确保托盘和前端在同一轮里看到“监听已开始”。
@@ -168,7 +170,7 @@ pub(crate) async fn start_monitoring(
         .publish_task_state_event("monitoring", true, &state, &translator_status)
         .await;
     update_tray_menu(&app, &state, &translator_status);
-    app_state::emit_runtime_updated(&app, &ctx.manager);
+    app_state::emit_runtime_updated(&app, RuntimeService::new(ctx.manager.clone()));
 
     let poll_interval = interval_seconds.max(0.4);
     spawn_monitor_loop(MonitorLoopContext {
@@ -208,6 +210,6 @@ pub(crate) async fn stop_all_and_wait(
 ) -> Result<()> {
     let _ = stop_monitoring(ctx).await;
     wait_for_monitor_stop(ctx, timeout).await?;
-    ctx.manager.disable_sidebar().await?;
+    app_sidebar_runtime::disable_sidebar(&ctx.manager.sidebar_runtime_context()).await?;
     Ok(())
 }
