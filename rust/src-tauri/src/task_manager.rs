@@ -1,13 +1,13 @@
 use crate::adapter::MacOSAdapter;
 use crate::app_state;
-use crate::application::runtime::monitor_loop::{spawn_monitor_loop, MonitorLoopContext};
+use crate::application::runtime::lifecycle::{self as runtime_lifecycle, RuntimeLifecycleContext};
 use crate::application::runtime::state::{FirstPollSignal, MonitorConfig, SidebarConfig};
 use crate::application::runtime::translation_config::{
     build_translate_config_from_app_config, build_translate_config_from_sidebar_params,
     SidebarTranslationRuntimeParams,
 };
 use crate::application::runtime::translator_runtime::spawn_sidebar_translation_update;
-use crate::application::sidebar::projection_service::{emit_sidebar_invalidated, SidebarRuntime};
+use crate::application::sidebar::projection_service::SidebarRuntime;
 use crate::config::AppConfig;
 use crate::db::MessageDb;
 use crate::events::{EventStore, EventType};
@@ -18,7 +18,7 @@ use anyhow::Result;
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tauri::AppHandle;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
@@ -76,15 +76,18 @@ impl TaskManager {
         }
     }
 
+    /// 记录主应用句柄，供运行时服务在监听循环、托盘和事件链路里统一发消息。
     pub async fn set_app_handle(&self, handle: AppHandle) {
         *self.app_handle.lock().await = Some(handle);
     }
 
+    /// 更新监听是否读取右侧详情面板的策略，让运行中监听可以响应最新配置。
     pub async fn set_use_right_panel_details(&self, enabled: bool) {
         self.monitor_config.lock().await.use_right_panel_details = enabled;
     }
 
-    async fn get_app_handle(&self) -> Result<AppHandle> {
+    /// 读取当前应用句柄；若应用尚未完成 bootstrap，则返回错误避免生命周期误触发。
+    pub(crate) async fn get_app_handle(&self) -> Result<AppHandle> {
         self.app_handle
             .lock()
             .await
@@ -113,70 +116,44 @@ impl TaskManager {
         self.first_poll_signal.wait_ready(timeout).await
     }
 
-    async fn wait_for_monitor_stop(&self, timeout: Duration) -> Result<()> {
-        let started_at = Instant::now();
-        loop {
-            if self.monitor_token.lock().await.is_none() {
-                return Ok(());
-            }
-
-            if started_at.elapsed() >= timeout {
-                anyhow::bail!("等待监听任务停止超时");
-            }
-
-            tokio::time::sleep(Duration::from_millis(50)).await;
+    /// 汇总监听生命周期依赖，供独立 runtime 生命周期模块执行启停/恢复编排。
+    pub(crate) fn lifecycle_context(&self) -> RuntimeLifecycleContext {
+        RuntimeLifecycleContext {
+            manager: self.clone(),
+            adapter: self.adapter.clone(),
+            events: self.events.clone(),
+            db: self.db.clone(),
+            image_cache: self.image_cache.clone(),
+            translation_service: self.translation_service.clone(),
+            monitor_token: self.monitor_token.clone(),
+            monitoring_active: self.monitoring_active.clone(),
+            monitor_config: self.monitor_config.clone(),
+            first_poll_signal: self.first_poll_signal.clone(),
+            sidebar_enabled: self.sidebar_enabled.clone(),
+            sidebar_config: self.sidebar_config.clone(),
+            sidebar_runtime: self.sidebar_runtime.clone(),
         }
     }
 
+    /// 供恢复链路使用：先停止旧监听，再等待后台任务真正退出。
     pub async fn stop_monitoring_and_wait(&self, timeout: Duration) -> Result<()> {
-        self.stop_monitoring().await?;
-        self.wait_for_monitor_stop(timeout).await
+        runtime_lifecycle::stop_monitoring_and_wait(&self.lifecycle_context(), timeout).await
     }
 
-    async fn restore_sidebar_after_monitor_restart(&self, chat_name: &str) {
-        if chat_name.trim().is_empty() || !self.sidebar_enabled.load(Ordering::Relaxed) {
-            return;
-        }
-
-        let refresh_version = self.sidebar_runtime.update_chat_and_version(chat_name);
-        if let Ok(app) = self.get_app_handle().await {
-            emit_sidebar_invalidated(&app, &self.events, chat_name, refresh_version);
-        }
-    }
-
+    /// 在辅助功能恢复后，按等待式生命周期重建监听和 sidebar 基线。
     pub async fn restart_monitoring(
         &self,
         interval_seconds: f64,
         ready_timeout: Duration,
         recover_sidebar_runtime: bool,
     ) -> Result<Option<String>> {
-        let was_running = self.monitor_token.lock().await.is_some();
-        if was_running {
-            self.stop_monitoring_and_wait(Duration::from_secs(3))
-                .await?;
-        }
-
-        if recover_sidebar_runtime && self.sidebar_enabled.load(Ordering::Relaxed) {
-            self.sidebar_runtime.clear();
-        }
-
-        self.start_monitoring(interval_seconds).await?;
-
-        let first_chat = match self.wait_first_poll(ready_timeout).await {
-            Some(chat_name) => Some(chat_name),
-            None => {
-                let _ = self.stop_monitoring_and_wait(Duration::from_secs(3)).await;
-                anyhow::bail!("监听恢复失败：首次轮询超时");
-            }
-        };
-
-        if recover_sidebar_runtime {
-            if let Some(chat_name) = first_chat.as_deref() {
-                self.restore_sidebar_after_monitor_restart(chat_name).await;
-            }
-        }
-
-        Ok(first_chat)
+        runtime_lifecycle::restart_monitoring(
+            &self.lifecycle_context(),
+            interval_seconds,
+            ready_timeout,
+            recover_sidebar_runtime,
+        )
+        .await
     }
 
     /// 获取翻译服务是否可用
@@ -258,7 +235,8 @@ impl TaskManager {
         })
     }
 
-    async fn publish_task_state_event(
+    /// 发布统一的任务状态事件，供日志页和调试面板观察生命周期变化。
+    pub(crate) async fn publish_task_state_event(
         &self,
         task: &str,
         running: bool,
@@ -280,7 +258,8 @@ impl TaskManager {
         }
     }
 
-    fn next_translator_generation(&self) -> u64 {
+    /// 推进翻译代际号，避免旧一轮翻译健康检查或写回覆盖新配置状态。
+    pub(crate) fn next_translator_generation(&self) -> u64 {
         self.translator_generation.fetch_add(1, Ordering::Relaxed) + 1
     }
 
@@ -364,89 +343,19 @@ impl TaskManager {
         }
     }
 
+    /// 在监听循环退出后统一回收运行态并刷新 snapshot，避免 UI 长时间停留在“监听中”。
     pub(crate) async fn finalize_monitor_loop(&self, app_handle: &AppHandle) {
-        let next_state = TaskState {
-            monitoring: false,
-            sidebar: self.sidebar_enabled.load(Ordering::Relaxed),
-        };
-
-        if !next_state.sidebar {
-            self.next_translator_generation();
-            self.translation_service
-                .set_status(TranslatorServiceStatus::disabled())
-                .await;
-        }
-
-        let translator_status = self.get_translator_status().await;
-        self.publish_task_state_event("monitoring", false, &next_state, &translator_status)
-            .await;
-        update_tray_menu(app_handle, &next_state, &translator_status);
-        app_state::emit_runtime_updated(app_handle, self);
+        runtime_lifecycle::finalize_monitor_loop(&self.lifecycle_context(), app_handle).await;
     }
 
+    /// 启动监听主循环，并通过生命周期服务同步任务状态、托盘和 runtime snapshot。
     pub async fn start_monitoring(&self, interval_seconds: f64) -> Result<()> {
-        {
-            let existing = self.monitor_token.lock().await;
-            if existing.is_some() {
-                anyhow::bail!("监听已在运行中");
-            }
-        }
-
-        let token = CancellationToken::new();
-        *self.monitor_token.lock().await = Some(token.clone());
-        self.monitoring_active.store(true, Ordering::Relaxed);
-        self.first_poll_signal.reset();
-
-        let app = self.get_app_handle().await?;
-        let state = self.get_task_state();
-        let translator_status = self.get_translator_status().await;
-        self.publish_task_state_event("monitoring", true, &state, &translator_status)
-            .await;
-        update_tray_menu(&app, &state, &translator_status);
-        app_state::emit_runtime_updated(&app, self);
-
-        let adapter = self.adapter.clone();
-        let events = self.events.clone();
-        let db = self.db.clone();
-        let image_cache = self.image_cache.clone();
-        let monitor_token_ref = self.monitor_token.clone();
-        let monitoring_active = self.monitoring_active.clone();
-        let monitor_config = self.monitor_config.clone();
-        let first_poll_signal = self.first_poll_signal.clone();
-        let sidebar_enabled = self.sidebar_enabled.clone();
-        let sidebar_config = self.sidebar_config.clone();
-        let sidebar_runtime = self.sidebar_runtime.clone();
-        let app_handle = app.clone();
-        let manager = self.clone();
-        let poll_interval = interval_seconds.max(0.4);
-
-        spawn_monitor_loop(MonitorLoopContext {
-            token,
-            adapter,
-            events,
-            db,
-            image_cache,
-            monitor_token_ref,
-            monitoring_active,
-            monitor_config,
-            first_poll_signal,
-            sidebar_enabled,
-            sidebar_config,
-            sidebar_runtime,
-            app_handle,
-            manager,
-            poll_interval,
-        });
-
-        Ok(())
+        runtime_lifecycle::start_monitoring(&self.lifecycle_context(), interval_seconds).await
     }
 
+    /// 发出监听取消信号；真正的退出等待由等待式 API 负责收尾。
     pub async fn stop_monitoring(&self) -> Result<()> {
-        let token = self.monitor_token.lock().await.clone();
-        if let Some(token) = token {
-            token.cancel();
-        }
-        Ok(())
+        runtime_lifecycle::stop_monitoring(&self.lifecycle_context()).await
     }
 
     pub async fn enable_sidebar(
@@ -548,11 +457,9 @@ impl TaskManager {
         Ok(())
     }
 
+    /// 关闭所有运行态前先等待监听退出，确保清库或恢复场景不会残留后台任务。
     pub async fn stop_all_and_wait(&self, timeout: Duration) -> Result<()> {
-        let _ = self.stop_monitoring().await;
-        self.wait_for_monitor_stop(timeout).await?;
-        self.disable_sidebar().await?;
-        Ok(())
+        runtime_lifecycle::stop_all_and_wait(&self.lifecycle_context(), timeout).await
     }
 
     pub async fn stop_all(&self) {
