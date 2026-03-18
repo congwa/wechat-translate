@@ -47,11 +47,17 @@ import { motion, AnimatePresence } from "framer-motion";
 import * as api from "@/lib/tauri-api";
 import type { AppSettings } from "@/lib/types";
 import { useToastStore } from "@/stores/toastStore";
-import { useFormStore, type SidebarWindowMode } from "@/stores/formStore";
 import {
+  createEmptyDraft,
+  draftFromSettings,
+  type SettingsDraft,
   settingsFromDraft,
   useSettingsStore,
 } from "@/stores/settingsStore";
+import {
+  useUiPreferencesStore,
+  type SidebarWindowMode,
+} from "@/stores/uiPreferencesStore";
 import { useRuntimeStore } from "@/stores/runtimeStore";
 import {
   fetchProviders,
@@ -79,6 +85,42 @@ interface ValidationResult {
   valid: boolean;
   errors: string[];
 }
+
+type SettingsDraftSection = "listen" | "translate" | "display";
+
+interface SectionDirtyState {
+  listen: boolean;
+  translate: boolean;
+  display: boolean;
+}
+
+const SECTION_FIELDS: Record<SettingsDraftSection, (keyof SettingsDraft)[]> = {
+  listen: ["pollInterval", "useRightPanelDetails"],
+  translate: [
+    "translateEnabled",
+    "translateProvider",
+    "deeplxUrl",
+    "aiProviderId",
+    "aiModelId",
+    "aiApiKey",
+    "aiBaseUrl",
+    "sourceLang",
+    "targetLang",
+    "translateTimeout",
+    "translateMaxConcurrency",
+    "translateMaxRequestsPerSecond",
+  ],
+  display: [
+    "displayWidth",
+    "collapsedDisplayCount",
+    "ghostMode",
+    "imageCapture",
+    "bgOpacity",
+    "blur",
+    "cardStyle",
+    "textEnhance",
+  ],
+};
 
 function validateConfigSchema(obj: unknown): ValidationResult {
   const errors: string[] = [];
@@ -165,19 +207,13 @@ function validateConfigSchema(obj: unknown): ValidationResult {
 export function SettingsPage() {
   const showToast = useToastStore((s) => s.showToast);
   const runtime = useRuntimeStore((s) => s.runtime);
+  const settingsSnapshot = useSettingsStore((s) => s.snapshot);
   const settings = useSettingsStore((s) => s.settings);
-  const draft = useSettingsStore((s) => s.draft);
-  const sectionDirty = useSettingsStore((s) => s.sectionDirty);
-  const updateDraft = useSettingsStore((s) => s.updateDraft);
-  const resetSection = useSettingsStore((s) => s.resetSection);
-  const markSectionClean = useSettingsStore((s) => s.markSectionClean);
-  const setSettingsSnapshot = useSettingsStore((s) => s.setSettings);
-  const setRuntime = useRuntimeStore((s) => s.setRuntime);
-  const setTranslatorStatus = useRuntimeStore((s) => s.setTranslatorStatus);
+  const applySettingsSnapshot = useSettingsStore((s) => s.applySnapshot);
+  const applyRuntimeSnapshot = useRuntimeStore((s) => s.applySnapshot);
 
-  const sidebarWindowMode = useFormStore((s) => s.sidebarWindowMode);
-  const imageCapture = useFormStore((s) => s.imageCapture);
-  const setUiSettings = useFormStore((s) => s.setSettings);
+  const sidebarWindowMode = useUiPreferencesStore((s) => s.sidebarWindowMode);
+  const setUiPreferences = useUiPreferencesStore((s) => s.setPreferences);
 
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [configRaw, setConfigRaw] = useState("");
@@ -186,6 +222,12 @@ export function SettingsPage() {
   const [configDirty, setConfigDirty] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [translateTestError, setTranslateTestError] = useState<string | null>(null);
+  const [draft, setDraft] = useState<SettingsDraft>(createEmptyDraft());
+  const [sectionDirty, setSectionDirty] = useState<SectionDirtyState>({
+    listen: false,
+    translate: false,
+    display: false,
+  });
 
   // AI 渠道动态加载
   const [aiProviders, setAiProviders] = useState<ProviderInfo[]>(BUILTIN_PROVIDERS);
@@ -194,6 +236,54 @@ export function SettingsPage() {
 
   const lastLoadedRef = useRef("");
   const validateTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+
+  const updateDraft = useCallback(
+    (patch: Partial<SettingsDraft>, section?: SettingsDraftSection) => {
+      setDraft((state) => ({ ...state, ...patch }));
+      setSectionDirty((state) => {
+        const next = { ...state };
+        if (section) {
+          next[section] = true;
+        } else {
+          for (const key of Object.keys(patch) as (keyof SettingsDraft)[]) {
+            for (const candidate of Object.keys(
+              SECTION_FIELDS,
+            ) as SettingsDraftSection[]) {
+              if (SECTION_FIELDS[candidate].includes(key)) {
+                next[candidate] = true;
+              }
+            }
+          }
+        }
+        return next;
+      });
+    },
+    [],
+  );
+
+  const resetSection = useCallback(
+    (section: SettingsDraftSection) => {
+      if (!settings) return;
+      const baseline = draftFromSettings(settings);
+      const patch: Partial<SettingsDraft> = {};
+      for (const key of SECTION_FIELDS[section]) {
+        (patch as Record<string, unknown>)[key] = baseline[key];
+      }
+      setDraft((state) => ({ ...state, ...patch }));
+      setSectionDirty((state) => ({ ...state, [section]: false }));
+    },
+    [settings],
+  );
+
+  const markSectionClean = useCallback((section: SettingsDraftSection) => {
+    setSectionDirty((state) => ({ ...state, [section]: false }));
+  }, []);
+
+  useEffect(() => {
+    if (!settings) return;
+    setDraft(draftFromSettings(settings));
+    setSectionDirty({ listen: false, translate: false, display: false });
+  }, [settingsSnapshot?.version, settings]);
 
   // 加载 AI 渠道列表
   useEffect(() => {
@@ -229,15 +319,7 @@ export function SettingsPage() {
         updateDraft({ aiBaseUrl: apiUrl });
       }
     }
-  }, [draft.aiProviderId, draft.translateProvider, aiProviders]);
-
-  const canSyncTranslateTestResult =
-    !!settings &&
-    draft.translateEnabled === settings.translate.enabled &&
-    draft.deeplxUrl.trim() === settings.translate.deeplx_url.trim() &&
-    draft.sourceLang === settings.translate.source_lang &&
-    draft.targetLang === settings.translate.target_lang &&
-    (parseFloat(draft.translateTimeout) || 8) === settings.translate.timeout_seconds;
+  }, [draft.aiProviderId, draft.translateProvider, aiProviders, updateDraft]);
 
   useEffect(() => {
     if (!advancedOpen || !settings || configDirty) return;
@@ -300,10 +382,10 @@ export function SettingsPage() {
     try {
       const resp = await api.appStateGet();
       if (resp.data) {
-        setSettingsSnapshot(resp.data.settings);
-        setRuntime(resp.data.runtime);
+        applySettingsSnapshot(resp.data.settings);
+        applyRuntimeSnapshot(resp.data.runtime);
         if (advancedOpen) {
-          const raw = JSON.stringify(resp.data.settings, null, 2);
+          const raw = JSON.stringify(resp.data.settings.data, null, 2);
           setConfigRaw(raw);
           lastLoadedRef.current = raw;
           setConfigDirty(false);
@@ -327,19 +409,6 @@ export function SettingsPage() {
       setConfigValid(false);
       showToast(errors[0] ?? "配置校验失败", false);
       return false;
-    }
-
-    if (resp.data) {
-      setSettingsSnapshot(resp.data.settings);
-      setRuntime(resp.data.runtime);
-      if (advancedOpen) {
-        const raw = JSON.stringify(resp.data.settings, null, 2);
-        setConfigRaw(raw);
-        lastLoadedRef.current = raw;
-        setConfigDirty(false);
-        setConfigErrors([]);
-        setConfigValid(true);
-      }
     }
 
     showToast(successMessage, true);
@@ -461,29 +530,9 @@ export function SettingsPage() {
         targetLang: draft.targetLang,
         timeoutSeconds: parseFloat(draft.translateTimeout) || 8,
       });
-      if (canSyncTranslateTestResult && draft.translateEnabled) {
-        setTranslatorStatus({
-          enabled: true,
-          configured: true,
-          checking: false,
-          healthy: true,
-          last_error: null,
-          provider: draft.translateProvider,
-        });
-      }
       showToast(`测试成功: ${resp.data}`, true);
     } catch (e) {
       const errorMsg = `${e}`;
-      if (canSyncTranslateTestResult && draft.translateEnabled) {
-        setTranslatorStatus({
-          enabled: true,
-          configured: draft.deeplxUrl.trim() !== "",
-          checking: false,
-          healthy: false,
-          last_error: errorMsg,
-          provider: draft.translateProvider,
-        });
-      }
       setTranslateTestError(errorMsg);
     } finally {
       setBusy(null);
@@ -694,7 +743,7 @@ export function SettingsPage() {
             ]).map((opt) => (
               <button
                 key={opt.value}
-                onClick={() => setUiSettings({ sidebarWindowMode: opt.value })}
+                onClick={() => setUiPreferences({ sidebarWindowMode: opt.value })}
                 className={`text-left rounded-xl border p-3 transition-all duration-150 ${
                   sidebarWindowMode === opt.value
                     ? "border-primary bg-primary/5 ring-1 ring-primary/20"
@@ -1276,12 +1325,12 @@ export function SettingsPage() {
               <h4 className="text-sm font-medium">聊天图片缩略图</h4>
             </div>
             <Switch
-              checked={imageCapture}
-              onCheckedChange={(v) => setUiSettings({ imageCapture: v })}
+              checked={draft.imageCapture}
+              onCheckedChange={(v) => updateDraft({ imageCapture: v }, "display")}
             />
           </div>
           <p className="text-[11px] text-muted-foreground">
-            该选项属于本地 UI 运行偏好；重新开启浮窗后会按当前偏好生效。
+            该选项属于应用配置；保存后会由后端统一决定是否读取图片缩略图。
           </p>
           {!draft.useRightPanelDetails && (
             <p className="text-[11px] text-amber-600 dark:text-amber-400">

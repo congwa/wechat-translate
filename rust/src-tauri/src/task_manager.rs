@@ -16,7 +16,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::{watch, Mutex};
 use tokio_util::sync::CancellationToken;
 
@@ -246,16 +246,7 @@ impl TaskManager {
 
         let refresh_version = self.sidebar_runtime.update_chat_and_version(chat_name);
         if let Ok(app) = self.get_app_handle().await {
-            self.events.publish(
-                &app,
-                EventType::Status,
-                "sidebar",
-                serde_json::json!({
-                    "type": "sidebar-refresh",
-                    "chat_name": chat_name,
-                    "refresh_version": refresh_version,
-                }),
-            );
+            emit_sidebar_invalidated(&app, &self.events, chat_name, refresh_version);
         }
     }
 
@@ -689,15 +680,11 @@ impl TaskManager {
                                 {
                                     let refresh_version =
                                         sidebar_runtime.update_chat_and_version(&snapshot.chat_name);
-                                    events.publish(
+                                    emit_sidebar_invalidated(
                                         &app_handle,
-                                        EventType::Status,
-                                        "sidebar",
-                                        serde_json::json!({
-                                            "type": "sidebar-refresh",
-                                            "chat_name": snapshot.chat_name,
-                                            "refresh_version": refresh_version,
-                                        }),
+                                        &events,
+                                        &snapshot.chat_name,
+                                        refresh_version,
                                     );
 
                                     // 触发翻译任务
@@ -759,15 +746,11 @@ impl TaskManager {
                                     {
                                         let refresh_version =
                                             sidebar_runtime.update_chat_and_version(&chat_name);
-                                        events.publish(
+                                        emit_sidebar_invalidated(
                                             &app_handle,
-                                            EventType::Status,
-                                            "sidebar",
-                                            serde_json::json!({
-                                                "type": "sidebar-refresh",
-                                                "chat_name": chat_name,
-                                                "refresh_version": refresh_version,
-                                            }),
+                                            &events,
+                                            &chat_name,
+                                            refresh_version,
                                         );
                                     }
                                 }
@@ -980,15 +963,11 @@ impl TaskManager {
                                     );
 
                                     // 发布 sidebar-refresh 事件（数据库提交成功后）
-                                    events.publish(
+                                    emit_sidebar_invalidated(
                                         &app_handle,
-                                        EventType::Status,
-                                        "sidebar",
-                                        serde_json::json!({
-                                            "type": "sidebar-refresh",
-                                            "chat_name": chat_name,
-                                            "refresh_version": refresh_version,
-                                        }),
+                                        &events,
+                                        &chat_name,
+                                        refresh_version,
                                     );
 
                                     let (translator, limiter) = {
@@ -1644,6 +1623,31 @@ fn publish_sidebar_append(
     events.publish(app_handle, EventType::Message, "sidebar", payload)
 }
 
+fn emit_sidebar_invalidated(
+    app_handle: &AppHandle,
+    events: &EventStore,
+    chat_name: &str,
+    refresh_version: u64,
+) {
+    events.publish(
+        app_handle,
+        EventType::Status,
+        "sidebar",
+        serde_json::json!({
+            "type": "sidebar-refresh",
+            "chat_name": chat_name,
+            "refresh_version": refresh_version,
+        }),
+    );
+    let _ = app_handle.emit(
+        "sidebar-invalidated",
+        serde_json::json!({
+            "version": refresh_version,
+            "chat_name": chat_name,
+        }),
+    );
+}
+
 fn spawn_sidebar_translation_update(
     manager: TaskManager,
     events: Arc<EventStore>,
@@ -1675,16 +1679,7 @@ fn spawn_sidebar_translation_update(
 
             // 译文写回成功后，递增刷新版本并发布 sidebar-refresh 事件
             let refresh_version = manager.sidebar_runtime.increment_refresh_version();
-            events.publish(
-                &app_handle,
-                EventType::Status,
-                "sidebar",
-                serde_json::json!({
-                    "type": "sidebar-refresh",
-                    "chat_name": chat_name,
-                    "refresh_version": refresh_version,
-                }),
-            );
+            emit_sidebar_invalidated(&app_handle, &events, &chat_name, refresh_version);
 
             events.publish(
                 &app_handle,
@@ -1726,16 +1721,7 @@ fn spawn_sidebar_translation_update(
 
                 // 译文写回成功后，递增刷新版本并发布 sidebar-refresh 事件
                 let refresh_version = manager.sidebar_runtime.increment_refresh_version();
-                events.publish(
-                    &app_handle,
-                    EventType::Status,
-                    "sidebar",
-                    serde_json::json!({
-                        "type": "sidebar-refresh",
-                        "chat_name": chat_name,
-                        "refresh_version": refresh_version,
-                    }),
-                );
+                emit_sidebar_invalidated(&app_handle, &events, &chat_name, refresh_version);
 
                 events.publish(
                     &app_handle,

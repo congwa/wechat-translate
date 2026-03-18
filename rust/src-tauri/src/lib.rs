@@ -6,6 +6,7 @@ mod config;
 pub mod db;
 pub mod dictionary;
 mod events;
+mod history_summary;
 mod image_cache;
 pub mod sidebar_window;
 mod task_manager;
@@ -19,11 +20,11 @@ use image_cache::WeChatImageCache;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use task_manager::TaskManager;
-use translator::TranslationService;
 use tauri::menu::{CheckMenuItemBuilder, Menu, MenuBuilder, MenuItemBuilder, SubmenuBuilder};
 use tauri::tray::TrayIconBuilder;
 use tauri::Manager;
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+use translator::TranslationService;
 
 pub struct CloseToTray(pub Arc<AtomicBool>);
 
@@ -87,8 +88,14 @@ fn handle_tray_toggle_translate(app: &tauri::AppHandle) {
         let config_dir = ConfigDir(app_handle.state::<ConfigDir>().0.clone());
         let manager = app_handle.state::<TaskManager>().inner().clone();
         let close_to_tray = CloseToTray(app_handle.state::<CloseToTray>().0.clone());
+        let versions = app_handle.state::<app_state::SnapshotVersionState>();
 
-        let snapshot = match app_state::load_snapshot_sync(&config_dir, &manager, &close_to_tray) {
+        let snapshot = match app_state::load_snapshot_sync(
+            &config_dir,
+            &manager,
+            &close_to_tray,
+            &versions,
+        ) {
             Ok(snapshot) => snapshot,
             Err(error) => {
                 sync_tray_translate_toggle(&app_handle, false);
@@ -102,7 +109,7 @@ fn handle_tray_toggle_translate(app: &tauri::AppHandle) {
             }
         };
 
-        let mut new_settings = serde_json::to_value(&snapshot.settings).unwrap_or_default();
+        let mut new_settings = serde_json::to_value(&snapshot.settings.data).unwrap_or_default();
         if let Some(translate) = new_settings.get_mut("translate") {
             translate["enabled"] = serde_json::Value::Bool(desired_enabled);
         }
@@ -155,8 +162,14 @@ fn handle_toggle_translate_enabled_menu(app: &tauri::AppHandle) {
         let config_dir = ConfigDir(app_handle.state::<ConfigDir>().0.clone());
         let manager = app_handle.state::<TaskManager>().inner().clone();
         let close_to_tray = CloseToTray(app_handle.state::<CloseToTray>().0.clone());
+        let versions = app_handle.state::<app_state::SnapshotVersionState>();
 
-        let snapshot = match app_state::load_snapshot_sync(&config_dir, &manager, &close_to_tray) {
+        let snapshot = match app_state::load_snapshot_sync(
+            &config_dir,
+            &manager,
+            &close_to_tray,
+            &versions,
+        ) {
             Ok(snapshot) => snapshot,
             Err(error) => {
                 sync_translate_enabled_menu(&app_handle, false);
@@ -170,8 +183,8 @@ fn handle_toggle_translate_enabled_menu(app: &tauri::AppHandle) {
             }
         };
 
-        let previous_enabled = snapshot.settings.translate.enabled;
-        if desired_enabled && snapshot.settings.translate.deeplx_url.trim().is_empty() {
+        let previous_enabled = snapshot.settings.data.translate.enabled;
+        if desired_enabled && snapshot.settings.data.translate.deeplx_url.trim().is_empty() {
             sync_translate_enabled_menu(&app_handle, previous_enabled);
             show_app_message(
                 &app_handle,
@@ -182,7 +195,7 @@ fn handle_toggle_translate_enabled_menu(app: &tauri::AppHandle) {
             return;
         }
 
-        let mut settings = snapshot.settings;
+        let mut settings = snapshot.settings.data;
         settings.translate.enabled = desired_enabled;
         let settings_value = match serde_json::to_value(&settings) {
             Ok(value) => value,
@@ -359,7 +372,10 @@ pub fn run() {
             // 初始化词典路由器
             let cambridge_db_path = app
                 .path()
-                .resolve("dictionaries/cambridge.sqlite", tauri::path::BaseDirectory::Resource)
+                .resolve(
+                    "dictionaries/cambridge.sqlite",
+                    tauri::path::BaseDirectory::Resource,
+                )
                 .ok();
             let dict_router = Arc::new(
                 dictionary::DictionaryRouter::new(cambridge_db_path)
@@ -368,8 +384,7 @@ pub fn run() {
 
             // 初始化音频缓存管理器
             let audio_cache = Arc::new(
-                audio_cache::AudioCache::new(&data_dir)
-                    .expect("failed to create audio cache"),
+                audio_cache::AudioCache::new(&data_dir).expect("failed to create audio cache"),
             );
 
             let image_cache = Arc::new(std::sync::Mutex::new(WeChatImageCache::new()));
@@ -393,6 +408,7 @@ pub fn run() {
             app.manage(translation_service);
             app.manage(manager.clone());
             app.manage(sidebar_state);
+            app.manage(app_state::SnapshotVersionState::default());
 
             #[cfg(debug_assertions)]
             open_main_window_devtools(app);
@@ -432,17 +448,15 @@ pub fn run() {
             let sidebar_toggle =
                 MenuItemBuilder::with_id("toggle_sidebar", "开启实时浮窗").build(app)?;
             let listen_toggle = MenuItemBuilder::with_id("toggle_listen", "开启监听").build(app)?;
-            let translate_toggle = CheckMenuItemBuilder::with_id(
-                "tray_toggle_translate",
-                "启用翻译服务",
-            )
-            .checked(
-                startup_config
-                    .as_ref()
-                    .map(|c| c.translate.enabled)
-                    .unwrap_or(false),
-            )
-            .build(app)?;
+            let translate_toggle =
+                CheckMenuItemBuilder::with_id("tray_toggle_translate", "启用翻译服务")
+                    .checked(
+                        startup_config
+                            .as_ref()
+                            .map(|c| c.translate.enabled)
+                            .unwrap_or(false),
+                    )
+                    .build(app)?;
 
             let show_item = MenuItemBuilder::with_id("show", "设置").build(app)?;
             let ghost_mode_toggle =
@@ -659,6 +673,8 @@ pub fn run() {
             commands::db::db_query_messages,
             commands::db::db_get_chats,
             commands::db::db_get_stats,
+            commands::history::history_summary_participants_get,
+            commands::history::history_summary_generate,
             commands::tray::get_close_to_tray,
             commands::tray::set_close_to_tray,
             commands::preflight::preflight_check,

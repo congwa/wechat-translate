@@ -1,5 +1,12 @@
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
-import type { ApiResponse, AppSettings, AppStateSnapshot, SidebarSnapshot } from "./types";
+import type {
+  ApiResponse,
+  AppSettings,
+  AppStateSnapshot,
+  HistorySummaryParticipant,
+  HistorySummaryResult,
+  SidebarSnapshot,
+} from "./types";
 
 export async function appStateGet(): Promise<ApiResponse<AppStateSnapshot>> {
   return invoke("app_state_get");
@@ -126,6 +133,24 @@ export async function dbGetChats(): Promise<ApiResponse> {
 
 export async function dbGetStats(): Promise<ApiResponse> {
   return invoke("db_get_stats");
+}
+
+export async function historySummaryParticipantsGet(params: {
+  chatName: string;
+  startDate: string;
+  endDate: string;
+}): Promise<ApiResponse<HistorySummaryParticipant[]>> {
+  return invoke("history_summary_participants_get", params);
+}
+
+export async function historySummaryGenerate(params: {
+  chatName: string;
+  scope: "chat" | "participant";
+  participantId?: string;
+  startDate: string;
+  endDate: string;
+}): Promise<ApiResponse<HistorySummaryResult>> {
+  return invoke("history_summary_generate", params);
 }
 
 export async function getCloseToTray(): Promise<boolean> {

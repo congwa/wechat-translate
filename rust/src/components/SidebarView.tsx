@@ -6,8 +6,13 @@ import { X, MessageCircle, Languages, AlertCircle, BookOpen, Users, User, Loader
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useSidebarStore } from "@/stores/sidebarStore";
-import type { SidebarMessage, SidebarAppearance, AppSettings } from "@/lib/types";
-import { useFormStore, type DisplayMode } from "@/stores/formStore";
+import type {
+  SidebarMessage,
+  SidebarAppearance,
+  SettingsSnapshot,
+  SidebarInvalidationEvent,
+} from "@/lib/types";
+import { useUiPreferencesStore, type DisplayMode } from "@/stores/uiPreferencesStore";
 import { useRuntimeStore } from "@/stores/runtimeStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { SegmentedText } from "@/components/SegmentedText";
@@ -357,12 +362,12 @@ export function SidebarView() {
 
   // 监听配置变更事件，实时更新外观和隐身模式
   useEffect(() => {
-    const unlisten = listen<AppSettings>("settings-updated", (e) => {
-      if (e.payload.display?.sidebar_appearance) {
-        setAppearance(e.payload.display.sidebar_appearance);
+    const unlisten = listen<SettingsSnapshot>("settings-updated", (e) => {
+      if (e.payload.data.display?.sidebar_appearance) {
+        setAppearance(e.payload.data.display.sidebar_appearance);
       }
-      if (e.payload.display?.ghost_mode !== undefined) {
-        setGhostMode(e.payload.display.ghost_mode);
+      if (e.payload.data.display?.ghost_mode !== undefined) {
+        setGhostMode(e.payload.data.display.ghost_mode);
       }
     });
     return () => {
@@ -370,21 +375,33 @@ export function SidebarView() {
     };
   }, []);
 
-  const items = useSidebarStore((s) => s.items);
-  const currentChat = useSidebarStore((s) => s.currentChat);
-  const refreshVersion = useSidebarStore((s) => s.refreshVersion);
-  const hydrateSnapshot = useSidebarStore((s) => s.hydrateSnapshot);
-  const updateMessageTranslation = useSidebarStore((s) => s.updateMessageTranslation);
-  const displayMode = useFormStore((s) => s.displayMode);
-  const setSettings = useFormStore((s) => s.setSettings);
+  const snapshot = useSidebarStore((s) => s.snapshot);
+  const invalidatedVersion = useSidebarStore((s) => s.invalidatedVersion);
+  const applySnapshot = useSidebarStore((s) => s.applySnapshot);
+  const setSidebarLoading = useSidebarStore((s) => s.setLoading);
+  const invalidateSidebar = useSidebarStore((s) => s.invalidate);
+  const displayMode = useUiPreferencesStore((s) => s.displayMode);
+  const setPreferences = useUiPreferencesStore((s) => s.setPreferences);
   const settings = useSettingsStore((s) => s.settings);
   const translatorStatus = useRuntimeStore((s) => s.runtime.translator);
-  const setTranslatorStatus = useRuntimeStore((s) => s.setTranslatorStatus);
   const bottomRef = useRef<HTMLDivElement>(null);
   const [visible, setVisible] = useState(true);
   const [snapshotLoading, setSnapshotLoading] = useState(false);
   const [showWordBook, setShowWordBook] = useState(false);
   const [translatingIds, setTranslatingIds] = useState<Set<number>>(new Set());
+  const items = snapshot.messages.map((message) => ({
+    id: message.id,
+    chatName: message.chat_name,
+    chatType: message.chat_type || undefined,
+    sender: message.sender,
+    textCn: message.content,
+    textEn: message.content_en || "",
+    translateError: "",
+    timestamp: message.detected_at,
+    isSelf: message.is_self,
+    imagePath: message.image_path || undefined,
+  }));
+  const currentChat = snapshot.current_chat ?? "";
   const translateEnabled = settings?.translate.enabled ?? false;
   const deeplxUrl = settings?.translate.deeplx_url ?? "";
   const canSwitchDisplayMode = !settings || (translateEnabled && deeplxUrl.trim() !== "");
@@ -392,29 +409,26 @@ export function SidebarView() {
 
   const fetchSnapshot = useCallback(async () => {
     setSnapshotLoading(true);
+    setSidebarLoading(true);
     try {
       const resp = await api.sidebarSnapshotGet({
         chatName: currentChat || undefined,
         limit: 50,
       });
       if (resp.data) {
-        hydrateSnapshot(
-          resp.data.current_chat ?? "",
-          resp.data.messages ?? [],
-          resp.data.refresh_version
-        );
-        setTranslatorStatus(resp.data.translator);
+        applySnapshot(resp.data);
       }
     } catch {
       /* ignore */
     } finally {
       setSnapshotLoading(false);
+      setSidebarLoading(false);
     }
-  }, [currentChat, hydrateSnapshot, setTranslatorStatus]);
+  }, [applySnapshot, currentChat, setSidebarLoading]);
 
   useEffect(() => {
     fetchSnapshot();
-  }, [fetchSnapshot, refreshVersion]);
+  }, [fetchSnapshot, invalidatedVersion]);
 
   useEffect(() => {
     if (isIndependent) return;
@@ -426,41 +440,14 @@ export function SidebarView() {
     };
   }, [isIndependent]);
 
-  // 监听单条消息翻译更新事件
   useEffect(() => {
-    const unlisten = listen<{
-      type: string;
-      source: string;
-      payload: {
-        kind: string;
-        message_id: number;
-        chat_name: string;
-        text_en: string;
-        translate_error: string;
-      };
-    }>("wechat-event", (e) => {
-      console.log("[Sidebar] 收到事件", e.payload);
-      if (e.payload.type === "message" && e.payload.source === "sidebar" && e.payload.payload.kind === "update") {
-        console.log("[Sidebar] 更新消息翻译", {
-          messageId: e.payload.payload.message_id,
-          textEn: e.payload.payload.text_en.substring(0, 50),
-        });
-        updateMessageTranslation(
-          e.payload.payload.message_id,
-          e.payload.payload.text_en,
-          e.payload.payload.translate_error
-        );
-        setTranslatingIds(prev => {
-          const next = new Set(prev);
-          next.delete(e.payload.payload.message_id);
-          return next;
-        });
-      }
+    const unlisten = listen<SidebarInvalidationEvent>("sidebar-invalidated", (e) => {
+      invalidateSidebar(e.payload.version);
     });
     return () => {
       unlisten.then((fn) => fn());
     };
-  }, [updateMessageTranslation]);
+  }, [invalidateSidebar]);
 
   // 滚动到底部：当消息数量变化或最后一条消息内容更新时触发（仅跟随模式）
   // 这样翻译完成后内容增多也会自动滚动到底部
@@ -537,7 +524,7 @@ export function SidebarView() {
                 {DISPLAY_MODES.map((mode) => (
                   <button
                     key={mode.value}
-                    onClick={() => setSettings({ displayMode: mode.value })}
+                    onClick={() => setPreferences({ displayMode: mode.value })}
                     title={mode.title}
                     className={`px-1.5 h-4 rounded text-[9px] font-medium transition-all duration-150 ${
                       effectiveDisplayMode === mode.value

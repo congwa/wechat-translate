@@ -17,9 +17,9 @@ import { SidebarView } from "@/components/SidebarView";
 import { AboutDialog } from "@/components/AboutDialog";
 import { useEventStore } from "@/stores/eventStore";
 import { useToastStore } from "@/stores/toastStore";
-import { useFormStore } from "@/stores/formStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useRuntimeStore } from "@/stores/runtimeStore";
+import { useUiPreferencesStore } from "@/stores/uiPreferencesStore";
 import { initDictionaryEventListeners, cleanupDictionaryEventListeners } from "@/stores/dictionaryStore";
 import * as api from "@/lib/tauri-api";
 import type { TaskState, TranslatorServiceStatus } from "@/lib/types";
@@ -47,8 +47,8 @@ export default function App() {
         .appStateGet()
         .then((resp) => {
           if (resp.data) {
-            useSettingsStore.getState().setSettings(resp.data.settings);
-            useRuntimeStore.getState().setRuntime(resp.data.runtime);
+            useSettingsStore.getState().applySnapshot(resp.data.settings);
+            useRuntimeStore.getState().applySnapshot(resp.data.runtime);
           }
         })
         .catch(() => {})
@@ -143,8 +143,7 @@ function MainApp() {
   const taskState = useRuntimeStore((s) => s.runtime.tasks);
   const translatorStatus = useRuntimeStore((s) => s.runtime.translator);
   const settings = useSettingsStore((s) => s.settings);
-  const imageCapture = useFormStore((s) => s.imageCapture);
-  const sidebarWindowMode = useFormStore((s) => s.sidebarWindowMode);
+  const sidebarWindowMode = useUiPreferencesStore((s) => s.sidebarWindowMode);
 
   async function handleLiveToggle() {
     if (liveBusy) return;
@@ -189,7 +188,7 @@ function MainApp() {
           maxConcurrency: settings.translate.max_concurrency,
           maxRequestsPerSecond: settings.translate.max_requests_per_second,
           intervalSeconds: settings.listen.interval_seconds,
-          imageCapture,
+          imageCapture: settings.display.image_capture,
           windowMode: sidebarWindowMode,
         });
         showToast("实时浮窗已开启", true);

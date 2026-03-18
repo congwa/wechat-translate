@@ -1,7 +1,7 @@
 use crate::app_state;
 use crate::config::{self as app_config, ConfigDir};
 use crate::task_manager::TaskManager;
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 
 #[tauri::command]
 pub async fn config_get(
@@ -31,7 +31,13 @@ pub async fn config_put(
     app_state::emit_runtime_updated(&app, &manager);
     let _ = app.emit(
         "config-updated",
-        serde_json::to_value(&app_config).unwrap_or_default(),
+        serde_json::to_value(app_state::SettingsStateSnapshot {
+            version: app
+                .state::<app_state::SnapshotVersionState>()
+                .current_settings(),
+            data: app_config,
+        })
+        .unwrap_or_default(),
     );
 
     Ok(serde_json::json!({ "ok": true, "message": "config saved", "path": path }))

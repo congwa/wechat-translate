@@ -42,6 +42,24 @@ pub struct DbStats {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct HistorySummaryParticipant {
+    pub id: String,
+    pub label: String,
+    pub message_count: i64,
+    pub is_self: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct HistorySummarySourceMessage {
+    pub chat_name: String,
+    pub sender: String,
+    pub content: String,
+    pub is_self: bool,
+    pub detected_at: String,
+    pub image_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct CachedTranslation {
     pub translated_text: String,
     pub source_lang: String,
@@ -163,11 +181,12 @@ impl MessageDb {
         }
 
         // Migrate: add chat_type column (nullable, history data will have NULL)
-        let has_chat_type: bool = conn.prepare("SELECT chat_type FROM messages LIMIT 0").is_ok();
+        let has_chat_type: bool = conn
+            .prepare("SELECT chat_type FROM messages LIMIT 0")
+            .is_ok();
         if !has_chat_type {
-            let _ = conn.execute_batch(
-                "ALTER TABLE messages ADD COLUMN chat_type TEXT DEFAULT NULL;",
-            );
+            let _ =
+                conn.execute_batch("ALTER TABLE messages ADD COLUMN chat_type TEXT DEFAULT NULL;");
         }
 
         Ok(Self {
@@ -553,6 +572,119 @@ impl MessageDb {
         Ok(chats)
     }
 
+    pub fn list_summary_participants(
+        &self,
+        chat_name: &str,
+        start_date: &str,
+        end_date: &str,
+    ) -> Result<Vec<HistorySummaryParticipant>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT sender, COUNT(*) as cnt
+             FROM messages
+             WHERE chat_name = ?1
+               AND date(detected_at) >= date(?2)
+               AND date(detected_at) <= date(?3)
+               AND is_self = 0
+               AND trim(sender) <> ''
+             GROUP BY sender
+             ORDER BY cnt DESC, sender COLLATE NOCASE ASC",
+        )?;
+        let rows = stmt.query_map(params![chat_name, start_date, end_date], |row| {
+            Ok(HistorySummaryParticipant {
+                id: row.get(0)?,
+                label: row.get(0)?,
+                message_count: row.get(1)?,
+                is_self: false,
+            })
+        })?;
+
+        let mut participants = Vec::new();
+        for row in rows {
+            participants.push(row.context("read summary participant row")?);
+        }
+
+        let self_count: i64 = conn.query_row(
+            "SELECT COUNT(*)
+             FROM messages
+             WHERE chat_name = ?1
+               AND date(detected_at) >= date(?2)
+               AND date(detected_at) <= date(?3)
+               AND is_self = 1",
+            params![chat_name, start_date, end_date],
+            |row| row.get(0),
+        )?;
+
+        if self_count > 0 {
+            participants.insert(
+                0,
+                HistorySummaryParticipant {
+                    id: crate::history_summary::SELF_PARTICIPANT_ID.to_string(),
+                    label: "我".to_string(),
+                    message_count: self_count,
+                    is_self: true,
+                },
+            );
+        }
+
+        Ok(participants)
+    }
+
+    pub fn query_summary_messages(
+        &self,
+        chat_name: &str,
+        start_date: &str,
+        end_date: &str,
+        participant_id: Option<&str>,
+    ) -> Result<Vec<HistorySummarySourceMessage>> {
+        let conn = self.conn.lock().unwrap();
+        let mut sql = String::from(
+            "SELECT chat_name, sender, content, is_self, detected_at, image_path
+             FROM messages
+             WHERE chat_name = ?
+               AND date(detected_at) >= date(?)
+               AND date(detected_at) <= date(?)",
+        );
+        let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = vec![
+            Box::new(chat_name.to_string()),
+            Box::new(start_date.to_string()),
+            Box::new(end_date.to_string()),
+        ];
+
+        if let Some(participant_id) = participant_id {
+            if participant_id == crate::history_summary::SELF_PARTICIPANT_ID {
+                sql.push_str(" AND is_self = 1");
+            } else {
+                sql.push_str(" AND is_self = 0 AND sender = ?");
+                param_values.push(Box::new(participant_id.to_string()));
+            }
+        }
+
+        sql.push_str(" ORDER BY detected_at ASC, id ASC");
+        let params_ref: Vec<&dyn rusqlite::types::ToSql> =
+            param_values.iter().map(|p| p.as_ref()).collect();
+
+        let mut stmt = conn.prepare(&sql).context("prepare summary query")?;
+        let rows = stmt
+            .query_map(params_ref.as_slice(), |row| {
+                Ok(HistorySummarySourceMessage {
+                    chat_name: row.get(0)?,
+                    sender: row.get(1)?,
+                    content: row.get(2)?,
+                    is_self: row.get::<_, i32>(3)? != 0,
+                    detected_at: row.get(4)?,
+                    image_path: row.get::<_, Option<String>>(5).unwrap_or(None),
+                })
+            })
+            .context("execute summary query")?;
+
+        let mut messages = Vec::new();
+        for row in rows {
+            messages.push(row.context("read summary message row")?);
+        }
+        Ok(messages)
+    }
+
     pub fn clear_all(&self) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute_batch("DELETE FROM messages; VACUUM;")
@@ -695,6 +827,132 @@ mod tests {
         assert_eq!(rows[0].quality.as_deref(), Some("high"));
 
         drop(db);
+        cleanup_db(&path);
+    }
+
+    #[test]
+    fn list_summary_participants_should_include_self_and_deduplicate_senders() {
+        let path = temp_db_path("summary_participants");
+        let db = MessageDb::new(&path).expect("create db");
+
+        db.insert_message_with_meta(
+            "项目群",
+            Some("group"),
+            "张三",
+            "今天推进一下",
+            "",
+            false,
+            "2026-03-18 09:00:00",
+            None,
+            "chat",
+            "high",
+        )
+        .expect("insert row");
+        db.insert_message_with_meta(
+            "项目群",
+            Some("group"),
+            "张三",
+            "我晚点补充",
+            "",
+            false,
+            "2026-03-18 10:00:00",
+            None,
+            "chat",
+            "high",
+        )
+        .expect("insert row");
+        db.insert_message_with_meta(
+            "项目群",
+            Some("group"),
+            "",
+            "我先认领",
+            "",
+            true,
+            "2026-03-18 11:00:00",
+            None,
+            "chat",
+            "high",
+        )
+        .expect("insert row");
+
+        let participants = db
+            .list_summary_participants("项目群", "2026-03-18", "2026-03-18")
+            .expect("list participants");
+
+        assert_eq!(participants.len(), 2);
+        assert_eq!(
+            participants[0].id,
+            crate::history_summary::SELF_PARTICIPANT_ID
+        );
+        assert!(participants[0].is_self);
+        assert_eq!(participants[1].label, "张三");
+        assert_eq!(participants[1].message_count, 2);
+
+        cleanup_db(&path);
+    }
+
+    #[test]
+    fn query_summary_messages_should_filter_participant_and_date_range() {
+        let path = temp_db_path("summary_messages");
+        let db = MessageDb::new(&path).expect("create db");
+
+        db.insert_message_with_meta(
+            "项目群",
+            Some("group"),
+            "张三",
+            "3月17日消息",
+            "",
+            false,
+            "2026-03-17 09:00:00",
+            None,
+            "chat",
+            "high",
+        )
+        .expect("insert row");
+        db.insert_message_with_meta(
+            "项目群",
+            Some("group"),
+            "张三",
+            "3月18日消息",
+            "",
+            false,
+            "2026-03-18 10:00:00",
+            None,
+            "chat",
+            "high",
+        )
+        .expect("insert row");
+        db.insert_message_with_meta(
+            "项目群",
+            Some("group"),
+            "",
+            "我的消息",
+            "",
+            true,
+            "2026-03-18 11:00:00",
+            None,
+            "chat",
+            "high",
+        )
+        .expect("insert row");
+
+        let zhangsan = db
+            .query_summary_messages("项目群", "2026-03-18", "2026-03-18", Some("张三"))
+            .expect("query zhangsan");
+        assert_eq!(zhangsan.len(), 1);
+        assert_eq!(zhangsan[0].content, "3月18日消息");
+
+        let self_messages = db
+            .query_summary_messages(
+                "项目群",
+                "2026-03-18",
+                "2026-03-18",
+                Some(crate::history_summary::SELF_PARTICIPANT_ID),
+            )
+            .expect("query self");
+        assert_eq!(self_messages.len(), 1);
+        assert!(self_messages[0].is_self);
+
         cleanup_db(&path);
     }
 

@@ -3,6 +3,7 @@ pub mod audio;
 pub mod config;
 pub mod db;
 pub mod dictionary;
+pub mod history;
 pub mod listen;
 pub mod preflight;
 pub mod sessions;

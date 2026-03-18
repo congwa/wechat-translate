@@ -2,6 +2,7 @@ use crate::app_state;
 use crate::config::{self as app_config, ConfigDir};
 use crate::task_manager::TaskManager;
 use crate::CloseToTray;
+use tauri::Manager;
 
 pub async fn save_settings(
     app: &tauri::AppHandle,
@@ -22,7 +23,8 @@ pub async fn save_settings(
     app_state::emit_settings_updated(app, &settings);
     app_state::emit_runtime_updated(app, manager);
 
-    let snapshot = app_state::snapshot(settings, manager, close_to_tray).await;
+    let versions = app.state::<app_state::SnapshotVersionState>();
+    let snapshot = app_state::snapshot(settings, manager, close_to_tray, &versions).await;
     Ok(serde_json::json!({
         "ok": true,
         "message": "settings saved",
@@ -36,8 +38,9 @@ pub async fn app_state_get(
     config_dir: tauri::State<'_, ConfigDir>,
     manager: tauri::State<'_, TaskManager>,
     close_to_tray: tauri::State<'_, CloseToTray>,
+    versions: tauri::State<'_, app_state::SnapshotVersionState>,
 ) -> Result<serde_json::Value, String> {
-    let snapshot = app_state::load_snapshot(&config_dir, &manager, &close_to_tray).await?;
+    let snapshot = app_state::load_snapshot(&config_dir, &manager, &close_to_tray, &versions).await?;
     Ok(serde_json::json!({ "ok": true, "data": snapshot }))
 }
 

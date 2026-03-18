@@ -65,6 +65,7 @@ export interface DisplaySettings {
   side: string;
   collapsed_display_count: number;
   ghost_mode: boolean;
+  image_capture: boolean;
   sidebar_appearance: SidebarAppearance;
 }
 
@@ -84,14 +85,20 @@ export interface AppSettings {
   dict: DictSettings;
 }
 
+export interface SettingsSnapshot {
+  version: number;
+  data: AppSettings;
+}
+
 export interface AppRuntime {
+  version: number;
   tasks: TaskState;
   translator: TranslatorServiceStatus;
   close_to_tray: boolean;
 }
 
 export interface AppStateSnapshot {
-  settings: AppSettings;
+  settings: SettingsSnapshot;
   runtime: AppRuntime;
 }
 
@@ -138,9 +145,43 @@ export interface StoredMessage {
   quality?: string;
 }
 
+export interface HistorySummaryParticipant {
+  id: string;
+  label: string;
+  message_count: number;
+  is_self: boolean;
+}
+
+export interface HistorySummaryDailyItem {
+  date: string;
+  message_count: number;
+  summary: string;
+}
+
+export interface HistorySummaryResult {
+  scope: "chat" | "participant";
+  chat_name: string;
+  participant?: {
+    id: string;
+    label: string;
+  } | null;
+  start_date: string;
+  end_date: string;
+  message_count: number;
+  participant_count: number;
+  overall_summary: string;
+  daily_items: HistorySummaryDailyItem[];
+}
+
 export interface SidebarSnapshot {
+  version: number;
   current_chat?: string | null;
   messages: StoredMessage[];
   translator: TranslatorServiceStatus;
   refresh_version?: number;
+}
+
+export interface SidebarInvalidationEvent {
+  version: number;
+  chat_name?: string;
 }

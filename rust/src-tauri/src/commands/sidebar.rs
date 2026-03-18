@@ -230,6 +230,7 @@ pub async fn sidebar_snapshot_get(
     Ok(serde_json::json!({
         "ok": true,
         "data": {
+            "version": refresh_version,
             "current_chat": selected_chat,
             "messages": messages,
             "translator": translator_status,

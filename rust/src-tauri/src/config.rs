@@ -127,6 +127,8 @@ pub struct DisplayConfig {
     #[serde(default)]
     pub ghost_mode: bool,
     #[serde(default)]
+    pub image_capture: bool,
+    #[serde(default)]
     pub sidebar_appearance: SidebarAppearance,
 }
 
@@ -293,6 +295,7 @@ impl Default for DisplayConfig {
             side: default_side(),
             collapsed_display_count: default_collapsed_display_count(),
             ghost_mode: false,
+            image_capture: false,
             sidebar_appearance: SidebarAppearance::default(),
         }
     }
