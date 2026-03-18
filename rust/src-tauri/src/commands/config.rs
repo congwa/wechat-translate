@@ -1,5 +1,6 @@
 use crate::app_state;
 use crate::application::runtime::service::RuntimeService;
+use crate::application::settings::service::SettingsService;
 use crate::config::{self as app_config, ConfigDir};
 use crate::task_manager::TaskManager;
 use tauri::{Emitter, Manager};
@@ -20,15 +21,16 @@ pub async fn config_put(
     config: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
     let runtime = RuntimeService::new(manager.inner().clone());
-    let (errors, path) =
-        app_config::validate_and_write_config(&config_dir.0, &config).map_err(|e| e.to_string())?;
+    let settings_service = SettingsService::new(&config_dir, runtime);
+    let result = settings_service.save_raw_config(&config).await?;
 
-    if !errors.is_empty() {
-        return Ok(serde_json::json!({ "ok": false, "errors": errors }));
+    if !result.errors.is_empty() {
+        return Ok(serde_json::json!({ "ok": false, "errors": result.errors }));
     }
 
-    let app_config = app_config::load_app_config(&config_dir.0).map_err(|e| e.to_string())?;
-    runtime.apply_runtime_config(&app_config).await;
+    let app_config = result
+        .settings
+        .ok_or_else(|| "配置保存后未生成有效快照".to_string())?;
     app_state::emit_settings_updated(&app, &app_config);
     app_state::emit_runtime_updated(&app, &manager);
     let _ = app.emit(
@@ -42,7 +44,7 @@ pub async fn config_put(
         .unwrap_or_default(),
     );
 
-    Ok(serde_json::json!({ "ok": true, "message": "config saved", "path": path }))
+    Ok(serde_json::json!({ "ok": true, "message": "config saved", "path": result.path }))
 }
 
 #[tauri::command]

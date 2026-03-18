@@ -18,6 +18,7 @@ pub mod sidebar_window;
 mod task_manager;
 pub mod translator;
 
+use crate::application::runtime::service::RuntimeService;
 use adapter::MacOSAdapter;
 use config::{load_app_config, ConfigDir};
 use db::MessageDb;
@@ -422,17 +423,18 @@ pub fn run() {
             let handle = app.handle().clone();
             let startup_config_for_runtime = startup_config.clone();
             tauri::async_runtime::spawn(async move {
+                let runtime = RuntimeService::new(manager.clone());
                 manager.set_app_handle(handle).await;
                 if let Some(config) = startup_config_for_runtime {
-                    manager
+                    runtime
                         .set_use_right_panel_details(config.listen.use_right_panel_details)
                         .await;
-                    manager.apply_runtime_config(&config).await;
-                    let _ = manager
+                    runtime.apply_runtime_config(&config).await;
+                    let _ = runtime
                         .start_monitoring(config.listen.interval_seconds)
                         .await;
                 } else {
-                    let _ = manager.start_monitoring(1.0).await;
+                    let _ = runtime.start_monitoring(1.0).await;
                 }
             });
 
@@ -542,9 +544,10 @@ pub fn run() {
                         let app = app.clone();
                         tauri::async_runtime::spawn(async move {
                             let manager = app.state::<TaskManager>();
-                            let state = manager.get_task_state();
+                            let runtime = RuntimeService::new(manager.inner().clone());
+                            let state = runtime.task_state();
                             if state.sidebar {
-                                let _ = manager.disable_sidebar().await;
+                                let _ = runtime.disable_sidebar().await;
                                 let sidebar_ws =
                                     app.state::<Arc<sidebar_window::SidebarWindowState>>();
                                 let _ = sidebar_ws.close(&app).await;
@@ -552,11 +555,11 @@ pub fn run() {
                                 let config_dir = app.state::<ConfigDir>();
                                 let config = load_app_config(&config_dir.0).unwrap_or_default();
                                 if !state.monitoring {
-                                    let _ = manager
+                                    let _ = runtime
                                         .start_monitoring(config.listen.interval_seconds)
                                         .await;
                                 }
-                                let _ = manager
+                                let _ = runtime
                                     .enable_sidebar(
                                         vec![],
                                         config.translate.enabled,
@@ -593,13 +596,14 @@ pub fn run() {
                         let app = app.clone();
                         tauri::async_runtime::spawn(async move {
                             let manager = app.state::<TaskManager>();
-                            let state = manager.get_task_state();
+                            let runtime = RuntimeService::new(manager.inner().clone());
+                            let state = runtime.task_state();
                             if state.monitoring {
-                                let _ = manager.stop_monitoring().await;
+                                let _ = runtime.stop_monitoring().await;
                             } else {
                                 let config_dir = app.state::<ConfigDir>();
                                 let config = load_app_config(&config_dir.0).unwrap_or_default();
-                                let _ = manager
+                                let _ = runtime
                                     .start_monitoring(config.listen.interval_seconds)
                                     .await;
                             }
