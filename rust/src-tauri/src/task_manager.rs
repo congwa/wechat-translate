@@ -5,6 +5,7 @@ use crate::config::AppConfig;
 use crate::db::MessageDb;
 use crate::events::{EventStore, EventType};
 use crate::image_cache::{self, WeChatImageCache};
+use crate::sidebar_projection::{emit_sidebar_invalidated, SidebarRuntime};
 use crate::translator::{
     TranslateConfig, TranslateProviderConfig, TranslationLimiter, TranslationService,
     TranslatorServiceStatus,
@@ -16,7 +17,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Manager};
 use tokio::sync::{watch, Mutex};
 use tokio_util::sync::CancellationToken;
 
@@ -32,24 +33,6 @@ struct SidebarConfig {
     limiter: Option<Arc<TranslationLimiter>>,
     target_set: HashSet<String>,
     image_capture: bool,
-}
-
-/// 悬浮窗运行态：统一维护当前聊天和刷新版本号
-/// 解决"标题切换但内容空"问题的核心状态
-pub struct SidebarRuntime {
-    /// 后端确认的当前聊天名称
-    current_chat: std::sync::Mutex<String>,
-    /// 刷新版本号，每次消息入库或译文写回后递增
-    refresh_version: AtomicU64,
-}
-
-impl SidebarRuntime {
-    fn new() -> Self {
-        Self {
-            current_chat: std::sync::Mutex::new(String::new()),
-            refresh_version: AtomicU64::new(0),
-        }
-    }
 }
 
 /// 监听循环首次 poll 完成信号
@@ -92,36 +75,6 @@ impl FirstPollSignal {
             } => result,
             _ = tokio::time::sleep(timeout) => None,
         }
-    }
-}
-
-impl SidebarRuntime {
-    pub fn get_current_chat(&self) -> String {
-        self.current_chat.lock().unwrap().clone()
-    }
-
-    pub fn set_current_chat(&self, chat_name: &str) {
-        *self.current_chat.lock().unwrap() = chat_name.to_string();
-    }
-
-    pub fn get_refresh_version(&self) -> u64 {
-        self.refresh_version.load(Ordering::Relaxed)
-    }
-
-    /// 递增刷新版本号并返回新值
-    pub fn increment_refresh_version(&self) -> u64 {
-        self.refresh_version.fetch_add(1, Ordering::Relaxed) + 1
-    }
-
-    /// 更新当前聊天并递增刷新版本号
-    pub fn update_chat_and_version(&self, chat_name: &str) -> u64 {
-        self.set_current_chat(chat_name);
-        self.increment_refresh_version()
-    }
-
-    pub fn clear(&self) {
-        *self.current_chat.lock().unwrap() = String::new();
-        self.refresh_version.store(0, Ordering::Relaxed);
     }
 }
 
@@ -1621,31 +1574,6 @@ fn publish_sidebar_append(
     }
 
     events.publish(app_handle, EventType::Message, "sidebar", payload)
-}
-
-fn emit_sidebar_invalidated(
-    app_handle: &AppHandle,
-    events: &EventStore,
-    chat_name: &str,
-    refresh_version: u64,
-) {
-    events.publish(
-        app_handle,
-        EventType::Status,
-        "sidebar",
-        serde_json::json!({
-            "type": "sidebar-refresh",
-            "chat_name": chat_name,
-            "refresh_version": refresh_version,
-        }),
-    );
-    let _ = app_handle.emit(
-        "sidebar-invalidated",
-        serde_json::json!({
-            "version": refresh_version,
-            "chat_name": chat_name,
-        }),
-    );
 }
 
 fn spawn_sidebar_translation_update(

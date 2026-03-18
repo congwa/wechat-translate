@@ -8,6 +8,7 @@ pub mod dictionary;
 mod events;
 mod history_summary;
 mod image_cache;
+mod sidebar_projection;
 pub mod sidebar_window;
 mod task_manager;
 pub mod translator;
