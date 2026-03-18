@@ -1,16 +1,14 @@
-import { useRef, useEffect, useState, useCallback } from "react";
+import { useRef, useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { listen } from "@tauri-apps/api/event";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { X, MessageCircle, Languages, AlertCircle, BookOpen, Users, User, Loader2 } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useSidebarStore } from "@/stores/sidebarStore";
 import type {
   SidebarMessage,
   SidebarAppearance,
   SettingsSnapshot,
-  SidebarInvalidationEvent,
 } from "@/lib/types";
 import { useUiPreferencesStore, type DisplayMode } from "@/stores/uiPreferencesStore";
 import { useRuntimeStore } from "@/stores/runtimeStore";
@@ -18,6 +16,7 @@ import { useSettingsStore } from "@/stores/settingsStore";
 import { SegmentedText } from "@/components/SegmentedText";
 import { WordPopover } from "@/components/WordPopover";
 import { WordBook } from "@/components/WordBook";
+import { useSidebarSnapshot } from "@/features/sidebar/useSidebarSnapshot";
 import * as api from "@/lib/tauri-api";
 
 type WindowMode = "follow" | "independent";
@@ -375,20 +374,15 @@ export function SidebarView() {
     };
   }, []);
 
-  const snapshot = useSidebarStore((s) => s.snapshot);
-  const invalidatedVersion = useSidebarStore((s) => s.invalidatedVersion);
-  const applySnapshot = useSidebarStore((s) => s.applySnapshot);
-  const setSidebarLoading = useSidebarStore((s) => s.setLoading);
-  const invalidateSidebar = useSidebarStore((s) => s.invalidate);
   const displayMode = useUiPreferencesStore((s) => s.displayMode);
   const setPreferences = useUiPreferencesStore((s) => s.setPreferences);
   const settings = useSettingsStore((s) => s.settings);
   const translatorStatus = useRuntimeStore((s) => s.runtime.translator);
   const bottomRef = useRef<HTMLDivElement>(null);
   const [visible, setVisible] = useState(true);
-  const [snapshotLoading, setSnapshotLoading] = useState(false);
   const [showWordBook, setShowWordBook] = useState(false);
   const [translatingIds, setTranslatingIds] = useState<Set<number>>(new Set());
+  const { snapshot, snapshotLoading } = useSidebarSnapshot();
   const items = snapshot.messages.map((message) => ({
     id: message.id,
     chatName: message.chat_name,
@@ -407,29 +401,6 @@ export function SidebarView() {
   const canSwitchDisplayMode = !settings || (translateEnabled && deeplxUrl.trim() !== "");
   const effectiveDisplayMode: DisplayMode = canSwitchDisplayMode ? displayMode : "original";
 
-  const fetchSnapshot = useCallback(async () => {
-    setSnapshotLoading(true);
-    setSidebarLoading(true);
-    try {
-      const resp = await api.sidebarSnapshotGet({
-        chatName: currentChat || undefined,
-        limit: 50,
-      });
-      if (resp.data) {
-        applySnapshot(resp.data);
-      }
-    } catch {
-      /* ignore */
-    } finally {
-      setSnapshotLoading(false);
-      setSidebarLoading(false);
-    }
-  }, [applySnapshot, currentChat, setSidebarLoading]);
-
-  useEffect(() => {
-    fetchSnapshot();
-  }, [fetchSnapshot, invalidatedVersion]);
-
   useEffect(() => {
     if (isIndependent) return;
     const unlisten = listen<boolean>("sidebar-visibility", (e) => {
@@ -439,15 +410,6 @@ export function SidebarView() {
       unlisten.then((fn) => fn());
     };
   }, [isIndependent]);
-
-  useEffect(() => {
-    const unlisten = listen<SidebarInvalidationEvent>("sidebar-invalidated", (e) => {
-      invalidateSidebar(e.payload.version);
-    });
-    return () => {
-      unlisten.then((fn) => fn());
-    };
-  }, [invalidateSidebar]);
 
   // 滚动到底部：当消息数量变化或最后一条消息内容更新时触发（仅跟随模式）
   // 这样翻译完成后内容增多也会自动滚动到底部
