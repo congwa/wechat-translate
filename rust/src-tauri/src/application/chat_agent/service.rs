@@ -155,7 +155,22 @@ impl ChatAgentService {
         let result: Result<String, String> = agent
             .chat(user_message, history)
             .await
-            .map_err(|e: rig::completion::PromptError| e.to_string());
+            .map_err(|e: rig::completion::PromptError| {
+                let raw = e.to_string();
+                // 部分模型/代理不支持 Function Calling，给出明确提示
+                if raw.contains("Function call is not supported")
+                    || raw.contains("function_call")
+                    || raw.contains("tool_use")
+                    || raw.contains("tools is not supported")
+                {
+                    "当前模型不支持 Function Calling（工具调用）。\n\
+                     Agent 功能依赖工具调用能力，请在设置中切换到支持该功能的模型，\
+                     例如 gpt-4o、gpt-4-turbo、gpt-3.5-turbo 等 OpenAI 兼容模型。\n\
+                     原始错误：".to_string() + &raw
+                } else {
+                    raw
+                }
+            });
 
         let tool_calls = event_buffer.take();
 
