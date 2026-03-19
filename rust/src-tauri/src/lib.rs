@@ -23,13 +23,40 @@ use image_cache::WeChatImageCache;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use task_manager::TaskManager;
+use tauri::image::Image;
 use tauri::menu::{CheckMenuItemBuilder, Menu, MenuBuilder, MenuItemBuilder, SubmenuBuilder};
-use tauri::tray::TrayIconBuilder;
+use tauri::tray::{TrayIcon, TrayIconBuilder};
 use tauri::Manager;
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+use tokio_util::sync::CancellationToken;
 use translator::TranslationService;
 
 pub struct CloseToTray(pub Arc<AtomicBool>);
+
+/// 托盘图标闪动状态：用于监听异常时的视觉提示
+pub struct TrayBlinkState {
+    pub blink_active: AtomicBool,
+    pub cancel_token: std::sync::Mutex<Option<CancellationToken>>,
+    pub tray_icon: std::sync::Mutex<Option<TrayIcon>>,
+    pub normal_icon: std::sync::Mutex<Option<Image<'static>>>,
+    pub warning_icon: std::sync::Mutex<Option<Image<'static>>>,
+}
+
+impl TrayBlinkState {
+    pub fn new(
+        tray: TrayIcon,
+        normal: Image<'static>,
+        warning: Image<'static>,
+    ) -> Self {
+        Self {
+            blink_active: AtomicBool::new(false),
+            cancel_token: std::sync::Mutex::new(None),
+            tray_icon: std::sync::Mutex::new(Some(tray)),
+            normal_icon: std::sync::Mutex::new(Some(normal)),
+            warning_icon: std::sync::Mutex::new(Some(warning)),
+        }
+    }
+}
 
 pub struct TrayMenuState {
     pub translate_enabled_check: Option<tauri::menu::CheckMenuItem<tauri::Wry>>,
@@ -512,8 +539,22 @@ pub fn run() {
                 close_to_tray_check,
             });
 
-            let _tray = TrayIconBuilder::new()
-                .icon(app.default_window_icon().unwrap().clone())
+            // 准备图标
+            let normal_icon = {
+                let icon = app.default_window_icon().unwrap();
+                Image::new_owned(icon.rgba().to_vec(), icon.width(), icon.height())
+            };
+            let warning_icon = {
+                let warning_icon_bytes = include_bytes!("../icons/icon-warning.png");
+                let img = image::load_from_memory(warning_icon_bytes)
+                    .expect("failed to decode warning icon")
+                    .to_rgba8();
+                let (width, height) = img.dimensions();
+                Image::new_owned(img.into_raw(), width, height)
+            };
+
+            let tray = TrayIconBuilder::new()
+                .icon(normal_icon.clone())
                 .menu(&menu)
                 .tooltip("WeChat PC Auto")
                 .on_menu_event(|app, event| match event.id().as_ref() {
@@ -647,6 +688,10 @@ pub fn run() {
                     }
                 })
                 .build(app)?;
+
+            // 初始化托盘闪动状态
+            let blink_state = TrayBlinkState::new(tray, normal_icon, warning_icon);
+            app.manage(blink_state);
 
             Ok(())
         })

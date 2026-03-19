@@ -17,6 +17,7 @@ use crate::application::runtime::translator_runtime::{
     publish_sidebar_append, spawn_sidebar_translation_update,
 };
 use crate::application::sidebar::projection_service::{emit_sidebar_invalidated, SidebarRuntime};
+use crate::infrastructure::tauri::tray_adapter::{start_tray_blink, stop_tray_blink};
 use crate::db::MessageDb;
 use crate::events::{EventStore, EventType};
 use crate::image_cache::{self, WeChatImageCache};
@@ -83,8 +84,10 @@ pub(crate) fn spawn_monitor_loop(ctx: MonitorLoopContext) {
         let mut pending_count: u32 = 0;
         let mut last_use_right_panel_details: Option<bool> = None;
         let mut first_poll_signaled = false;
+        let mut consecutive_poll_failures: u32 = 0;
         const DEBOUNCE_THRESHOLD: u32 = 2;
         const SESSION_CORRECTION_WINDOW_SECONDS: i64 = 15;
+        const BLINK_FAILURE_THRESHOLD: u32 = 3;
 
         loop {
             if token.is_cancelled() {
@@ -130,6 +133,12 @@ pub(crate) fn spawn_monitor_loop(ctx: MonitorLoopContext) {
             .await;
 
             if let Ok(Ok((chat_name, snapshots, mut messages, member_count))) = poll_result {
+                // 轮询成功，重置失败计数并停止闪动
+                if consecutive_poll_failures > 0 {
+                    consecutive_poll_failures = 0;
+                    stop_tray_blink(&app_handle).await;
+                }
+
                 if !first_poll_signaled {
                     first_poll_signal.signal_ready(&chat_name);
                     first_poll_signaled = true;
@@ -555,6 +564,12 @@ pub(crate) fn spawn_monitor_loop(ctx: MonitorLoopContext) {
 
                         *baseline = messages;
                     }
+                }
+            } else {
+                // 轮询失败，增加失败计数
+                consecutive_poll_failures += 1;
+                if consecutive_poll_failures >= BLINK_FAILURE_THRESHOLD {
+                    start_tray_blink(&app_handle).await;
                 }
             }
 
