@@ -1,9 +1,12 @@
 //! 翻译运行时服务：负责翻译配置应用、健康探测和手动翻译触发，
 //! 把高层翻译编排从 TaskManager 中抽离出来，低层写回仍复用既有实现。
 use crate::app_state;
+use crate::application::runtime::read_service as runtime_read;
 use crate::application::runtime::service::RuntimeService;
 use crate::application::runtime::state::SidebarConfig;
+use crate::application::runtime::status_sync::RuntimeStatusContext;
 use crate::application::runtime::translation_config::build_translate_config_from_app_config;
+use crate::application::sidebar::projection_service::SidebarRuntime;
 use crate::config::AppConfig;
 use crate::db::MessageDb;
 use crate::events::EventStore;
@@ -28,6 +31,8 @@ pub(crate) struct TranslatorRuntimeContext {
     pub(crate) translation_service: Arc<TranslationService>,
     pub(crate) sidebar_enabled: Arc<AtomicBool>,
     pub(crate) sidebar_config: Arc<Mutex<SidebarConfig>>,
+    pub(crate) sidebar_runtime: Arc<SidebarRuntime>,
+    pub(crate) status: RuntimeStatusContext,
 }
 
 /// 在配置保存后把翻译设置应用到运行态，并在 sidebar 已开启时同步刷新其译文依赖。
@@ -46,8 +51,9 @@ pub(crate) async fn apply_runtime_config(ctx: &TranslatorRuntimeContext, config:
         sidebar_config.limiter = limiter;
     }
 
-    if let Ok(app) = ctx.manager.get_app_handle().await {
-        let state = ctx.manager.get_task_state();
+    let read = ctx.manager.read_context();
+    if let Ok(app) = runtime_read::app_handle(&read).await {
+        let state = runtime_read::task_state(&read);
         update_tray_menu(&app, &state, &translator_status);
         app_state::emit_runtime_updated(&app, RuntimeService::new(ctx.manager.clone()));
     }
@@ -79,10 +85,11 @@ pub(crate) async fn translate_message_manually(
     let limiter = limiter.ok_or_else(|| "翻译限流器未配置".to_string())?;
 
     spawn_sidebar_translation_update(
-        ctx.manager.clone(),
+        ctx.status.clone(),
         ctx.events.clone(),
         app,
         ctx.db.clone(),
+        ctx.sidebar_runtime.clone(),
         translator,
         limiter,
         config.source_lang.clone(),

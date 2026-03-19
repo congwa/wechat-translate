@@ -2,6 +2,7 @@
 pub(crate) mod lifecycle;
 pub(crate) mod monitor_ingest;
 pub(crate) mod monitor_loop;
+pub(crate) mod read_service;
 pub(crate) mod service;
 pub(crate) mod sidebar_runtime;
 pub(crate) mod snapshot_service;

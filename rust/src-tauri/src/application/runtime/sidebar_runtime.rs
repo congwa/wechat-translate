@@ -1,6 +1,7 @@
 //! Sidebar 运行时服务：负责 sidebar 启停时的翻译依赖装配、状态发布和投影清理，
 //! 让 TaskManager 不再直接承载整段 sidebar 生命周期编排。
 use crate::app_state;
+use crate::application::runtime::read_service as runtime_read;
 use crate::application::runtime::service::RuntimeService;
 use crate::application::runtime::translation_config::{
     build_translate_config_from_sidebar_params, SidebarTranslationRuntimeParams,
@@ -81,8 +82,9 @@ pub(crate) async fn enable_sidebar(
 
     ctx.sidebar_enabled.store(true, Ordering::Relaxed);
 
-    let app = ctx.manager.get_app_handle().await?;
-    let state = ctx.manager.get_task_state();
+    let read = ctx.manager.read_context();
+    let app = runtime_read::app_handle(&read).await?;
+    let state = runtime_read::task_state(&read);
     ctx.manager
         .publish_task_state_event("sidebar", true, &state, &translator_status)
         .await;
@@ -115,9 +117,10 @@ pub(crate) async fn disable_sidebar(ctx: &SidebarRuntimeContext) -> Result<()> {
         .set_status(TranslatorServiceStatus::disabled())
         .await;
 
-    let app = ctx.manager.get_app_handle().await?;
-    let state = ctx.manager.get_task_state();
-    let translator_status = ctx.manager.get_translator_status().await;
+    let read = ctx.manager.read_context();
+    let app = runtime_read::app_handle(&read).await?;
+    let state = runtime_read::task_state(&read);
+    let translator_status = runtime_read::translator_status(&read).await;
     ctx.manager
         .publish_task_state_event("sidebar", false, &state, &translator_status)
         .await;

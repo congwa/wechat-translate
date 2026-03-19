@@ -1,6 +1,7 @@
 //! 运行时应用服务：为 command/query 层提供稳定的运行态访问入口，
 //! 避免上层继续直接依赖 TaskManager 的内部组织方式。
 use crate::application::runtime::lifecycle as runtime_lifecycle;
+use crate::application::runtime::read_service as runtime_read;
 use crate::application::runtime::sidebar_runtime as app_sidebar_runtime;
 use crate::application::runtime::state::TaskState;
 use crate::application::runtime::status_sync as runtime_status_sync;
@@ -44,14 +45,14 @@ impl RuntimeService {
 
     /// 返回当前运行时任务快照，供上层判断监听与 sidebar 是否处于运行中。
     pub(crate) fn task_state(&self) -> TaskState {
-        self.manager.get_task_state()
+        runtime_read::task_state(&self.manager.read_context())
     }
 
     /// 暴露 sidebar 投影运行态，供查询层基于当前聊天构建 sidebar 快照。
     pub(crate) fn sidebar_runtime(
         &self,
-    ) -> &Arc<crate::application::sidebar::projection_service::SidebarRuntime> {
-        self.manager.get_sidebar_runtime()
+    ) -> Arc<crate::application::sidebar::projection_service::SidebarRuntime> {
+        runtime_read::sidebar_runtime(&self.manager.read_context())
     }
 
     /// 启动监听主循环。
@@ -63,12 +64,6 @@ impl RuntimeService {
     /// 停止监听主循环。
     pub(crate) async fn stop_monitoring(&self) -> Result<()> {
         runtime_lifecycle::stop_monitoring(&self.manager.lifecycle_context()).await
-    }
-
-    /// 停止监听并等待旧任务完全退出，避免 cancel 后立即 restart 的竞态。
-    pub(crate) async fn stop_monitoring_and_wait(&self, timeout: Duration) -> Result<()> {
-        runtime_lifecycle::stop_monitoring_and_wait(&self.manager.lifecycle_context(), timeout)
-            .await
     }
 
     /// 重建监听运行态，并在需要时恢复 sidebar 当前聊天投影。
@@ -89,7 +84,7 @@ impl RuntimeService {
 
     /// 等待监听首次成功轮询，供 live start 与授权恢复链路判断监听是否真正可用。
     pub(crate) async fn wait_first_poll(&self, timeout: Duration) -> Option<String> {
-        self.manager.wait_first_poll(timeout).await
+        runtime_read::wait_first_poll(&self.manager.read_context(), timeout).await
     }
 
     /// 启用 sidebar 及其译文能力。
@@ -143,12 +138,12 @@ impl RuntimeService {
 
     /// 返回翻译服务健康状态，供 runtime 快照与诊断展示使用。
     pub(crate) async fn translator_status(&self) -> TranslatorServiceStatus {
-        self.manager.get_translator_status().await
+        runtime_read::translator_status(&self.manager.read_context()).await
     }
 
     /// 返回翻译服务引用，供字典等只读能力复用统一的翻译配置。
     pub(crate) fn translation_service(&self) -> Arc<TranslationService> {
-        self.manager.get_translation_service()
+        runtime_read::translation_service(&self.manager.read_context())
     }
 
     /// 供 sidebar 手动翻译入口使用：提交一次消息翻译并触发后续刷新。

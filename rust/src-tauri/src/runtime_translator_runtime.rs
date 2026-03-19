@@ -1,8 +1,10 @@
+use crate::application::runtime::status_sync::{
+    current_translator_generation, set_translator_status_if_current, RuntimeStatusContext,
+};
+use crate::application::sidebar::projection_service::{emit_sidebar_invalidated, SidebarRuntime};
 use crate::db::MessageDb;
 use crate::events::{EventStore, EventType, ServiceEvent};
 use crate::runtime_monitor_ingest::short_error_text;
-use crate::sidebar_projection::emit_sidebar_invalidated;
-use crate::task_manager::TaskManager;
 use crate::translator::{TranslationLimiter, TranslatorServiceStatus};
 use std::sync::Arc;
 use tauri::AppHandle;
@@ -41,10 +43,11 @@ pub(crate) fn publish_sidebar_append(
 }
 
 pub(crate) fn spawn_sidebar_translation_update(
-    manager: TaskManager,
+    status: RuntimeStatusContext,
     events: Arc<EventStore>,
     app_handle: AppHandle,
     db: Arc<MessageDb>,
+    sidebar_runtime: Arc<SidebarRuntime>,
     translator: Arc<dyn crate::translator::Translator>,
     limiter: Arc<TranslationLimiter>,
     source_lang: String,
@@ -60,7 +63,7 @@ pub(crate) fn spawn_sidebar_translation_update(
             "[spawn_sidebar_translation_update] 翻译任务启动: message_id={}",
             message_id
         );
-        let translator_generation = manager.current_translator_generation();
+        let translator_generation = current_translator_generation(&status);
 
         if let Ok(Some(cached)) = db.get_cached_translation(&content, &source_lang, &target_lang) {
             log::info!(
@@ -75,7 +78,7 @@ pub(crate) fn spawn_sidebar_translation_update(
                 &cached.translated_text,
             );
 
-            let refresh_version = manager.get_sidebar_runtime().increment_refresh_version();
+            let refresh_version = sidebar_runtime.increment_refresh_version();
             emit_sidebar_invalidated(&app_handle, &events, &chat_name, refresh_version);
 
             events.publish(
@@ -115,14 +118,14 @@ pub(crate) fn spawn_sidebar_translation_update(
                     &translated,
                 );
                 let provider = translator.provider_id().to_string();
-                manager
-                    .set_translator_status_if_current(
-                        translator_generation,
-                        TranslatorServiceStatus::healthy(&provider),
-                    )
-                    .await;
+                set_translator_status_if_current(
+                    &status,
+                    translator_generation,
+                    TranslatorServiceStatus::healthy(&provider),
+                )
+                .await;
 
-                let refresh_version = manager.get_sidebar_runtime().increment_refresh_version();
+                let refresh_version = sidebar_runtime.increment_refresh_version();
                 emit_sidebar_invalidated(&app_handle, &events, &chat_name, refresh_version);
 
                 events.publish(
@@ -141,12 +144,12 @@ pub(crate) fn spawn_sidebar_translation_update(
             Err(error) => {
                 let translate_error = error.to_string();
                 let provider = translator.provider_id().to_string();
-                manager
-                    .set_translator_status_if_current(
-                        translator_generation,
-                        TranslatorServiceStatus::error(&provider, &translate_error),
-                    )
-                    .await;
+                set_translator_status_if_current(
+                    &status,
+                    translator_generation,
+                    TranslatorServiceStatus::error(&provider, &translate_error),
+                )
+                .await;
                 events.publish(
                     &app_handle,
                     EventType::Message,

@@ -1,3 +1,5 @@
+//! 词典命令兼容实现：保留查词、收藏、复习等内部实现函数，
+//! 真正的 Tauri 暴露入口已经迁移到 `interface/commands/dictionary.rs`。
 use crate::application::runtime::service::RuntimeService;
 use crate::config::{load_app_config, ConfigDir};
 use crate::dictionary::db::hash_text;
@@ -12,7 +14,7 @@ use std::sync::Arc;
 use tauri::AppHandle;
 
 /// 查询单词（立即返回，异步翻译）
-#[tauri::command]
+/// 查询单词详情，并在需要时异步触发释义翻译。
 pub async fn word_lookup(
     app_handle: AppHandle,
     config_dir: tauri::State<'_, ConfigDir>,
@@ -84,7 +86,7 @@ pub async fn word_lookup(
 }
 
 /// 获取可用的词典提供者列表
-#[tauri::command]
+/// 返回当前可用的词典提供者列表。
 pub async fn list_dict_providers(
     dict_router: tauri::State<'_, Arc<DictionaryRouter>>,
 ) -> Result<Vec<ProviderInfo>, String> {
@@ -92,7 +94,7 @@ pub async fn list_dict_providers(
 }
 
 /// 获取当前配置的词典提供者
-#[tauri::command]
+/// 返回当前配置中的默认词典提供者。
 pub async fn get_dict_provider(config_dir: tauri::State<'_, ConfigDir>) -> Result<String, String> {
     let config = load_app_config(&config_dir.0).map_err(|e| e.to_string())?;
     Ok(config.dict.provider)
@@ -122,7 +124,7 @@ async fn spawn_translation_task(
 
 /// 翻译文本（带缓存）
 /// source_lang 和 target_lang 用于指定翻译语言对
-#[tauri::command]
+/// 翻译一段文本并优先复用词典翻译缓存。
 pub async fn translate_cached(
     dict_db: tauri::State<'_, Arc<DictionaryDb>>,
     manager: tauri::State<'_, TaskManager>,
@@ -161,7 +163,7 @@ pub async fn translate_cached(
 }
 
 /// 批量翻译（用于一次性翻译多个释义）
-#[tauri::command]
+/// 批量翻译多段释义文本，供词典卡片一次性补全中文释义。
 pub async fn translate_batch(
     dict_db: tauri::State<'_, Arc<DictionaryDb>>,
     manager: tauri::State<'_, TaskManager>,
@@ -216,7 +218,7 @@ pub async fn translate_batch(
 // ========== 收藏功能 ==========
 
 /// 收藏/取消收藏单词（toggle）
-#[tauri::command]
+/// 切换单词收藏状态，作为单词本的单一写入口。
 pub async fn toggle_favorite(
     dict_db: tauri::State<'_, Arc<DictionaryDb>>,
     word: String,
@@ -244,7 +246,7 @@ pub async fn toggle_favorite(
 }
 
 /// 检查单词是否已收藏
-#[tauri::command]
+/// 查询某个单词当前是否已被收藏。
 pub async fn is_word_favorited(
     dict_db: tauri::State<'_, Arc<DictionaryDb>>,
     word: String,
@@ -253,7 +255,7 @@ pub async fn is_word_favorited(
 }
 
 /// 批量检查收藏状态
-#[tauri::command]
+/// 批量查询收藏状态，供词典与消息分词 UI 一次性渲染收藏标记。
 pub async fn get_favorites_batch(
     dict_db: tauri::State<'_, Arc<DictionaryDb>>,
     words: Vec<String>,
@@ -266,7 +268,7 @@ pub async fn get_favorites_batch(
 }
 
 /// 获取收藏列表
-#[tauri::command]
+/// 分页返回收藏列表，供收藏页展示历史收藏单词。
 pub async fn list_favorites(
     dict_db: tauri::State<'_, Arc<DictionaryDb>>,
     offset: Option<u32>,
@@ -281,7 +283,7 @@ pub async fn list_favorites(
 }
 
 /// 更新收藏笔记
-#[tauri::command]
+/// 更新收藏笔记，作为收藏附加说明的写入口。
 pub async fn update_favorite_note(
     dict_db: tauri::State<'_, Arc<DictionaryDb>>,
     word: String,
@@ -293,7 +295,7 @@ pub async fn update_favorite_note(
 }
 
 /// 记录复习
-#[tauri::command]
+/// 记录一次简化复习，用于无会话上下文下的单词记忆更新。
 pub async fn record_review(
     dict_db: tauri::State<'_, Arc<DictionaryDb>>,
     word: String,
@@ -302,7 +304,7 @@ pub async fn record_review(
 }
 
 /// 获取收藏总数
-#[tauri::command]
+/// 返回收藏总数，供词典页快速展示当前收藏规模。
 pub async fn count_favorites(dict_db: tauri::State<'_, Arc<DictionaryDb>>) -> Result<u32, String> {
     dict_db.count_favorites().map_err(|e| e.to_string())
 }
@@ -310,7 +312,7 @@ pub async fn count_favorites(dict_db: tauri::State<'_, Arc<DictionaryDb>>) -> Re
 // ========== 复习功能 ==========
 
 /// 获取待复习单词
-#[tauri::command]
+/// 返回待复习单词列表，供复习模式按优先级抽取单词。
 pub async fn get_words_for_review(
     dict_db: tauri::State<'_, Arc<DictionaryDb>>,
     limit: Option<u32>,
@@ -322,7 +324,7 @@ pub async fn get_words_for_review(
 }
 
 /// 开始复习会话
-#[tauri::command]
+/// 创建一轮复习会话，供前端开始结构化复习流程。
 pub async fn start_review_session(
     dict_db: tauri::State<'_, Arc<DictionaryDb>>,
     mode: String,
@@ -334,7 +336,7 @@ pub async fn start_review_session(
 }
 
 /// 记录复习反馈
-#[tauri::command]
+/// 记录某个单词在复习会话中的反馈结果。
 pub async fn record_review_feedback(
     dict_db: tauri::State<'_, Arc<DictionaryDb>>,
     session_id: i64,
@@ -348,7 +350,7 @@ pub async fn record_review_feedback(
 }
 
 /// 结束复习会话
-#[tauri::command]
+/// 结束一轮复习会话并返回会话统计结果。
 pub async fn finish_review_session(
     dict_db: tauri::State<'_, Arc<DictionaryDb>>,
     session_id: i64,
@@ -359,7 +361,7 @@ pub async fn finish_review_session(
 }
 
 /// 获取复习统计
-#[tauri::command]
+/// 返回复习统计，用于词典页展示长期学习进度。
 pub async fn get_review_stats(
     dict_db: tauri::State<'_, Arc<DictionaryDb>>,
 ) -> Result<ReviewStats, String> {

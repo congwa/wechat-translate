@@ -1,6 +1,7 @@
 //! 运行态状态同步服务：负责任务状态事件、翻译代际号和运行态快照回流，
 //! 让 TaskManager 不再直接承载这类“状态广播/同步”逻辑。
 use crate::app_state;
+use crate::application::runtime::read_service as runtime_read;
 use crate::application::runtime::service::RuntimeService;
 use crate::application::runtime::state::TaskState;
 use crate::events::{EventStore, EventType};
@@ -23,8 +24,9 @@ pub(crate) struct RuntimeStatusContext {
 
 /// 生成统一的运行时健康快照，供 listen health 和诊断面板查询当前运行状态。
 pub(crate) async fn service_status(ctx: &RuntimeStatusContext) -> serde_json::Value {
-    let state = ctx.manager.get_task_state();
-    let translator_status = ctx.manager.get_translator_status().await;
+    let read = ctx.manager.read_context();
+    let state = runtime_read::task_state(&read);
+    let translator_status = runtime_read::translator_status(&read).await;
     serde_json::json!({
         "adapter": {
             "platform": ctx.adapter.is_supported().then_some("macos").unwrap_or("unsupported"),
@@ -44,7 +46,7 @@ pub(crate) async fn publish_task_state_event(
     state: &TaskState,
     translator_status: &TranslatorServiceStatus,
 ) {
-    if let Ok(app) = ctx.manager.get_app_handle().await {
+    if let Ok(app) = runtime_read::app_handle(&ctx.manager.read_context()).await {
         ctx.events.publish(
             &app,
             EventType::TaskState,
@@ -99,10 +101,11 @@ pub(crate) async fn set_translator_status_if_current(
         return;
     }
 
-    let task_state = ctx.manager.get_task_state();
+    let read = ctx.manager.read_context();
+    let task_state = runtime_read::task_state(&read);
     publish_task_state_event(ctx, "translator", status.enabled, &task_state, &status).await;
 
-    if let Ok(app) = ctx.manager.get_app_handle().await {
+    if let Ok(app) = runtime_read::app_handle(&read).await {
         if current_translator_generation(ctx) != generation {
             return;
         }

@@ -15,7 +15,6 @@ use crate::adapter::applescript::{
 };
 
 const DEFAULT_WIDTH: f64 = 380.0;
-const DEFAULT_INDEPENDENT_HEIGHT: f64 = 600.0;
 const INDEPENDENT_MARGIN: f64 = 20.0;
 
 const TITLE_BAR_H: f64 = 40.0;

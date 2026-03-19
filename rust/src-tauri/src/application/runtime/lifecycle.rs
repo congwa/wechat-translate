@@ -2,6 +2,7 @@
 //! 让 TaskManager 退回为聚合入口，而不是继续承载完整生命周期编排细节。
 use crate::app_state;
 use crate::application::runtime::monitor_loop::{spawn_monitor_loop, MonitorLoopContext};
+use crate::application::runtime::read_service as runtime_read;
 use crate::application::runtime::service::RuntimeService;
 use crate::application::runtime::sidebar_runtime as app_sidebar_runtime;
 use crate::application::runtime::state::{
@@ -79,7 +80,7 @@ pub(crate) async fn restore_sidebar_after_monitor_restart(
     }
 
     let refresh_version = ctx.sidebar_runtime.update_chat_and_version(chat_name);
-    if let Ok(app) = ctx.manager.get_app_handle().await {
+    if let Ok(app) = runtime_read::app_handle(&ctx.manager.read_context()).await {
         crate::application::sidebar::projection_service::emit_sidebar_invalidated(
             &app,
             &ctx.events,
@@ -138,7 +139,8 @@ pub(crate) async fn finalize_monitor_loop(ctx: &RuntimeLifecycleContext, app_han
             .await;
     }
 
-    let translator_status = ctx.manager.get_translator_status().await;
+    let read = ctx.manager.read_context();
+    let translator_status = runtime_read::translator_status(&read).await;
     ctx.manager
         .publish_task_state_event("monitoring", false, &next_state, &translator_status)
         .await;
@@ -163,9 +165,10 @@ pub(crate) async fn start_monitoring(
     ctx.monitoring_active.store(true, Ordering::Relaxed);
     ctx.first_poll_signal.reset();
 
-    let app = ctx.manager.get_app_handle().await?;
-    let state = ctx.manager.get_task_state();
-    let translator_status = ctx.manager.get_translator_status().await;
+    let read = ctx.manager.read_context();
+    let app = runtime_read::app_handle(&read).await?;
+    let state = runtime_read::task_state(&read);
+    let translator_status = runtime_read::translator_status(&read).await;
     ctx.manager
         .publish_task_state_event("monitoring", true, &state, &translator_status)
         .await;
@@ -187,7 +190,9 @@ pub(crate) async fn start_monitoring(
         sidebar_config: ctx.sidebar_config.clone(),
         sidebar_runtime: ctx.sidebar_runtime.clone(),
         app_handle: app.clone(),
-        manager: ctx.manager.clone(),
+        read: ctx.manager.read_context(),
+        status: ctx.manager.status_context(),
+        lifecycle: ctx.clone(),
         poll_interval,
     });
 

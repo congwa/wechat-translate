@@ -5,7 +5,6 @@ use crate::config::{self as app_config, ConfigDir};
 use crate::task_manager::TaskManager;
 use tauri::{Emitter, Manager};
 
-#[tauri::command]
 pub async fn config_get(
     config_dir: tauri::State<'_, ConfigDir>,
 ) -> Result<serde_json::Value, String> {
@@ -13,7 +12,6 @@ pub async fn config_get(
     Ok(serde_json::json!({ "ok": true, "data": config }))
 }
 
-#[tauri::command]
 pub async fn config_put(
     app: tauri::AppHandle,
     config_dir: tauri::State<'_, ConfigDir>,
@@ -47,7 +45,6 @@ pub async fn config_put(
     Ok(serde_json::json!({ "ok": true, "message": "config saved", "path": result.path }))
 }
 
-#[tauri::command]
 pub async fn config_default() -> Result<serde_json::Value, String> {
     Ok(serde_json::json!({ "ok": true, "data": app_config::default_config_value() }))
 }

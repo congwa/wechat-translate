@@ -1,6 +1,5 @@
-//! 音频相关的 Tauri 命令
-//!
-//! 提供音频缓存管理的前端接口
+//! 音频命令兼容实现：保留音频缓存下载与统计的内部实现，
+//! 真正的 Tauri 暴露入口已经迁移到 `interface/commands/audio.rs`。
 
 use crate::audio_cache::{AudioCache, AudioCacheStats};
 use std::sync::Arc;
@@ -15,7 +14,7 @@ use std::sync::Arc;
 ///
 /// # 返回
 /// - 可用于 HTML Audio 元素的 URL（本地文件协议）
-#[tauri::command]
+/// 获取音频播放 URL，并在需要时触发后端下载与缓存。
 pub async fn audio_get_url(
     audio_cache: tauri::State<'_, Arc<AudioCache>>,
     url: String,
@@ -47,7 +46,7 @@ pub async fn audio_get_url(
 ///
 /// # 返回
 /// - true: 已缓存，false: 未缓存
-#[tauri::command]
+/// 检查指定音频资源是否已缓存，供前端决定是否需要下载态。
 pub async fn audio_is_cached(
     audio_cache: tauri::State<'_, Arc<AudioCache>>,
     url: String,
@@ -59,7 +58,7 @@ pub async fn audio_is_cached(
 ///
 /// # 返回
 /// - 缓存文件数量、总大小等统计信息
-#[tauri::command]
+/// 获取音频缓存统计，供设置页或调试入口展示当前缓存规模。
 pub async fn audio_get_stats(
     audio_cache: tauri::State<'_, Arc<AudioCache>>,
 ) -> Result<AudioCacheStats, String> {
@@ -72,7 +71,7 @@ pub async fn audio_get_stats(
 ///
 /// # 返回
 /// - 清理的文件数量
-#[tauri::command]
+/// 清空音频缓存，供用户在调试或缓存损坏时重置本地发音资源。
 pub async fn audio_clear_cache(
     audio_cache: tauri::State<'_, Arc<AudioCache>>,
 ) -> Result<u64, String> {

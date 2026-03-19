@@ -143,7 +143,7 @@ fn build_preflight_result(
     })
 }
 
-#[tauri::command]
+/// 返回当前微信运行态与辅助功能权限预检结果，供前端决定是否继续初始化监听链路。
 pub fn preflight_check() -> Value {
     let pid = check_wechat_pid();
     let accessibility_ok = is_process_trusted();
@@ -171,7 +171,7 @@ pub fn preflight_check() -> Value {
     )
 }
 
-#[tauri::command]
+/// 请求辅助功能权限，并把这次请求前后是否已授权的状态返回给前端。
 pub fn accessibility_request_access() -> Value {
     let trusted_before = is_process_trusted();
     info!(
@@ -200,7 +200,7 @@ pub fn accessibility_request_access() -> Value {
     })
 }
 
-#[tauri::command]
+/// 打开系统设置中的辅助功能权限页，帮助用户跳转到正确的授权位置。
 pub fn accessibility_open_settings() -> Value {
     info!("accessibility_open_settings opening system settings url");
     let status = std::process::Command::new("open")
@@ -231,7 +231,6 @@ pub fn accessibility_open_settings() -> Value {
     }
 }
 
-#[tauri::command]
 pub async fn accessibility_recover_listener(
     app: tauri::AppHandle,
     config_dir: tauri::State<'_, ConfigDir>,
@@ -302,7 +301,7 @@ pub async fn accessibility_recover_listener(
     }
 }
 
-#[tauri::command]
+/// 在监听恢复失败时弹出原生“立即重启”提示，作为权限恢复链路的最终兜底。
 pub fn preflight_prompt_restart(app: tauri::AppHandle) -> Value {
     info!("preflight_prompt_restart showing restart dialog");
     let app_handle = app.clone();

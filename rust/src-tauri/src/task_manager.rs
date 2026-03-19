@@ -1,5 +1,6 @@
 use crate::adapter::MacOSAdapter;
-use crate::application::runtime::lifecycle::{self as runtime_lifecycle, RuntimeLifecycleContext};
+use crate::application::runtime::lifecycle::RuntimeLifecycleContext;
+use crate::application::runtime::read_service::RuntimeReadContext;
 use crate::application::runtime::sidebar_runtime::SidebarRuntimeContext;
 use crate::application::runtime::state::{FirstPollSignal, MonitorConfig, SidebarConfig};
 use crate::application::runtime::status_sync::{self as runtime_status_sync, RuntimeStatusContext};
@@ -9,11 +10,9 @@ use crate::db::MessageDb;
 use crate::events::EventStore;
 use crate::image_cache::WeChatImageCache;
 use crate::translator::{TranslationService, TranslatorServiceStatus};
-use anyhow::Result;
 use std::collections::HashSet;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::Arc;
-use std::time::Duration;
 use tauri::AppHandle;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
@@ -81,36 +80,6 @@ impl TaskManager {
         self.monitor_config.lock().await.use_right_panel_details = enabled;
     }
 
-    /// 读取当前应用句柄；若应用尚未完成 bootstrap，则返回错误避免生命周期误触发。
-    pub(crate) async fn get_app_handle(&self) -> Result<AppHandle> {
-        self.app_handle
-            .lock()
-            .await
-            .clone()
-            .ok_or_else(|| anyhow::anyhow!("AppHandle not set"))
-    }
-
-    pub fn get_task_state(&self) -> TaskState {
-        TaskState {
-            monitoring: self.monitoring_active.load(Ordering::Relaxed),
-            sidebar: self.sidebar_enabled.load(Ordering::Relaxed),
-        }
-    }
-
-    pub async fn get_translator_status(&self) -> TranslatorServiceStatus {
-        self.translation_service.get_status().await
-    }
-
-    pub fn get_sidebar_runtime(&self) -> &Arc<SidebarRuntime> {
-        &self.sidebar_runtime
-    }
-
-    /// 等待监听循环首次 poll 完成
-    /// 返回当前聊天名称，超时返回 None
-    pub async fn wait_first_poll(&self, timeout: Duration) -> Option<String> {
-        self.first_poll_signal.wait_ready(timeout).await
-    }
-
     /// 汇总监听生命周期依赖，供独立 runtime 生命周期模块执行启停/恢复编排。
     pub(crate) fn lifecycle_context(&self) -> RuntimeLifecycleContext {
         RuntimeLifecycleContext {
@@ -130,6 +99,18 @@ impl TaskManager {
         }
     }
 
+    /// 汇总运行态只读依赖，供 application service 统一读取任务/翻译/sidebar 当前状态。
+    pub(crate) fn read_context(&self) -> RuntimeReadContext {
+        RuntimeReadContext {
+            monitoring_active: self.monitoring_active.clone(),
+            sidebar_enabled: self.sidebar_enabled.clone(),
+            translation_service: self.translation_service.clone(),
+            first_poll_signal: self.first_poll_signal.clone(),
+            sidebar_runtime: self.sidebar_runtime.clone(),
+            app_handle: self.app_handle.clone(),
+        }
+    }
+
     /// 汇总翻译运行态依赖，供翻译配置应用、健康探测和手动翻译链路复用。
     pub(crate) fn translator_runtime_context(&self) -> TranslatorRuntimeContext {
         TranslatorRuntimeContext {
@@ -139,6 +120,8 @@ impl TaskManager {
             translation_service: self.translation_service.clone(),
             sidebar_enabled: self.sidebar_enabled.clone(),
             sidebar_config: self.sidebar_config.clone(),
+            sidebar_runtime: self.sidebar_runtime.clone(),
+            status: self.status_context(),
         }
     }
 
@@ -164,16 +147,6 @@ impl TaskManager {
         }
     }
 
-    /// 供恢复链路使用：先停止旧监听，再等待后台任务真正退出。
-    pub async fn stop_monitoring_and_wait(&self, timeout: Duration) -> Result<()> {
-        runtime_lifecycle::stop_monitoring_and_wait(&self.lifecycle_context(), timeout).await
-    }
-
-    /// 获取翻译服务
-    pub fn get_translation_service(&self) -> Arc<TranslationService> {
-        self.translation_service.clone()
-    }
-
     /// 发布统一的任务状态事件，供日志页和调试面板观察生命周期变化。
     pub(crate) async fn publish_task_state_event(
         &self,
@@ -197,34 +170,12 @@ impl TaskManager {
         runtime_status_sync::next_translator_generation(&self.status_context())
     }
 
-    pub(crate) fn current_translator_generation(&self) -> u64 {
-        runtime_status_sync::current_translator_generation(&self.status_context())
-    }
-
     /// 启动一轮后台翻译健康探测，并在结果回流时按代际号保护当前运行态。
     pub(crate) fn spawn_translator_health_check(&self, translator_generation: u64) {
         runtime_status_sync::spawn_translator_health_check(
             &self.status_context(),
             translator_generation,
         );
-    }
-
-    pub(crate) async fn set_translator_status_if_current(
-        &self,
-        generation: u64,
-        status: TranslatorServiceStatus,
-    ) {
-        runtime_status_sync::set_translator_status_if_current(
-            &self.status_context(),
-            generation,
-            status,
-        )
-        .await;
-    }
-
-    /// 在监听循环退出后统一回收运行态并刷新 snapshot，避免 UI 长时间停留在“监听中”。
-    pub(crate) async fn finalize_monitor_loop(&self, app_handle: &AppHandle) {
-        runtime_lifecycle::finalize_monitor_loop(&self.lifecycle_context(), app_handle).await;
     }
 }
 
@@ -332,10 +283,12 @@ mod tests {
             *monitor_token.lock().await = None;
         });
 
-        manager
-            .stop_monitoring_and_wait(Duration::from_secs(1))
-            .await
-            .expect("wait for monitor stop");
+        crate::application::runtime::lifecycle::stop_monitoring_and_wait(
+            &manager.lifecycle_context(),
+            Duration::from_secs(1),
+        )
+        .await
+        .expect("wait for monitor stop");
 
         assert!(manager.monitor_token.lock().await.is_none());
     }
@@ -345,10 +298,12 @@ mod tests {
         let manager = build_test_manager();
         *manager.monitor_token.lock().await = Some(CancellationToken::new());
 
-        let error = manager
-            .stop_monitoring_and_wait(Duration::from_millis(120))
-            .await
-            .expect_err("should time out");
+        let error = crate::application::runtime::lifecycle::stop_monitoring_and_wait(
+            &manager.lifecycle_context(),
+            Duration::from_millis(120),
+        )
+        .await
+        .expect_err("should time out");
 
         assert!(error.to_string().contains("等待监听任务停止超时"));
     }

@@ -1,5 +1,6 @@
 use crate::adapter::ax_reader::{self, ChatMessage};
 use crate::adapter::MacOSAdapter;
+use crate::application::runtime::lifecycle::{finalize_monitor_loop, RuntimeLifecycleContext};
 use crate::application::runtime::monitor_ingest::{
     apply_cached_preview_sender_hint, apply_sender_defaults, apply_session_preview_sender_hint,
     cleanup_preview_sender_hints, diff_messages, inherit_sender_from_reference,
@@ -7,7 +8,9 @@ use crate::application::runtime::monitor_ingest::{
     should_forward_session_preview, should_forward_sidebar_chat, trim_for_log, ChatKind,
     PreviewSenderHint, SessionListenState,
 };
+use crate::application::runtime::read_service::{self as runtime_read, RuntimeReadContext};
 use crate::application::runtime::state::{FirstPollSignal, MonitorConfig, SidebarConfig};
+use crate::application::runtime::status_sync::RuntimeStatusContext;
 use crate::application::runtime::translator_runtime::{
     publish_sidebar_append, spawn_sidebar_translation_update,
 };
@@ -15,7 +18,6 @@ use crate::application::sidebar::projection_service::{emit_sidebar_invalidated, 
 use crate::db::MessageDb;
 use crate::events::{EventStore, EventType};
 use crate::image_cache::{self, WeChatImageCache};
-use crate::task_manager::TaskManager;
 use anyhow::Result;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -39,10 +41,13 @@ pub(crate) struct MonitorLoopContext {
     pub sidebar_config: Arc<Mutex<SidebarConfig>>,
     pub sidebar_runtime: Arc<SidebarRuntime>,
     pub app_handle: AppHandle,
-    pub manager: TaskManager,
+    pub read: RuntimeReadContext,
+    pub status: RuntimeStatusContext,
+    pub lifecycle: RuntimeLifecycleContext,
     pub poll_interval: f64,
 }
 
+/// 启动监听主循环：持续轮询微信 UI、判定消息增量，并把结果投影到数据库和 sidebar。
 pub(crate) fn spawn_monitor_loop(ctx: MonitorLoopContext) {
     tokio::spawn(async move {
         let MonitorLoopContext {
@@ -59,7 +64,9 @@ pub(crate) fn spawn_monitor_loop(ctx: MonitorLoopContext) {
             sidebar_config,
             sidebar_runtime,
             app_handle,
-            manager,
+            read,
+            status,
+            lifecycle,
             poll_interval,
         } = ctx;
 
@@ -231,13 +238,14 @@ pub(crate) fn spawn_monitor_loop(ctx: MonitorLoopContext) {
                                     (config.translator.clone(), config.limiter.clone())
                                 };
                                 let translate_config =
-                                    manager.get_translation_service().get_config().await;
+                                    runtime_read::translation_service(&read).get_config().await;
                                 if let (Some(translator), Some(limiter)) = (translator, limiter) {
                                     spawn_sidebar_translation_update(
-                                        manager.clone(),
+                                        status.clone(),
                                         events.clone(),
                                         app_handle.clone(),
                                         db.clone(),
+                                        sidebar_runtime.clone(),
                                         translator,
                                         limiter,
                                         translate_config.source_lang.clone(),
@@ -504,7 +512,7 @@ pub(crate) fn spawn_monitor_loop(ctx: MonitorLoopContext) {
                                     (config.translator.clone(), config.limiter.clone())
                                 };
                                 let translate_config =
-                                    manager.get_translation_service().get_config().await;
+                                    runtime_read::translation_service(&read).get_config().await;
 
                                 let sidebar_event = publish_sidebar_append(
                                     &events,
@@ -522,10 +530,11 @@ pub(crate) fn spawn_monitor_loop(ctx: MonitorLoopContext) {
 
                                 if let (Some(translator), Some(limiter)) = (translator, limiter) {
                                     spawn_sidebar_translation_update(
-                                        manager.clone(),
+                                        status.clone(),
                                         events.clone(),
                                         app_handle.clone(),
                                         db.clone(),
+                                        sidebar_runtime.clone(),
                                         translator,
                                         limiter,
                                         translate_config.source_lang.clone(),
@@ -553,6 +562,6 @@ pub(crate) fn spawn_monitor_loop(ctx: MonitorLoopContext) {
 
         *monitor_token_ref.lock().await = None;
         monitoring_active.store(false, Ordering::Relaxed);
-        manager.finalize_monitor_loop(&app_handle).await;
+        finalize_monitor_loop(&lifecycle, &app_handle).await;
     });
 }

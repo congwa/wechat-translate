@@ -36,20 +36,6 @@ pub async fn save_settings(
     }))
 }
 
-#[tauri::command]
-pub async fn app_state_get(
-    config_dir: tauri::State<'_, ConfigDir>,
-    manager: tauri::State<'_, TaskManager>,
-    close_to_tray: tauri::State<'_, CloseToTray>,
-    versions: tauri::State<'_, app_state::SnapshotVersionState>,
-) -> Result<serde_json::Value, String> {
-    let runtime = RuntimeService::new(manager.inner().clone());
-    let snapshot =
-        app_state::load_snapshot(&config_dir, &runtime, &close_to_tray, &versions).await?;
-    Ok(serde_json::json!({ "ok": true, "data": snapshot }))
-}
-
-#[tauri::command]
 pub async fn settings_update(
     app: tauri::AppHandle,
     config_dir: tauri::State<'_, ConfigDir>,

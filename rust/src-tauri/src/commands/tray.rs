@@ -4,12 +4,12 @@ use crate::CloseToTray;
 use std::sync::atomic::Ordering;
 use tauri::{AppHandle, Manager, State};
 
-#[tauri::command]
+/// 返回当前 close-to-tray 偏好，供设置页和托盘 UI 展示当前值。
 pub fn get_close_to_tray(state: State<'_, CloseToTray>) -> bool {
     state.0.load(Ordering::Relaxed)
 }
 
-#[tauri::command]
+/// 更新 close-to-tray 偏好，并同步刷新托盘复选框和 runtime snapshot。
 pub fn set_close_to_tray(
     app: AppHandle,
     state: State<'_, CloseToTray>,
