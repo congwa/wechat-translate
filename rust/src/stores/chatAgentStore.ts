@@ -21,6 +21,7 @@ interface ChatAgentState {
 
   initSession: () => Promise<void>;
   sendMessage: (text: string) => Promise<void>;
+  cancelChat: () => void;
   clearHistory: () => Promise<void>;
   _handleResponse: (resp: AgentChatResponse) => void;
 }
@@ -28,6 +29,7 @@ interface ChatAgentState {
 let _unlisten: (() => void) | null = null;
 let _initLock = false;
 let _msgIdCounter = 0;
+let _requestNonce = 0;
 
 function nextId(suffix: string): string {
   return `${Date.now()}-${++_msgIdCounter}-${suffix}`;
@@ -75,11 +77,13 @@ export const useChatAgentStore = create<ChatAgentState>((set, get) => ({
       timestamp: Date.now(),
     };
 
+    const nonce = ++_requestNonce;
     set((s) => ({ messages: [...s.messages, userMsg], isLoading: true, error: null }));
 
     try {
       await api.agentChat(sessionId, text.trim());
     } catch (e) {
+      if (_requestNonce !== nonce) return;
       const errMsg: ChatMessage = {
         id: nextId("err"),
         role: "error",
@@ -88,6 +92,12 @@ export const useChatAgentStore = create<ChatAgentState>((set, get) => ({
       };
       set((s) => ({ messages: [...s.messages, errMsg], isLoading: false, error: String(e) }));
     }
+  },
+
+  cancelChat: () => {
+    if (!get().isLoading) return;
+    ++_requestNonce;
+    set({ isLoading: false });
   },
 
   clearHistory: async () => {
@@ -99,7 +109,8 @@ export const useChatAgentStore = create<ChatAgentState>((set, get) => ({
   },
 
   _handleResponse: (resp: AgentChatResponse) => {
-    const { messages } = get();
+    const { messages, isLoading } = get();
+    if (!isLoading) return;
     set({ isLoading: false });
 
     if (resp.is_error) {

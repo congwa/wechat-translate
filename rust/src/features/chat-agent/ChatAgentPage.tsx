@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Bot, Send, Trash2, ChevronDown, ChevronRight, Database, Info } from "lucide-react";
+import { Bot, Send, Square, Trash2, ChevronDown, ChevronRight, Database, Info } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -172,7 +172,7 @@ const WELCOME_SUGGESTIONS = [
 ];
 
 export function ChatAgentPage() {
-  const { sessionId, messages, isLoading, initSession, sendMessage, clearHistory } =
+  const { sessionId, messages, isLoading, initSession, sendMessage, cancelChat, clearHistory } =
     useChatAgentStore();
   const [input, setInput] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -274,17 +274,31 @@ export function ChatAgentPage() {
                 <Trash2 className="w-4 h-4" />
               </Button>
             </PromptInputAction>
-            <PromptInputAction tooltip="发送（Enter）">
-              <Button
-                size="sm"
-                className="h-8 px-3 gap-1.5"
-                onClick={handleSubmit}
-                disabled={isLoading || !input.trim() || !sessionId}
-              >
-                <Send className="w-3.5 h-3.5" />
-                发送
-              </Button>
-            </PromptInputAction>
+            {isLoading ? (
+              <PromptInputAction tooltip="取消">
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  className="h-8 px-3 gap-1.5"
+                  onClick={cancelChat}
+                >
+                  <Square className="w-3 h-3" />
+                  取消
+                </Button>
+              </PromptInputAction>
+            ) : (
+              <PromptInputAction tooltip="发送（Enter）">
+                <Button
+                  size="sm"
+                  className="h-8 px-3 gap-1.5"
+                  onClick={handleSubmit}
+                  disabled={!input.trim() || !sessionId}
+                >
+                  <Send className="w-3.5 h-3.5" />
+                  发送
+                </Button>
+              </PromptInputAction>
+            )}
           </PromptInputActions>
         </PromptInput>
         <p className="text-[11px] text-muted-foreground/60 text-center mt-1.5">

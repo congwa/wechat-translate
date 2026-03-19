@@ -137,15 +137,15 @@ impl ChatAgentService {
         // =====================================================================
 
         // ── 方式 A（使用中）：在 Builder 上设置 default_max_turns ──────────────
-        // Text2SQL 典型路径：get_context → get_schema → execute_sql → 文本答案（3 次工具调用）
-        // 设为 5 可应对更复杂的多步推理，同时避免无限循环烧光 Token
+        // Text2SQL 典型路径：get_schema → execute_sql → 文本答案（2–3 次工具调用）
+        // 复杂查询可能需要多次 SQL 重试或多表关联，设为 15 给足空间
         let agent = client
             .agent(&model_id)
             .preamble(&preamble)
             .tool(schema_tool)
             .tool(sql_tool)
             .tool(context_tool)
-            .default_max_turns(5) // 允许最多 5 次工具调用 round-trip 后再返回文本答案
+            .default_max_turns(15)
             .build();
 
         // ── 方式 B（注释示例）：在单次请求上设置 max_turns ───────────────────
@@ -179,6 +179,10 @@ impl ChatAgentService {
                      Agent 功能依赖工具调用能力，请在设置中切换到支持该功能的模型，\
                      例如 gpt-4o、gpt-4-turbo、gpt-3.5-turbo 等 OpenAI 兼容模型。\n\
                      原始错误：".to_string() + &raw
+                } else if raw.contains("MaxTurnError") || raw.contains("max turn limit") {
+                    "Agent 执行步骤过多未能收敛到最终答案。\n\
+                     可能原因：查询过于复杂，或模型反复调用工具未产出结论。\n\
+                     建议：尝试简化问题，或换一种方式提问。".to_string()
                 } else {
                     raw
                 }
@@ -233,11 +237,12 @@ fn build_preamble() -> String {
   - content 是原文，content_en 是英文翻译（可能为空）
   - source 字段值为 'chat'（正常消息）或 'summary'（系统摘要）
 
-使用步骤：
-1. 先用 get_context 了解数据库整体规模和活跃群聊
-2. 用 get_schema 确认字段细节
-3. 用 execute_sql 执行 SELECT 查询
-4. 基于结果用中文给出简洁清晰的分析
+工具使用策略（重要 — 尽量减少工具调用次数）：
+  - 你已经知道上面的 Schema，大多数查询可以直接写 SQL，无需再调 get_schema。
+  - 只在首次对话或确实需要了解数据规模时才调 get_context。
+  - 对于简单问题，直接调 execute_sql 然后给出答案即可。
+  - 如果 SQL 执行失败，修正后重试，但最多重试 2 次。
+  - 得到查询结果后，立即用中文给出简洁清晰的分析，不要再调工具。
 
 约束：只能执行只读查询，execute_sql 禁止写操作。"#
         .to_string()
