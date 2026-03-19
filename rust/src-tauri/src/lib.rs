@@ -363,7 +363,9 @@ pub fn run() {
     let close_to_tray = CloseToTray(Arc::new(AtomicBool::new(true)));
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_opener::init())
         .manage(adapter.clone())
         .manage(event_store.clone())

@@ -6,6 +6,11 @@
   "permissions": [
     "core:default",
     "opener:default",
+    "clipboard-manager:default",
+    "clipboard-manager:allow-write-image",
+    "dialog:default",
+    "fs:default",
+    "fs:allow-write-file",
     "core:window:allow-start-dragging",
     "core:window:allow-set-size",
     "core:window:allow-inner-size",

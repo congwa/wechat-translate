@@ -1,8 +1,11 @@
 import { useRef, useState } from "react";
 import html2canvas from "html2canvas";
+import { save } from "@tauri-apps/plugin-dialog";
+import { writeFile } from "@tauri-apps/plugin-fs";
+import { writeImage } from "@tauri-apps/plugin-clipboard-manager";
+import { Image as TauriImage } from "@tauri-apps/api/image";
 import { Copy, Download, Check, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 
 interface DailyItem {
   date: string;
@@ -69,14 +72,14 @@ export function SummaryCard({
       }
 
       try {
-        await navigator.clipboard.write([
-          new ClipboardItem({ "image/png": blob }),
-        ]);
+        const arrayBuffer = await blob.arrayBuffer();
+        const image = await TauriImage.fromBytes(new Uint8Array(arrayBuffer));
+        await writeImage(image);
         setCopied(true);
         setTimeout(() => setCopied(false), 2000);
       } catch (err) {
-        console.error("Clipboard write failed, falling back to download", err);
-        downloadBlob(blob);
+        console.error("Clipboard write failed, falling back to save dialog", err);
+        await saveWithTauriDialog(blob);
       }
     } catch (err) {
       console.error("Copy failed:", err);
@@ -85,15 +88,20 @@ export function SummaryCard({
     }
   }
 
-  function downloadBlob(blob: Blob) {
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.download = `summary-${Date.now()}.png`;
-    link.href = url;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
+  async function saveWithTauriDialog(blob: Blob) {
+    const arrayBuffer = await blob.arrayBuffer();
+    const uint8Array = new Uint8Array(arrayBuffer);
+
+    const filePath = await save({
+      defaultPath: `summary-${Date.now()}.png`,
+      filters: [{ name: "PNG Image", extensions: ["png"] }],
+    });
+
+    if (filePath) {
+      await writeFile(filePath, uint8Array);
+      return true;
+    }
+    return false;
   }
 
   async function handleExport() {
@@ -112,7 +120,7 @@ export function SummaryCard({
       });
 
       if (blob) {
-        downloadBlob(blob);
+        await saveWithTauriDialog(blob);
       }
     } catch (err) {
       console.error("Export failed:", err);
@@ -164,86 +172,133 @@ export function SummaryCard({
         </Button>
       </div>
 
-      {/* Summary card for export */}
+      {/* Summary card for export - using inline hex colors for html2canvas compatibility */}
       <div
         ref={cardRef}
-        className="rounded-2xl bg-gradient-to-br from-slate-50 via-white to-blue-50 p-6 shadow-lg border border-slate-200/60"
+        style={{
+          borderRadius: "16px",
+          background: "linear-gradient(to bottom right, #f8fafc, #ffffff, #eff6ff)",
+          padding: "24px",
+          boxShadow: "0 10px 15px -3px rgba(0,0,0,0.1)",
+          border: "1px solid rgba(226,232,240,0.6)",
+        }}
       >
         {/* Header */}
-        <div className="flex items-start justify-between mb-5">
-          <div className="space-y-1.5">
-            <div className="flex items-center gap-2">
-              <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center">
-                <Sparkles className="w-4 h-4 text-white" />
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "20px" }}>
+          <div>
+            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+              <div style={{
+                width: "32px",
+                height: "32px",
+                borderRadius: "12px",
+                background: "linear-gradient(to bottom right, #3b82f6, #4f46e5)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+              }}>
+                <Sparkles style={{ width: "16px", height: "16px", color: "#ffffff" }} />
               </div>
-              <h2 className="text-lg font-bold text-slate-800">{title}</h2>
+              <h2 style={{ fontSize: "18px", fontWeight: "bold", color: "#1e293b", margin: 0 }}>{title}</h2>
             </div>
             {subtitle && (
-              <p className="text-sm text-slate-500 pl-10">{subtitle}</p>
+              <p style={{ fontSize: "14px", color: "#64748b", paddingLeft: "40px", margin: "6px 0 0 0" }}>{subtitle}</p>
             )}
           </div>
-          <div className="text-right">
-            <Badge
-              variant="secondary"
-              className="bg-blue-100 text-blue-700 border-0 font-medium"
-            >
+          <div>
+            <span style={{
+              display: "inline-block",
+              padding: "4px 12px",
+              borderRadius: "9999px",
+              backgroundColor: "#dbeafe",
+              color: "#1d4ed8",
+              fontSize: "12px",
+              fontWeight: "500",
+            }}>
               {dateRange}
-            </Badge>
+            </span>
           </div>
         </div>
 
         {/* Stats */}
-        <div className="flex flex-wrap gap-3 mb-5">
-          <div className="px-3 py-2 rounded-xl bg-white/80 border border-slate-200/60 shadow-sm">
-            <p className="text-xs text-slate-500">消息数</p>
-            <p className="text-lg font-bold text-slate-800">{messageCount}</p>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: "12px", marginBottom: "20px" }}>
+          <div style={{
+            padding: "8px 12px",
+            borderRadius: "12px",
+            backgroundColor: "rgba(255,255,255,0.8)",
+            border: "1px solid rgba(226,232,240,0.6)",
+            boxShadow: "0 1px 2px rgba(0,0,0,0.05)",
+          }}>
+            <p style={{ fontSize: "12px", color: "#64748b", margin: 0 }}>消息数</p>
+            <p style={{ fontSize: "18px", fontWeight: "bold", color: "#1e293b", margin: 0 }}>{messageCount}</p>
           </div>
           {extraStats?.map((stat) => (
             <div
               key={stat.label}
-              className="px-3 py-2 rounded-xl bg-white/80 border border-slate-200/60 shadow-sm"
+              style={{
+                padding: "8px 12px",
+                borderRadius: "12px",
+                backgroundColor: "rgba(255,255,255,0.8)",
+                border: "1px solid rgba(226,232,240,0.6)",
+                boxShadow: "0 1px 2px rgba(0,0,0,0.05)",
+              }}
             >
-              <p className="text-xs text-slate-500">{stat.label}</p>
-              <p className="text-lg font-bold text-slate-800">{stat.value}</p>
+              <p style={{ fontSize: "12px", color: "#64748b", margin: 0 }}>{stat.label}</p>
+              <p style={{ fontSize: "18px", fontWeight: "bold", color: "#1e293b", margin: 0 }}>{stat.value}</p>
             </div>
           ))}
         </div>
 
         {/* Overall summary */}
-        <div className="rounded-xl bg-gradient-to-r from-blue-500/10 to-indigo-500/10 p-4 mb-4 border border-blue-200/50">
-          <div className="flex items-center gap-2 mb-2">
-            <Sparkles className="w-4 h-4 text-blue-600" />
-            <h3 className="text-sm font-semibold text-blue-800">整体总览</h3>
+        <div style={{
+          borderRadius: "12px",
+          background: "linear-gradient(to right, rgba(59,130,246,0.1), rgba(99,102,241,0.1))",
+          padding: "16px",
+          marginBottom: "16px",
+          border: "1px solid rgba(191,219,254,0.5)",
+        }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px" }}>
+            <Sparkles style={{ width: "16px", height: "16px", color: "#2563eb" }} />
+            <h3 style={{ fontSize: "14px", fontWeight: "600", color: "#1e40af", margin: 0 }}>整体总览</h3>
           </div>
-          <div className="whitespace-pre-wrap text-sm leading-relaxed text-slate-700">
+          <div style={{ whiteSpace: "pre-wrap", fontSize: "14px", lineHeight: "1.6", color: "#334155" }}>
             {overallSummary}
           </div>
         </div>
 
         {/* Daily items */}
         {dailyItems.length > 0 && (
-          <div className="space-y-3">
-            <h3 className="text-sm font-semibold text-slate-600 flex items-center gap-2">
-              <span className="w-1 h-4 rounded-full bg-gradient-to-b from-blue-500 to-indigo-500" />
+          <div>
+            <h3 style={{ fontSize: "14px", fontWeight: "600", color: "#475569", display: "flex", alignItems: "center", gap: "8px", margin: "0 0 12px 0" }}>
+              <span style={{ width: "4px", height: "16px", borderRadius: "9999px", background: "linear-gradient(to bottom, #3b82f6, #4f46e5)" }} />
               每日详情
             </h3>
             {dailyItems.map((item) => (
               <div
                 key={item.date}
-                className="rounded-xl bg-white/60 p-4 border border-slate-200/50 shadow-sm"
+                style={{
+                  borderRadius: "12px",
+                  backgroundColor: "rgba(255,255,255,0.6)",
+                  padding: "16px",
+                  border: "1px solid rgba(226,232,240,0.5)",
+                  boxShadow: "0 1px 2px rgba(0,0,0,0.05)",
+                  marginBottom: "12px",
+                }}
               >
-                <div className="flex items-center gap-2 mb-2">
-                  <span className="text-sm font-medium text-slate-700">
+                <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px" }}>
+                  <span style={{ fontSize: "14px", fontWeight: "500", color: "#334155" }}>
                     {item.date}
                   </span>
-                  <Badge
-                    variant="outline"
-                    className="text-[10px] h-5 border-slate-300 text-slate-500"
-                  >
+                  <span style={{
+                    fontSize: "10px",
+                    padding: "2px 8px",
+                    borderRadius: "9999px",
+                    border: "1px solid #cbd5e1",
+                    color: "#64748b",
+                  }}>
                     {item.message_count} 条
-                  </Badge>
+                  </span>
                 </div>
-                <div className="whitespace-pre-wrap text-sm leading-relaxed text-slate-600">
+                <div style={{ whiteSpace: "pre-wrap", fontSize: "14px", lineHeight: "1.6", color: "#475569" }}>
                   {item.summary}
                 </div>
               </div>
@@ -252,7 +307,15 @@ export function SummaryCard({
         )}
 
         {/* Footer */}
-        <div className="mt-5 pt-4 border-t border-slate-200/60 flex items-center justify-between text-[10px] text-slate-400">
+        <div style={{
+          marginTop: "20px",
+          paddingTop: "16px",
+          borderTop: "1px solid rgba(226,232,240,0.6)",
+          display: "flex",
+          justifyContent: "space-between",
+          fontSize: "10px",
+          color: "#94a3b8",
+        }}>
           <span>由 AI 自动生成</span>
           <span>WeChat Translate</span>
         </div>
