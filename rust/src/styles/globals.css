@@ -145,7 +145,6 @@
   }
 }
 
-
 @layer utilities {
   .sidebar-shell {
     background: var(--sidebar-window-bg);

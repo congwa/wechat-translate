@@ -14,6 +14,7 @@ pub mod sidebar_window;
 mod task_manager;
 pub mod translator;
 
+use crate::application::chat_agent::service::ChatAgentService;
 use crate::application::runtime::service::RuntimeService;
 use adapter::MacOSAdapter;
 use config::{load_app_config, ConfigDir};
@@ -436,6 +437,7 @@ pub fn run() {
             let sidebar_state = sidebar_window::create_state();
 
             app.manage(ConfigDir(data_dir.clone()));
+            app.manage(ChatAgentService::new(message_db.clone()));
             app.manage(message_db);
             app.manage(dict_db);
             app.manage(dict_router);
@@ -762,6 +764,9 @@ pub fn run() {
             interface::commands::audio::audio_is_cached,
             interface::commands::audio::audio_get_stats,
             interface::commands::audio::audio_clear_cache,
+            interface::commands::agent::agent_chat,
+            interface::commands::agent::agent_session_new,
+            interface::commands::agent::agent_session_clear,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

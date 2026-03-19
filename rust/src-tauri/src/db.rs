@@ -786,6 +786,87 @@ impl MessageDb {
             latest_message: latest,
         })
     }
+
+    /// 执行只读 SQL 查询（SELECT/WITH），以 JSON 行数组形式返回结果。
+    /// 由 chat_agent 的 SQL Tool 调用；调用方负责确保 SQL 安全性。
+    pub fn execute_read_query(
+        &self,
+        sql: &str,
+        limit: usize,
+    ) -> anyhow::Result<Vec<serde_json::Value>> {
+        use rusqlite::types::ValueRef;
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(sql)?;
+        let column_names: Vec<String> = stmt
+            .column_names()
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+
+        let mut rows_out = Vec::new();
+        let mut row_iter = stmt.query([])?;
+
+        while let Some(row) = row_iter.next()? {
+            if rows_out.len() >= limit {
+                break;
+            }
+            let mut obj = serde_json::Map::new();
+            for (i, col) in column_names.iter().enumerate() {
+                let val = match row.get_ref(i)? {
+                    ValueRef::Null => serde_json::Value::Null,
+                    ValueRef::Integer(n) => serde_json::Value::Number(n.into()),
+                    ValueRef::Real(f) => serde_json::json!(f),
+                    ValueRef::Text(s) => {
+                        serde_json::Value::String(String::from_utf8_lossy(s).into_owned())
+                    }
+                    ValueRef::Blob(b) => {
+                        serde_json::Value::String(format!("<blob {} bytes>", b.len()))
+                    }
+                };
+                obj.insert(col.clone(), val);
+            }
+            rows_out.push(serde_json::Value::Object(obj));
+        }
+
+        Ok(rows_out)
+    }
+
+    /// 返回数据库统计摘要（用于 context_tool）
+    pub fn get_context_summary(
+        &self,
+    ) -> anyhow::Result<(i64, i64, Option<String>, Option<String>, Vec<(String, i64)>)> {
+        let conn = self.conn.lock().unwrap();
+
+        let total_messages: i64 =
+            conn.query_row("SELECT COUNT(*) FROM messages", [], |r| r.get(0))
+                .unwrap_or(0);
+
+        let chat_count: i64 = conn
+            .query_row("SELECT COUNT(DISTINCT chat_name) FROM messages", [], |r| {
+                r.get(0)
+            })
+            .unwrap_or(0);
+
+        let earliest_date: Option<String> = conn
+            .query_row("SELECT MIN(detected_at) FROM messages", [], |r| r.get(0))
+            .unwrap_or(None);
+
+        let latest_date: Option<String> = conn
+            .query_row("SELECT MAX(detected_at) FROM messages", [], |r| r.get(0))
+            .unwrap_or(None);
+
+        let mut stmt = conn.prepare(
+            "SELECT chat_name, COUNT(*) as cnt FROM messages
+             GROUP BY chat_name ORDER BY cnt DESC LIMIT 10",
+        )?;
+
+        let top_chats: Vec<(String, i64)> = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok((total_messages, chat_count, earliest_date, latest_date, top_chats))
+    }
 }
 
 #[cfg(test)]

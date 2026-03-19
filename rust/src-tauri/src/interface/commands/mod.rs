@@ -7,3 +7,4 @@ pub(crate) mod preflight;
 pub(crate) mod runtime;
 pub(crate) mod sidebar;
 pub(crate) mod tray;
+pub(crate) mod agent;

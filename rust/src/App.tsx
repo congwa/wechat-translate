@@ -7,6 +7,7 @@ import {
   ChevronRight,
   MonitorPlay,
   Square,
+  MessageSquare,
 } from "lucide-react";
 import { PreflightBar } from "@/components/PreflightBar";
 import { SettingsPage } from "@/features/settings/SettingsPage";
@@ -14,6 +15,7 @@ import { EventStream } from "@/components/EventStream";
 import { ServiceLogs } from "@/components/ServiceLogs";
 import { MessageHistory } from "@/components/MessageHistory";
 import { SidebarView } from "@/features/sidebar/SidebarView";
+import { ChatAgentPage } from "@/features/chat-agent/ChatAgentPage";
 import { AboutDialog } from "@/components/AboutDialog";
 import { useEventStore } from "@/stores/eventStore";
 import { useToastStore } from "@/stores/toastStore";
@@ -83,7 +85,7 @@ export default function App() {
   return <MainApp />;
 }
 
-type PageKey = "settings" | "history" | "logs";
+type PageKey = "settings" | "history" | "logs" | "agent";
 
 interface NavItem {
   key: PageKey;
@@ -96,6 +98,7 @@ interface NavItem {
 const NAV_ITEMS: NavItem[] = [
   { key: "settings", label: "设置", icon: <Settings className="w-[18px] h-[18px]" /> },
   { key: "history", label: "历史", icon: <Database className="w-[18px] h-[18px]" /> },
+  { key: "agent", label: "数据问答", icon: <MessageSquare className="w-[18px] h-[18px]" /> },
   { key: "logs", label: "日志", icon: <Radio className="w-[18px] h-[18px]" /> },
 ];
 
@@ -340,6 +343,7 @@ function MainApp() {
               <p className="text-sm text-muted-foreground mt-1">
                 {page === "settings" && "调整监听、翻译和浮窗参数"}
                 {page === "history" && "查看消息历史与翻译结果"}
+                {page === "agent" && "用自然语言查询本地消息数据库"}
                 {page === "logs" && "查看实时日志与系统输出"}
               </p>
             </div>
@@ -371,6 +375,7 @@ function MainApp() {
             >
               {page === "settings" && <SettingsPage />}
               {page === "history" && <MessageHistory />}
+              {page === "agent" && <ChatAgentPage />}
               {page === "logs" && (
                 <div className="space-y-6">
                   <EventStream />

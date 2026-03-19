@@ -524,3 +524,35 @@ export async function audioGetStats(): Promise<AudioCacheStats> {
 export async function audioClearCache(): Promise<number> {
   return invoke("audio_clear_cache");
 }
+
+// ==================== Chat Agent API ====================
+
+export interface AgentToolCallEvent {
+  tool_name: string;
+  input: unknown;
+  output: string;
+  is_error: boolean;
+}
+
+export interface AgentChatResponse {
+  session_id: string;
+  response: string;
+  tool_calls: AgentToolCallEvent[];
+  is_error: boolean;
+  error_message?: string;
+}
+
+/** 创建新的 Agent 对话会话，返回 session_id */
+export async function agentSessionNew(): Promise<{ ok: boolean; session_id: string }> {
+  return invoke("agent_session_new");
+}
+
+/** 向 Agent 发送消息；响应通过 "agent-chat-response" 事件异步推送 */
+export async function agentChat(sessionId: string, message: string): Promise<{ ok: boolean }> {
+  return invoke("agent_chat", { sessionId, message });
+}
+
+/** 清空指定会话的历史 */
+export async function agentSessionClear(sessionId: string): Promise<{ ok: boolean }> {
+  return invoke("agent_session_clear", { sessionId });
+}
