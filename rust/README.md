@@ -190,7 +190,7 @@ rust/
 cargo run --bin ax-test
 
 # AX 控件树导出
-cargo run --bin ax-dump
+cargo run --bin ax-dump 
 ```
 
 ## 许可证
