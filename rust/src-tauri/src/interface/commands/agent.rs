@@ -24,7 +24,7 @@ pub async fn agent_chat(
     let config = crate::config::load_app_config(&config_dir.0).map_err(|e| e.to_string())?;
 
     agent_service
-        .run_chat(&session_id, &message, &config.translate, &app_handle)
+        .run_chat(&session_id, &message, &config.agent, &config.translate, &app_handle)
         .await?;
 
     Ok(serde_json::json!({ "ok": true }))

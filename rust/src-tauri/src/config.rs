@@ -159,6 +159,36 @@ impl Default for DictConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentConfig {
+    #[serde(default)]
+    pub ai_provider_id: String,
+    #[serde(default)]
+    pub ai_model_id: String,
+    #[serde(default)]
+    pub ai_api_key: String,
+    #[serde(default)]
+    pub ai_base_url: String,
+}
+
+impl Default for AgentConfig {
+    fn default() -> Self {
+        Self {
+            ai_provider_id: String::new(),
+            ai_model_id: String::new(),
+            ai_api_key: String::new(),
+            ai_base_url: String::new(),
+        }
+    }
+}
+
+impl AgentConfig {
+    /// 判断是否配置了专用的 Agent 模型（api_key + model_id 非空即视为已配置）
+    pub fn is_configured(&self) -> bool {
+        !self.ai_api_key.trim().is_empty() && !self.ai_model_id.trim().is_empty()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     #[serde(default)]
     pub listen: ListenConfig,
@@ -170,6 +200,8 @@ pub struct AppConfig {
     pub logging: LoggingConfig,
     #[serde(default)]
     pub dict: DictConfig,
+    #[serde(default)]
+    pub agent: AgentConfig,
 }
 
 // ---------------------------------------------------------------------------
@@ -317,6 +349,7 @@ impl Default for AppConfig {
             display: DisplayConfig::default(),
             logging: LoggingConfig::default(),
             dict: DictConfig::default(),
+            agent: AgentConfig::default(),
         }
     }
 }

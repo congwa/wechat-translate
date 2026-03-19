@@ -27,6 +27,11 @@ export interface SettingsDraft {
   cardStyle: string;
   textEnhance: string;
   dictProvider: string;
+  agentAiInputMode: "registry" | "custom";
+  agentAiProviderId: string;
+  agentAiModelId: string;
+  agentAiApiKey: string;
+  agentAiBaseUrl: string;
 }
 
 export function draftFromSettings(settings: AppSettings): SettingsDraft {
@@ -59,6 +64,14 @@ export function draftFromSettings(settings: AppSettings): SettingsDraft {
     cardStyle: settings.display.sidebar_appearance?.card_style ?? "standard",
     textEnhance: settings.display.sidebar_appearance?.text_enhance ?? "none",
     dictProvider: settings.dict?.provider || "cambridge",
+    agentAiInputMode:
+      settings.agent?.ai_base_url && !settings.agent?.ai_provider_id
+        ? "custom"
+        : "registry",
+    agentAiProviderId: settings.agent?.ai_provider_id || "",
+    agentAiModelId: settings.agent?.ai_model_id || "",
+    agentAiApiKey: settings.agent?.ai_api_key || "",
+    agentAiBaseUrl: settings.agent?.ai_base_url || "",
   };
 }
 
@@ -115,6 +128,13 @@ export function settingsFromDraft(
       ...settings.dict,
       provider: draft.dictProvider,
     },
+    agent: {
+      ...settings.agent,
+      ai_provider_id: draft.agentAiProviderId,
+      ai_model_id: draft.agentAiModelId,
+      ai_api_key: draft.agentAiApiKey,
+      ai_base_url: draft.agentAiBaseUrl,
+    },
   };
 }
 
@@ -144,6 +164,11 @@ export function createEmptyDraft(): SettingsDraft {
     cardStyle: "standard",
     textEnhance: "none",
     dictProvider: "cambridge",
+    agentAiInputMode: "registry",
+    agentAiProviderId: "",
+    agentAiModelId: "",
+    agentAiApiKey: "",
+    agentAiBaseUrl: "",
   };
 }
 

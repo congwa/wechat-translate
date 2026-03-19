@@ -77,12 +77,20 @@ export interface DictSettings {
   provider: string;
 }
 
+export interface AgentSettings {
+  ai_provider_id: string;
+  ai_model_id: string;
+  ai_api_key: string;
+  ai_base_url: string;
+}
+
 export interface AppSettings {
   listen: ListenSettings;
   translate: TranslateSettings;
   display: DisplaySettings;
   logging: LoggingSettings;
   dict: DictSettings;
+  agent: AgentSettings;
 }
 
 export interface SettingsSnapshot {

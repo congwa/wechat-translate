@@ -8,12 +8,13 @@ import {
 import type { AppSettings } from "@/lib/types";
 import { BUILTIN_PROVIDERS } from "@/lib/models-registry";
 
-export type SettingsDraftSection = "listen" | "translate" | "display";
+export type SettingsDraftSection = "listen" | "translate" | "display" | "agent";
 
 export interface SectionDirtyState {
   listen: boolean;
   translate: boolean;
   display: boolean;
+  agent: boolean;
 }
 
 export const SECTION_FIELDS: Record<
@@ -44,6 +45,13 @@ export const SECTION_FIELDS: Record<
     "blur",
     "cardStyle",
     "textEnhance",
+  ],
+  agent: [
+    "agentAiInputMode",
+    "agentAiProviderId",
+    "agentAiModelId",
+    "agentAiApiKey",
+    "agentAiBaseUrl",
   ],
 };
 
@@ -82,6 +90,7 @@ const defaultSectionDirty: SectionDirtyState = {
   listen: false,
   translate: false,
   display: false,
+  agent: false,
 };
 
 export const useSettingsDraftStore = create<SettingsDraftStoreState>((set) => ({

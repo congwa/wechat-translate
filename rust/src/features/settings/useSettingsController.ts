@@ -103,6 +103,24 @@ export function useSettingsController() {
   ]);
 
   useEffect(() => {
+    if (draft.agentAiInputMode === "registry" && draft.agentAiProviderId && !draft.agentAiBaseUrl) {
+      const apiUrl = getApiUrlForProvider(
+        aiRegistry.providers,
+        draft.agentAiProviderId,
+      );
+      if (apiUrl) {
+        updateDraft({ agentAiBaseUrl: apiUrl });
+      }
+    }
+  }, [
+    aiRegistry.providers,
+    draft.agentAiBaseUrl,
+    draft.agentAiProviderId,
+    draft.agentAiInputMode,
+    updateDraft,
+  ]);
+
+  useEffect(() => {
     if (!advancedEditor.open || !settings || advancedEditor.dirty) return;
     const raw = JSON.stringify(settings, null, 2);
     setAdvancedEditor({
@@ -248,6 +266,7 @@ export function useSettingsController() {
         listen: "监听设置",
         translate: "翻译设置",
         display: "显示设置",
+        agent: "数据问答设置",
       };
       setBusy(`section_${section}`);
       try {
@@ -276,6 +295,7 @@ export function useSettingsController() {
         listen: "监听设置",
         translate: "翻译设置",
         display: "显示设置",
+        agent: "数据问答设置",
       };
       showToast(`${sectionLabels[section]}已撤销`, true);
     },
@@ -409,6 +429,7 @@ export function useSettingsController() {
       : []),
     { id: "translate", label: "翻译", isDirty: sectionDirty.translate },
     { id: "dict", label: "词典", isDirty: false },
+    { id: "agent", label: "数据问答", isDirty: sectionDirty.agent },
   ];
 
   return {

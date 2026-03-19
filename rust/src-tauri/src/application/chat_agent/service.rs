@@ -4,7 +4,7 @@ use crate::application::chat_agent::tools::context_tool::ContextTool;
 use crate::application::chat_agent::tools::schema_tool::SchemaTool;
 use crate::application::chat_agent::tools::sql_tool::SqlTool;
 use crate::application::chat_agent::tools::{ToolCallEvent, ToolEventBuffer};
-use crate::config::TranslateConfig;
+use crate::config::{AgentConfig, TranslateConfig};
 use crate::db::MessageDb;
 use rig::client::CompletionClient;
 // Chat: agent.chat(msg, history) → 经由 Chat trait 高阶封装，history 传值（owned）
@@ -51,12 +51,30 @@ impl ChatAgentService {
         &self,
         session_id: &str,
         user_message: &str,
-        ai_config: &TranslateConfig,
+        agent_config: &AgentConfig,
+        translate_config: &TranslateConfig,
         app_handle: &AppHandle,
     ) -> Result<AgentChatResponse, String> {
-        if ai_config.ai_api_key.trim().is_empty() {
-            return Err("AI API Key 未配置，请在设置中填写".to_string());
-        }
+        // 优先使用数据问答专用配置，未配置则 fallback 到翻译设置中的 AI 配置
+        let (api_key, model_id, base_url) = if agent_config.is_configured() {
+            (
+                agent_config.ai_api_key.trim().to_string(),
+                agent_config.ai_model_id.trim().to_string(),
+                agent_config.ai_base_url.trim().to_string(),
+            )
+        } else if !translate_config.ai_api_key.trim().is_empty() {
+            (
+                translate_config.ai_api_key.trim().to_string(),
+                if translate_config.ai_model_id.trim().is_empty() {
+                    "gpt-4o".to_string()
+                } else {
+                    translate_config.ai_model_id.trim().to_string()
+                },
+                translate_config.ai_base_url.trim().to_string(),
+            )
+        } else {
+            return Err("AI API Key 未配置，请在「数据问答」或「翻译设置」中填写".to_string());
+        };
 
         let history = self.sessions.get_rig_history(session_id);
         let event_buffer = Arc::new(ToolEventBuffer::new());
@@ -71,18 +89,12 @@ impl ChatAgentService {
             event_buffer: event_buffer.clone(),
         };
 
-        let api_key = ai_config.ai_api_key.trim();
-        let model_id = if ai_config.ai_model_id.trim().is_empty() {
-            "gpt-4o".to_string()
-        } else {
-            ai_config.ai_model_id.trim().to_string()
-        };
         let preamble = build_preamble();
 
         let mut builder =
-            CompletionsClient::<rig::http_client::ReqwestClient>::builder().api_key(api_key);
-        if !ai_config.ai_base_url.trim().is_empty() {
-            builder = builder.base_url(ai_config.ai_base_url.trim());
+            CompletionsClient::<rig::http_client::ReqwestClient>::builder().api_key(&api_key);
+        if !base_url.is_empty() {
+            builder = builder.base_url(&base_url);
         }
         let client: CompletionsClient<rig::http_client::ReqwestClient> =
             builder.build().map_err(|e| e.to_string())?;

@@ -3,6 +3,7 @@ import { RefreshCcw } from "lucide-react";
 import { useSettingsController } from "@/features/settings/useSettingsController";
 import {
   AdvancedConfigSection,
+  AgentSection,
   DictSection,
   DisplaySection,
   GeneralSection,
@@ -130,6 +131,26 @@ export function SettingsPage() {
           }}
           draft={controller.draft}
           updateDraft={controller.updateDraft}
+        />
+
+        <AgentSection
+          ref={(el) => {
+            controller.sectionRefs.current.agent = el;
+          }}
+          draft={controller.draft}
+          sectionDirty={controller.sectionDirty.agent}
+          isSaving={controller.busy === "section_agent"}
+          updateDraft={controller.updateDraft}
+          onApply={() => controller.handleApplySection("agent")}
+          onReset={() => controller.handleResetSection("agent")}
+          aiProviders={controller.aiProviders}
+          aiProvidersLoading={controller.aiProvidersLoading}
+          showApiKey={controller.showApiKey}
+          onToggleShowApiKey={controller.toggleShowApiKey}
+          hasFallback={
+            controller.draft.translateProvider === "ai" &&
+            !!controller.draft.aiApiKey.trim()
+          }
         />
 
         <ImageCaptureSection

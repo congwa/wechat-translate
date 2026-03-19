@@ -41,7 +41,10 @@ impl Tool for ContextTool {
         ToolDefinition {
             name: Self::NAME.to_string(),
             description: "返回当前消息数据库的总体统计摘要：总消息数、会话数、时间范围、最活跃的群聊列表。用于了解数据库的整体规模和数据范围。".to_string(),
-            parameters: serde_json::to_value(schemars::schema_for!(ContextInput)).unwrap_or_default(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {}
+            }),
         }
     }
 
