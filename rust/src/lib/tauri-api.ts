@@ -143,12 +143,15 @@ export async function historySummaryParticipantsGet(params: {
   return invoke("history_summary_participants_get", params);
 }
 
+export type SummaryLanguage = "en" | "zh" | "bilingual";
+
 export async function historySummaryGenerate(params: {
   chatName: string;
   scope: "chat" | "participant";
   participantId?: string;
   startDate: string;
   endDate: string;
+  language?: SummaryLanguage;
 }): Promise<ApiResponse<HistorySummaryResult>> {
   return invoke("history_summary_generate", params);
 }
@@ -166,6 +169,7 @@ export interface GlobalSummaryResult {
 export async function historySummaryGlobalGenerate(params: {
   startDate: string;
   endDate: string;
+  language?: SummaryLanguage;
 }): Promise<ApiResponse<GlobalSummaryResult>> {
   return invoke("history_summary_global_generate", params);
 }

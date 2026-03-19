@@ -7,19 +7,26 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { SummaryCard } from "@/components/SummaryCard";
 import * as api from "@/lib/tauri-api";
-import type { GlobalSummaryResult } from "@/lib/tauri-api";
+import type { GlobalSummaryResult, SummaryLanguage } from "@/lib/tauri-api";
 import { useSettingsStore } from "@/stores/settingsStore";
 
 type SummaryPreset = "today" | "3d" | "7d" | "custom";
+
+const LANGUAGE_OPTIONS: { value: SummaryLanguage; label: string }[] = [
+  { value: "en", label: "English" },
+  { value: "zh", label: "中文" },
+  { value: "bilingual", label: "双语" },
+];
 
 function formatDateInput(date: Date) {
   const year = date.getFullYear();
@@ -74,6 +81,7 @@ export function GlobalSummaryPanel() {
   const [summaryLoading, setSummaryLoading] = useState(false);
   const [summaryError, setSummaryError] = useState("");
   const [summaryResult, setSummaryResult] = useState<GlobalSummaryResult | null>(null);
+  const [summaryLanguage, setSummaryLanguage] = useState<SummaryLanguage>("en");
 
   const daySpan = useMemo(
     () => inclusiveDayDiff(summaryStartDate, summaryEndDate),
@@ -123,6 +131,7 @@ export function GlobalSummaryPanel() {
       const resp = await api.historySummaryGlobalGenerate({
         startDate: summaryStartDate,
         endDate: summaryEndDate,
+        language: summaryLanguage,
       });
       setSummaryResult(resp.data ?? null);
     } catch (error) {
@@ -134,7 +143,7 @@ export function GlobalSummaryPanel() {
   }
 
   return (
-    <div className="shrink-0 border-b border-border/50 bg-muted/10 px-5 py-4 space-y-4">
+    <div className="shrink-0 border-b border-border/50 bg-muted/10 px-5 py-4 space-y-4 max-h-[70vh] overflow-y-auto">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div className="space-y-1">
           <div className="flex items-center gap-2">
@@ -191,6 +200,22 @@ export function GlobalSummaryPanel() {
           >
             近 7 天
           </Button>
+
+          <Select
+            value={summaryLanguage}
+            onValueChange={(v) => setSummaryLanguage(v as SummaryLanguage)}
+          >
+            <SelectTrigger size="sm" className="w-[120px]">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {LANGUAGE_OPTIONS.map((opt) => (
+                <SelectItem key={opt.value} value={opt.value}>
+                  {opt.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
@@ -234,56 +259,15 @@ export function GlobalSummaryPanel() {
       ) : null}
 
       {summaryResult ? (
-        <Card className="gap-4 py-4">
-          <CardHeader className="px-4">
-            <CardTitle className="text-sm flex flex-wrap items-center gap-2">
-              <span>整体动态总结</span>
-              <Badge variant="outline">
-                {summaryResult.start_date} ~ {summaryResult.end_date}
-              </Badge>
-            </CardTitle>
-            <CardDescription className="flex flex-wrap items-center gap-2 text-xs">
-              <span>消息 {summaryResult.message_count} 条</span>
-              <span>群聊 {summaryResult.chat_count} 个</span>
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="px-4 space-y-4">
-            {summaryResult.message_count === 0 ? (
-              <div className="rounded-xl border border-dashed border-border px-4 py-5 text-sm text-muted-foreground">
-                当前时间范围内暂无可总结的消息。
-              </div>
-            ) : (
-              <>
-                <div className="rounded-xl border border-border/60 bg-background/70 p-4 space-y-2">
-                  <div className="flex items-center gap-2">
-                    <Sparkles className="w-4 h-4 text-primary" />
-                    <h4 className="text-sm font-semibold text-foreground">区间总览</h4>
-                  </div>
-                  <div className="whitespace-pre-wrap text-sm leading-6 text-foreground/85">
-                    {summaryResult.overall_summary}
-                  </div>
-                </div>
-
-                <div className="space-y-3">
-                  {summaryResult.daily_items.map((item) => (
-                    <div
-                      key={item.date}
-                      className="rounded-xl border border-border/60 bg-background/50 p-4 space-y-2"
-                    >
-                      <div className="flex flex-wrap items-center gap-2">
-                        <h5 className="text-sm font-medium text-foreground">{item.date}</h5>
-                        <Badge variant="outline">{item.message_count} 条</Badge>
-                      </div>
-                      <div className="whitespace-pre-wrap text-sm leading-6 text-muted-foreground">
-                        {item.summary}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </>
-            )}
-          </CardContent>
-        </Card>
+        <SummaryCard
+          title="整体动态总结"
+          subtitle="跨所有群聊"
+          dateRange={`${summaryResult.start_date} ~ ${summaryResult.end_date}`}
+          messageCount={summaryResult.message_count}
+          extraStats={[{ label: "群聊数", value: summaryResult.chat_count }]}
+          overallSummary={summaryResult.overall_summary}
+          dailyItems={summaryResult.daily_items}
+        />
       ) : null}
     </div>
   );

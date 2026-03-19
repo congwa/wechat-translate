@@ -83,6 +83,7 @@ pub async fn history_summary_generate(
     participant_id: Option<String>,
     start_date: String,
     end_date: String,
+    language: Option<String>,
 ) -> Result<serde_json::Value, String> {
     let result = generate_history_summary(
         &config_dir,
@@ -92,6 +93,7 @@ pub async fn history_summary_generate(
         participant_id,
         start_date,
         end_date,
+        language,
     )
     .await?;
 
@@ -108,8 +110,9 @@ pub async fn history_summary_global_generate(
     db: tauri::State<'_, Arc<MessageDb>>,
     start_date: String,
     end_date: String,
+    language: Option<String>,
 ) -> Result<serde_json::Value, String> {
-    let result = generate_global_summary(&config_dir, db.inner(), start_date, end_date).await?;
+    let result = generate_global_summary(&config_dir, db.inner(), start_date, end_date, language).await?;
 
     Ok(serde_json::json!({
         "ok": true,

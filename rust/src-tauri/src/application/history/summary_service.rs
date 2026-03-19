@@ -5,7 +5,7 @@ use crate::config::{load_app_config, ConfigDir};
 use crate::db::MessageDb;
 use crate::history_summary::{
     GlobalSummaryResult, HistorySummaryParticipantRef, HistorySummaryResult,
-    HistorySummaryService, SummaryRange, SummaryScope,
+    HistorySummaryService, SummaryLanguage, SummaryRange, SummaryScope,
 };
 use std::sync::Arc;
 
@@ -19,6 +19,7 @@ pub(crate) async fn generate_history_summary(
     participant_id: Option<String>,
     start_date: String,
     end_date: String,
+    language: Option<String>,
 ) -> Result<HistorySummaryResult, String> {
     if chat_name.trim().is_empty() {
         return Err("请先选择一个会话".to_string());
@@ -62,6 +63,13 @@ pub(crate) async fn generate_history_summary(
     let service = HistorySummaryService::from_translate_config(&config.translate)
         .map_err(|error| error.to_string())?;
 
+    let lang = language
+        .as_deref()
+        .map(SummaryLanguage::parse)
+        .transpose()
+        .map_err(|e| e.to_string())?
+        .unwrap_or_default();
+
     service
         .summarize(
             scope,
@@ -71,6 +79,7 @@ pub(crate) async fn generate_history_summary(
             &range.start_date,
             &range.end_date,
             &messages,
+            lang,
         )
         .await
         .map_err(|error| error.to_string())
@@ -107,6 +116,7 @@ pub(crate) async fn generate_global_summary(
     db: &Arc<MessageDb>,
     start_date: String,
     end_date: String,
+    language: Option<String>,
 ) -> Result<GlobalSummaryResult, String> {
     let range = SummaryRange::parse(&start_date, &end_date).map_err(|error| error.to_string())?;
 
@@ -134,12 +144,20 @@ pub(crate) async fn generate_global_summary(
     let service = HistorySummaryService::from_translate_config(&config.translate)
         .map_err(|error| error.to_string())?;
 
+    let lang = language
+        .as_deref()
+        .map(SummaryLanguage::parse)
+        .transpose()
+        .map_err(|e| e.to_string())?
+        .unwrap_or_default();
+
     service
         .summarize_global(
             chats.len(),
             &range.start_date,
             &range.end_date,
             &messages,
+            lang,
         )
         .await
         .map_err(|error| error.to_string())
