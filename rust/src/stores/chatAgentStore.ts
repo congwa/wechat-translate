@@ -26,6 +26,12 @@ interface ChatAgentState {
 }
 
 let _unlisten: (() => void) | null = null;
+let _initLock = false;
+let _msgIdCounter = 0;
+
+function nextId(suffix: string): string {
+  return `${Date.now()}-${++_msgIdCounter}-${suffix}`;
+}
 
 export const useChatAgentStore = create<ChatAgentState>((set, get) => ({
   sessionId: null,
@@ -34,21 +40,28 @@ export const useChatAgentStore = create<ChatAgentState>((set, get) => ({
   error: null,
 
   initSession: async () => {
-    if (_unlisten) {
-      _unlisten();
-      _unlisten = null;
-    }
+    if (_initLock) return;
+    _initLock = true;
 
-    const resp = await api.agentSessionNew();
-    set({ sessionId: resp.session_id, messages: [], error: null });
-
-    const unlisten = await listen<AgentChatResponse>("agent-chat-response", (event) => {
-      const payload = event.payload;
-      if (payload.session_id === get().sessionId) {
-        get()._handleResponse(payload);
+    try {
+      if (_unlisten) {
+        _unlisten();
+        _unlisten = null;
       }
-    });
-    _unlisten = unlisten;
+
+      const resp = await api.agentSessionNew();
+      set({ sessionId: resp.session_id, messages: [], error: null });
+
+      const unlisten = await listen<AgentChatResponse>("agent-chat-response", (event) => {
+        const payload = event.payload;
+        if (payload.session_id === get().sessionId) {
+          get()._handleResponse(payload);
+        }
+      });
+      _unlisten = unlisten;
+    } finally {
+      _initLock = false;
+    }
   },
 
   sendMessage: async (text: string) => {
@@ -56,7 +69,7 @@ export const useChatAgentStore = create<ChatAgentState>((set, get) => ({
     if (!sessionId || !text.trim()) return;
 
     const userMsg: ChatMessage = {
-      id: `${Date.now()}-user`,
+      id: nextId("user"),
       role: "user",
       content: text.trim(),
       timestamp: Date.now(),
@@ -68,7 +81,7 @@ export const useChatAgentStore = create<ChatAgentState>((set, get) => ({
       await api.agentChat(sessionId, text.trim());
     } catch (e) {
       const errMsg: ChatMessage = {
-        id: `${Date.now()}-err`,
+        id: nextId("err"),
         role: "error",
         content: String(e),
         timestamp: Date.now(),
@@ -86,18 +99,28 @@ export const useChatAgentStore = create<ChatAgentState>((set, get) => ({
   },
 
   _handleResponse: (resp: AgentChatResponse) => {
+    const { messages } = get();
     set({ isLoading: false });
+
     if (resp.is_error) {
+      const lastMsg = messages[messages.length - 1];
+      if (lastMsg?.role === "error" && lastMsg.content === (resp.error_message ?? "未知错误")) {
+        return;
+      }
       const errMsg: ChatMessage = {
-        id: `${Date.now()}-err`,
+        id: nextId("err"),
         role: "error",
         content: resp.error_message ?? "未知错误",
         timestamp: Date.now(),
       };
       set((s) => ({ messages: [...s.messages, errMsg], error: resp.error_message ?? null }));
     } else {
+      const lastMsg = messages[messages.length - 1];
+      if (lastMsg?.role === "assistant" && lastMsg.content === resp.response) {
+        return;
+      }
       const assistantMsg: ChatMessage = {
-        id: `${Date.now()}-assistant`,
+        id: nextId("assistant"),
         role: "assistant",
         content: resp.response,
         toolCalls: resp.tool_calls.length > 0 ? resp.tool_calls : undefined,
