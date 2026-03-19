@@ -11,10 +11,6 @@ mod history_summary;
 mod image_cache;
 mod infrastructure;
 mod interface;
-mod runtime_monitor_ingest;
-mod runtime_monitor_loop;
-mod runtime_translator_runtime;
-mod sidebar_projection;
 pub mod sidebar_window;
 mod task_manager;
 pub mod translator;
@@ -119,7 +115,7 @@ fn handle_tray_toggle_translate(app: &tauri::AppHandle) {
             translate["enabled"] = serde_json::Value::Bool(desired_enabled);
         }
 
-        match commands::app_state::save_settings(
+        match interface::commands::config::save_settings_command(
             &app_handle,
             &config_dir,
             &manager,
@@ -221,7 +217,7 @@ fn handle_toggle_translate_enabled_menu(app: &tauri::AppHandle) {
             }
         };
 
-        match commands::app_state::save_settings(
+        match interface::commands::config::save_settings_command(
             &app_handle,
             &config_dir,
             &manager,
@@ -316,7 +312,9 @@ fn handle_clear_db_restart_menu(app: &tauri::AppHandle) {
         tauri::async_runtime::spawn(async move {
             let db = app.state::<Arc<MessageDb>>().inner().clone();
             let manager = app.state::<TaskManager>().inner().clone();
-            if let Err(error) = commands::db::clear_restart(app.clone(), db, manager).await {
+            if let Err(error) =
+                interface::commands::db_admin::clear_restart_command(app.clone(), db, manager).await
+            {
                 let mut error_dialog = app
                     .dialog()
                     .message(format!("清空失败: {error}"))
@@ -694,7 +692,7 @@ pub fn run() {
             interface::commands::preflight::preflight_check,
             interface::commands::preflight::accessibility_request_access,
             interface::commands::preflight::accessibility_open_settings,
-            interface::commands::runtime::accessibility_recover_listener,
+            interface::commands::preflight::accessibility_recover_listener,
             interface::commands::preflight::preflight_prompt_restart,
             interface::commands::dictionary::word_lookup,
             interface::commands::dictionary::list_dict_providers,

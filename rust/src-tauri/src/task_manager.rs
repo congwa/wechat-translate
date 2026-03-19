@@ -182,7 +182,7 @@ impl TaskManager {
 #[cfg(test)]
 mod tests {
     use super::{MacOSAdapter, TaskManager, TranslatorServiceStatus};
-    use crate::runtime_monitor_ingest::{
+    use crate::application::runtime::monitor_ingest::{
         short_error_text, should_forward_session_preview, should_forward_sidebar_chat,
     };
     use crate::{db::MessageDb, events::EventStore, translator::TranslationService};

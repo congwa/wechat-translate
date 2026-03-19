@@ -1,10 +1,12 @@
 //! Sidebar 写命令入口：负责把浮窗启停、联动启动、窗口控制和手动翻译通过 Tauri 暴露给前端，
-//! 让 sidebar 相关写操作逐步从旧 `commands/sidebar.rs` 迁移到 `interface/commands/sidebar.rs`。
-use crate::commands;
-use crate::config::ConfigDir;
-use crate::sidebar_window::SidebarWindowState;
+//! 让 sidebar 相关写操作真正落在 `interface/commands/sidebar.rs`，不再依赖旧命令层注册。
+use crate::application::runtime::service::RuntimeService;
+use crate::config::{load_app_config, ConfigDir};
+use crate::sidebar_window::{SidebarWindowState, WindowMode};
 use crate::task_manager::TaskManager;
+use crate::translator::{AiTranslator, DeepLXTranslator, Translator};
 use std::sync::Arc;
+use std::time::Duration;
 
 /// 启用 sidebar 运行态，并按当前翻译配置装配译文器与目标会话集合。
 #[tauri::command]
@@ -27,25 +29,41 @@ pub async fn sidebar_start(
     max_requests_per_second: Option<usize>,
     image_capture: Option<bool>,
 ) -> Result<serde_json::Value, String> {
-    commands::sidebar::sidebar_start(
-        config_dir,
-        manager,
-        targets,
-        translate_enabled,
-        provider,
-        deeplx_url,
-        ai_provider_id,
-        ai_model_id,
-        ai_api_key,
-        ai_base_url,
-        source_lang,
-        target_lang,
-        timeout_seconds,
-        max_concurrency,
-        max_requests_per_second,
-        image_capture,
-    )
-    .await
+    let runtime = RuntimeService::new(manager.inner().clone());
+    let config = load_app_config(&config_dir.0).map_err(|e| e.to_string())?;
+    runtime
+        .set_use_right_panel_details(config.listen.use_right_panel_details)
+        .await;
+
+    let translate_enabled = translate_enabled.unwrap_or(config.translate.enabled);
+    let provider = provider.unwrap_or_else(|| config.translate.provider.clone());
+    let deeplx_url = deeplx_url.unwrap_or_else(|| config.translate.deeplx_url.clone());
+    let ai_provider_id = ai_provider_id.unwrap_or_else(|| config.translate.ai_provider_id.clone());
+    let ai_model_id = ai_model_id.unwrap_or_else(|| config.translate.ai_model_id.clone());
+    let ai_api_key = ai_api_key.unwrap_or_else(|| config.translate.ai_api_key.clone());
+    let ai_base_url = ai_base_url.unwrap_or_else(|| config.translate.ai_base_url.clone());
+
+    runtime
+        .enable_sidebar(
+            targets.unwrap_or_default(),
+            translate_enabled,
+            provider,
+            deeplx_url,
+            ai_provider_id,
+            ai_model_id,
+            ai_api_key,
+            ai_base_url,
+            source_lang.unwrap_or_else(|| config.translate.source_lang.clone()),
+            target_lang.unwrap_or_else(|| config.translate.target_lang.clone()),
+            timeout_seconds.unwrap_or(config.translate.timeout_seconds),
+            max_concurrency.unwrap_or(config.translate.max_concurrency),
+            max_requests_per_second.unwrap_or(config.translate.max_requests_per_second),
+            image_capture.unwrap_or(false),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok(serde_json::json!({ "ok": true, "message": "sidebar enabled" }))
 }
 
 /// 关闭 sidebar 运行态并收起浮窗窗口，恢复到无浮窗的运行状态。
@@ -55,7 +73,10 @@ pub async fn sidebar_stop(
     manager: tauri::State<'_, TaskManager>,
     sidebar_state: tauri::State<'_, Arc<SidebarWindowState>>,
 ) -> Result<serde_json::Value, String> {
-    commands::sidebar::sidebar_stop(app, manager, sidebar_state).await
+    let runtime = RuntimeService::new(manager.inner().clone());
+    runtime.disable_sidebar().await.map_err(|e| e.to_string())?;
+    let _ = sidebar_state.close(&app).await;
+    Ok(serde_json::json!({ "ok": true, "message": "sidebar disabled" }))
 }
 
 /// 一次性启动监听与 sidebar，供主窗口进入实时浮窗模式时使用。
@@ -82,28 +103,71 @@ pub async fn live_start(
     image_capture: Option<bool>,
     window_mode: Option<String>,
 ) -> Result<serde_json::Value, String> {
-    commands::sidebar::live_start(
-        app,
-        config_dir,
-        manager,
-        sidebar_state,
-        translate_enabled,
-        provider,
-        deeplx_url,
-        ai_provider_id,
-        ai_model_id,
-        ai_api_key,
-        ai_base_url,
-        source_lang,
-        target_lang,
-        interval_seconds,
-        timeout_seconds,
-        max_concurrency,
-        max_requests_per_second,
-        image_capture,
-        window_mode,
-    )
-    .await
+    let runtime = RuntimeService::new(manager.inner().clone());
+    let mode = WindowMode::from_str_opt(window_mode.as_deref());
+    let config = load_app_config(&config_dir.0).map_err(|e| e.to_string())?;
+    runtime
+        .set_use_right_panel_details(config.listen.use_right_panel_details)
+        .await;
+
+    let translate_enabled = translate_enabled.unwrap_or(config.translate.enabled);
+    let provider = provider.unwrap_or_else(|| config.translate.provider.clone());
+    let deeplx_url = deeplx_url.unwrap_or_else(|| config.translate.deeplx_url.clone());
+    let ai_provider_id = ai_provider_id.unwrap_or_else(|| config.translate.ai_provider_id.clone());
+    let ai_model_id = ai_model_id.unwrap_or_else(|| config.translate.ai_model_id.clone());
+    let ai_api_key = ai_api_key.unwrap_or_else(|| config.translate.ai_api_key.clone());
+    let ai_base_url = ai_base_url.unwrap_or_else(|| config.translate.ai_base_url.clone());
+
+    let state = runtime.task_state();
+    if !state.monitoring {
+        let interval = interval_seconds.unwrap_or(1.0);
+        runtime
+            .start_monitoring(interval)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+
+    runtime
+        .enable_sidebar(
+            vec![],
+            translate_enabled,
+            provider,
+            deeplx_url,
+            ai_provider_id,
+            ai_model_id,
+            ai_api_key,
+            ai_base_url,
+            source_lang.unwrap_or_else(|| config.translate.source_lang.clone()),
+            target_lang.unwrap_or_else(|| config.translate.target_lang.clone()),
+            timeout_seconds.unwrap_or(config.translate.timeout_seconds),
+            max_concurrency.unwrap_or(config.translate.max_concurrency),
+            max_requests_per_second.unwrap_or(config.translate.max_requests_per_second),
+            image_capture.unwrap_or(false),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+
+    // 等待监听循环首次 poll 完成后再打开窗口，避免 sidebar 用旧聊天指向先渲染错误内容。
+    let first_chat = runtime.wait_first_poll(Duration::from_secs(5)).await;
+    if let Some(chat_name) = first_chat {
+        let sidebar_runtime = runtime.sidebar_runtime();
+        if sidebar_runtime.get_current_chat().is_empty() {
+            sidebar_runtime.set_current_chat(&chat_name);
+        }
+    }
+
+    let _ = sidebar_state
+        .open(
+            &app,
+            Some(config.display.width as f64),
+            mode,
+            Some(config.display.collapsed_display_count),
+            Some(config.display.ghost_mode),
+            Some(config.display.sidebar_appearance.clone()),
+        )
+        .await;
+
+    Ok(serde_json::json!({ "ok": true, "message": "live started" }))
 }
 
 /// 仅打开 sidebar 窗口，不变更监听状态，供独立窗口模式和调试入口使用。
@@ -115,7 +179,20 @@ pub async fn sidebar_window_open(
     width: Option<f64>,
     window_mode: Option<String>,
 ) -> Result<serde_json::Value, String> {
-    commands::sidebar::sidebar_window_open(app, config_dir, state, width, window_mode).await
+    let mode = WindowMode::from_str_opt(window_mode.as_deref());
+    let config = load_app_config(&config_dir.0).map_err(|e| e.to_string())?;
+    state
+        .open(
+            &app,
+            width.or(Some(config.display.width as f64)),
+            mode,
+            Some(config.display.collapsed_display_count),
+            Some(config.display.ghost_mode),
+            Some(config.display.sidebar_appearance.clone()),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(serde_json::json!({ "ok": true, "message": "sidebar window opened" }))
 }
 
 /// 关闭 sidebar 窗口，但不主动停掉监听任务。
@@ -124,7 +201,8 @@ pub async fn sidebar_window_close(
     app: tauri::AppHandle,
     state: tauri::State<'_, Arc<SidebarWindowState>>,
 ) -> Result<serde_json::Value, String> {
-    commands::sidebar::sidebar_window_close(app, state).await
+    state.close(&app).await.map_err(|e| e.to_string())?;
+    Ok(serde_json::json!({ "ok": true, "message": "sidebar window closed" }))
 }
 
 /// 测试当前翻译配置是否可用，供设置页即时校验外部翻译依赖。
@@ -140,18 +218,55 @@ pub async fn translate_test(
     target_lang: Option<String>,
     timeout_seconds: Option<f64>,
 ) -> Result<serde_json::Value, String> {
-    commands::sidebar::translate_test(
-        provider,
-        deeplx_url,
-        ai_provider_id,
-        ai_model_id,
-        ai_api_key,
-        ai_base_url,
-        source_lang,
-        target_lang,
-        timeout_seconds,
-    )
-    .await
+    let source = source_lang.unwrap_or_else(|| "auto".to_string());
+    let target = target_lang.unwrap_or_else(|| "EN".to_string());
+    let timeout = timeout_seconds.unwrap_or(8.0);
+    let provider = provider.unwrap_or_else(|| "deeplx".to_string());
+
+    let translator: Box<dyn Translator + Send + Sync> = match provider.as_str() {
+        "ai" => {
+            let api_key = ai_api_key.unwrap_or_default();
+            let base_url = ai_base_url.unwrap_or_default();
+            let model_id = ai_model_id.unwrap_or_default();
+            let provider_id = ai_provider_id.unwrap_or_default();
+
+            if api_key.is_empty() {
+                return Err("API Key 不能为空".to_string());
+            }
+            if model_id.is_empty() {
+                return Err("请选择模型".to_string());
+            }
+
+            Box::new(
+                AiTranslator::new(
+                    &provider_id,
+                    &model_id,
+                    &api_key,
+                    if base_url.is_empty() {
+                        None
+                    } else {
+                        Some(&base_url)
+                    },
+                    &source,
+                    &target,
+                    timeout,
+                )
+                .map_err(|e| e.to_string())?,
+            )
+        }
+        _ => {
+            let url = deeplx_url.unwrap_or_default();
+            if url.is_empty() {
+                return Err("DeepLX 地址不能为空".to_string());
+            }
+            Box::new(DeepLXTranslator::new(&url, &source, &target, timeout))
+        }
+    };
+
+    match translator.translate("你好，世界", &source, &target).await {
+        Ok(result) => Ok(serde_json::json!({ "ok": true, "data": result })),
+        Err(e) => Err(format!("{}", e)),
+    }
 }
 
 /// 对单条 sidebar 消息发起手动翻译，并复用后端统一的译文写回链路。
@@ -165,14 +280,20 @@ pub async fn translate_sidebar_message(
     content: String,
     detected_at: String,
 ) -> Result<(), String> {
-    commands::sidebar::translate_sidebar_message(
-        app,
-        manager,
+    log::info!(
+        "[Sidebar] 收到手动翻译请求: message_id={}, chat_name={}, content={}",
         message_id,
         chat_name,
-        sender,
-        content,
-        detected_at,
-    )
-    .await
+        &content[..content.len().min(50)]
+    );
+    let runtime = RuntimeService::new(manager.inner().clone());
+    let result = runtime
+        .translate_message_manually(app, message_id, chat_name, sender, content, detected_at)
+        .await;
+    if let Err(ref e) = result {
+        log::error!("[Sidebar] 手动翻译失败: {}", e);
+    } else {
+        log::info!("[Sidebar] 手动翻译请求已提交");
+    }
+    result
 }
