@@ -6,7 +6,10 @@ use crate::application::chat_agent::tools::sql_tool::SqlTool;
 use crate::application::chat_agent::tools::{ToolCallEvent, ToolEventBuffer};
 use crate::config::TranslateConfig;
 use crate::db::MessageDb;
-use rig::client::{CompletionClient, ProviderClient};
+use rig::client::CompletionClient;
+// Chat: agent.chat(msg, history) → 经由 Chat trait 高阶封装，history 传值（owned）
+// Prompt: agent.prompt(msg) → 返回 PromptRequest builder，可链式调用 .with_history() / .max_turns()
+// 方式 B 启用时需将下行取消注释：use rig::completion::Prompt;
 use rig::completion::Chat;
 use rig::providers::openai::CompletionsClient;
 use serde::{Deserialize, Serialize};
@@ -84,14 +87,71 @@ impl ChatAgentService {
         let client: CompletionsClient<rig::http_client::ReqwestClient> =
             builder.build().map_err(|e| e.to_string())?;
 
+        // =====================================================================
+        // 多步推理（Agentic Loop）配置：两种方式对比
+        //
+        // 【方式 A：Agent Builder 层设置 default_max_turns（当前使用）】
+        //
+        //   调用链：
+        //     agent.chat(msg, history)
+        //     → Chat trait impl (agent/completion.rs:277)
+        //       → PromptRequest::from_agent(self, prompt)   ← 读取 agent.default_max_turns
+        //         → .with_history(&mut chat_history)
+        //         → .await → PromptRequest::send()
+        //           → loop { if current_turn > max_turns + 1 { break → MaxTurnsError } }
+        //
+        //   特点：
+        //     - 在 Agent 实例层面统一设置，所有 chat() 调用共享同一上限
+        //     - history 以 owned Vec<Message> 传入，内部转为 &mut
+        //     - 语法最简洁，无需更改调用方
+        //
+        // 【方式 B：PromptRequest Builder 层设置 max_turns（注释展示）】
+        //
+        //   调用链：
+        //     agent.prompt(msg)                      ← Prompt trait，返回 PromptRequest builder
+        //     → .with_history(&mut history)          ← 直接绑定 &mut Vec<Message>（非 owned）
+        //     → .max_turns(5)                        ← 覆写本次请求的 max_turns，不影响 Agent 默认值
+        //     → .await → PromptRequest::send()       ← 与方式 A 最终进入同一 send() 逻辑
+        //
+        //   特点：
+        //     - 在单次请求层面按需覆盖，灵活控制每次对话的轮次上限
+        //     - history 必须是 &mut Vec<Message>（生命周期绑定到 PromptRequest future）
+        //     - 绕过 Chat trait，直接使用 Prompt trait
+        //     - 适合同一 Agent 在不同场景需要不同轮次上限时
+        //
+        // 两者最终都进入 PromptRequest::send() 的 loop 块：
+        //   loop 退出条件：current_max_turns > max_turns + 1
+        //   即 max_turns=5 时最多执行 7 次循环（允许 5 次工具调用 round-trip）
+        // =====================================================================
+
+        // ── 方式 A（使用中）：在 Builder 上设置 default_max_turns ──────────────
+        // Text2SQL 典型路径：get_context → get_schema → execute_sql → 文本答案（3 次工具调用）
+        // 设为 5 可应对更复杂的多步推理，同时避免无限循环烧光 Token
         let agent = client
             .agent(&model_id)
             .preamble(&preamble)
             .tool(schema_tool)
             .tool(sql_tool)
             .tool(context_tool)
+            .default_max_turns(5) // 允许最多 5 次工具调用 round-trip 后再返回文本答案
             .build();
 
+        // ── 方式 B（注释示例）：在单次请求上设置 max_turns ───────────────────
+        // 如需按请求覆盖，可将下方注释解开并替换方式 A 的调用：
+        //
+        // let mut history = history; // 需要 &mut Vec<Message> 而非 owned
+        // let result: Result<String, String> = agent
+        //     .prompt(user_message)      // Prompt trait，返回 PromptRequest
+        //     .with_history(&mut history) // 绑定 &mut，history 生命周期需覆盖整个 await
+        //     .max_turns(5)              // 覆写本次请求的轮次上限
+        //     .await
+        //     .map_err(|e: rig::completion::PromptError| e.to_string());
+
+        // ── 方式 A 实际调用 ──────────────────────────────────────────────────
+        // Chat::chat() 内部等价于：
+        //   PromptRequest::from_agent(self, prompt)  // 读 agent.default_max_turns = Some(5)
+        //     .with_history(&mut chat_history)
+        //     .await
         let result: Result<String, String> = agent
             .chat(user_message, history)
             .await
