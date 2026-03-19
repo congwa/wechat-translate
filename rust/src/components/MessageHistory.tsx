@@ -20,6 +20,7 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import * as api from "@/lib/tauri-api";
 import { HistorySummaryPanel } from "@/components/HistorySummaryPanel";
+import { GlobalSummaryPanel } from "@/components/GlobalSummaryPanel";
 import { useToastStore } from "@/stores/toastStore";
 import type { StoredMessage } from "@/lib/types";
 
@@ -386,7 +387,11 @@ export function MessageHistory() {
           </div>
         </div>
 
-        {selectedChat ? <HistorySummaryPanel chatName={selectedChat} /> : null}
+        {selectedChat ? (
+          <HistorySummaryPanel chatName={selectedChat} />
+        ) : (
+          <GlobalSummaryPanel />
+        )}
 
         {/* Message list */}
         <div ref={scrollRef} className="flex-1 overflow-y-auto">

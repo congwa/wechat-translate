@@ -59,6 +59,29 @@ const PARTICIPANT_OVERALL_SYSTEM_PROMPT: &str = r#"你是一个群聊成员阶�
 3. 如果某一项没有明确信息，写“无”
 4. 保持简洁，避免重复每天的小结原文"#;
 
+const GLOBAL_DAILY_SYSTEM_PROMPT: &str = r#"你是一个微信消息汇总助手。请基于提供的当天跨群聊消息记录，输出整体动态总结。
+
+要求：
+1. 只输出中文，不要解释你的工作过程
+2. 使用以下小标题：
+群聊活跃度：
+主要话题：
+值得关注的事项：
+3. 按群聊分组简要说明各群动态
+4. 控制在 6-10 行内，信息密度高，不要空话"#;
+
+const GLOBAL_OVERALL_SYSTEM_PROMPT: &str = r#"你是一个微信消息阶段汇总助手。请根据多天小结，输出这段时间内的整体动态总结。
+
+要求：
+1. 只输出中文
+2. 使用以下小标题：
+整体活跃趋势：
+核心话题汇总：
+重要事项与决定：
+待跟进问题：
+3. 如果某一项没有明确信息，写"无"
+4. 保持简洁，避免重复每天的小结原文"#;
+
 #[derive(Debug, Clone, Serialize)]
 pub struct HistorySummaryParticipantRef {
     pub id: String,
@@ -85,10 +108,22 @@ pub struct HistorySummaryResult {
     pub daily_items: Vec<HistorySummaryDailyItem>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct GlobalSummaryResult {
+    pub scope: String,
+    pub start_date: String,
+    pub end_date: String,
+    pub message_count: usize,
+    pub chat_count: usize,
+    pub overall_summary: String,
+    pub daily_items: Vec<HistorySummaryDailyItem>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SummaryScope {
     Chat,
     Participant,
+    Global,
 }
 
 impl SummaryScope {
@@ -96,6 +131,7 @@ impl SummaryScope {
         match raw {
             "chat" => Ok(Self::Chat),
             "participant" => Ok(Self::Participant),
+            "global" => Ok(Self::Global),
             _ => anyhow::bail!("未知总结范围: {}", raw),
         }
     }
@@ -104,6 +140,7 @@ impl SummaryScope {
         match self {
             Self::Chat => "chat",
             Self::Participant => "participant",
+            Self::Global => "global",
         }
     }
 }
@@ -298,11 +335,13 @@ impl HistorySummaryService {
                 transcript.message_count,
                 transcript.transcript
             ),
+            SummaryScope::Global => unreachable!("Global scope uses summarize_global_daily"),
         };
 
         let system_prompt = match scope {
             SummaryScope::Chat => CHAT_DAILY_SYSTEM_PROMPT,
             SummaryScope::Participant => PARTICIPANT_DAILY_SYSTEM_PROMPT,
+            SummaryScope::Global => unreachable!("Global scope uses summarize_global_daily"),
         };
 
         self.complete(system_prompt, &user_prompt, Some(1200)).await
@@ -338,14 +377,101 @@ impl HistorySummaryService {
                 "群聊：{}\n成员：{}\n以下是按天整理的小结，请输出整个时间范围内的整体总结：\n\n{}",
                 chat_name, participant_label, daily_text
             ),
+            SummaryScope::Global => unreachable!("Global scope uses summarize_global_overall"),
         };
 
         let system_prompt = match scope {
             SummaryScope::Chat => CHAT_OVERALL_SYSTEM_PROMPT,
             SummaryScope::Participant => PARTICIPANT_OVERALL_SYSTEM_PROMPT,
+            SummaryScope::Global => unreachable!("Global scope uses summarize_global_overall"),
         };
 
         self.complete(system_prompt, &user_prompt, Some(1200)).await
+    }
+
+    /// 生成跨所有群聊的全局总结
+    pub async fn summarize_global(
+        &self,
+        chat_count: usize,
+        start_date: &str,
+        end_date: &str,
+        messages: &[HistorySummarySourceMessage],
+    ) -> Result<GlobalSummaryResult> {
+        let daily_transcripts = build_global_daily_transcripts(messages);
+        let message_count = daily_transcripts
+            .iter()
+            .map(|item| item.message_count)
+            .sum();
+
+        if daily_transcripts.is_empty() {
+            return Ok(GlobalSummaryResult {
+                scope: SummaryScope::Global.as_str().to_string(),
+                start_date: start_date.to_string(),
+                end_date: end_date.to_string(),
+                message_count: 0,
+                chat_count,
+                overall_summary: String::new(),
+                daily_items: Vec::new(),
+            });
+        }
+
+        let mut daily_items = Vec::with_capacity(daily_transcripts.len());
+        for item in &daily_transcripts {
+            let summary = self.summarize_global_daily(item).await?;
+            daily_items.push(HistorySummaryDailyItem {
+                date: item.date.clone(),
+                message_count: item.message_count,
+                summary,
+            });
+        }
+
+        let overall_summary = if daily_items.len() == 1 {
+            daily_items[0].summary.clone()
+        } else {
+            self.summarize_global_overall(&daily_items).await?
+        };
+
+        Ok(GlobalSummaryResult {
+            scope: SummaryScope::Global.as_str().to_string(),
+            start_date: start_date.to_string(),
+            end_date: end_date.to_string(),
+            message_count,
+            chat_count,
+            overall_summary,
+            daily_items,
+        })
+    }
+
+    async fn summarize_global_daily(&self, transcript: &DailyTranscript) -> Result<String> {
+        let user_prompt = format!(
+            "日期：{}\n消息数：{}\n\n以下是当天跨群聊消息记录：\n{}\n",
+            transcript.date, transcript.message_count, transcript.transcript
+        );
+        self.complete(GLOBAL_DAILY_SYSTEM_PROMPT, &user_prompt, Some(1200))
+            .await
+    }
+
+    async fn summarize_global_overall(
+        &self,
+        daily_items: &[HistorySummaryDailyItem],
+    ) -> Result<String> {
+        let daily_text = daily_items
+            .iter()
+            .map(|item| {
+                format!(
+                    "{}（{} 条消息）\n{}",
+                    item.date, item.message_count, item.summary
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n");
+
+        let user_prompt = format!(
+            "以下是按天整理的小结，请输出整个时间范围内的整体总结：\n\n{}",
+            daily_text
+        );
+        self.complete(GLOBAL_OVERALL_SYSTEM_PROMPT, &user_prompt, Some(1200))
+            .await
     }
 
     async fn complete(
@@ -453,6 +579,60 @@ fn build_daily_transcripts(messages: &[HistorySummarySourceMessage]) -> Vec<Dail
             }
         })
         .collect()
+}
+
+/// 构建全局总结的每日 transcript，包含群聊名称
+fn build_global_daily_transcripts(messages: &[HistorySummarySourceMessage]) -> Vec<DailyTranscript> {
+    let mut grouped: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+
+    for message in messages {
+        let Some((date, line)) = format_global_summary_line(message) else {
+            continue;
+        };
+        grouped.entry(date.clone()).or_default().push(line);
+        *counts.entry(date).or_default() += 1;
+    }
+
+    grouped
+        .into_iter()
+        .map(|(date, lines)| {
+            let message_count = counts.get(&date).copied().unwrap_or(0);
+            let transcript = trim_transcript_lines(&lines);
+            DailyTranscript {
+                date,
+                message_count,
+                transcript,
+            }
+        })
+        .collect()
+}
+
+/// 格式化全局总结的单行消息，包含群聊名称
+fn format_global_summary_line(message: &HistorySummarySourceMessage) -> Option<(String, String)> {
+    let content = if message.image_path.is_some() {
+        "[图片]".to_string()
+    } else {
+        message.content.trim().to_string()
+    };
+
+    if content.is_empty() {
+        return None;
+    }
+
+    let detected_at = message.detected_at.trim();
+    let date = detected_at.get(0..10)?.to_string();
+    let time = detected_at.get(11..16).unwrap_or("00:00");
+    let chat_name = message.chat_name.trim();
+    let sender = if message.is_self {
+        "我".to_string()
+    } else if !message.sender.trim().is_empty() {
+        message.sender.trim().to_string()
+    } else {
+        chat_name.to_string()
+    };
+
+    Some((date, format!("{time} | [{chat_name}] {sender} | {content}")))
 }
 
 fn trim_transcript_lines(lines: &[String]) -> String {

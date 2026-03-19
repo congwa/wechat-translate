@@ -4,8 +4,8 @@ use crate::application::history::query_service;
 use crate::config::{load_app_config, ConfigDir};
 use crate::db::MessageDb;
 use crate::history_summary::{
-    HistorySummaryParticipantRef, HistorySummaryResult, HistorySummaryService, SummaryRange,
-    SummaryScope,
+    GlobalSummaryResult, HistorySummaryParticipantRef, HistorySummaryResult,
+    HistorySummaryService, SummaryRange, SummaryScope,
 };
 use std::sync::Arc;
 
@@ -99,4 +99,48 @@ fn resolve_selected_participant(
         .cloned()
         .map(Some)
         .ok_or_else(|| "所选成员在当前时间范围内没有可用消息".to_string())
+}
+
+/// 生成跨所有群聊的全局整体总结。
+pub(crate) async fn generate_global_summary(
+    config_dir: &ConfigDir,
+    db: &Arc<MessageDb>,
+    start_date: String,
+    end_date: String,
+) -> Result<GlobalSummaryResult, String> {
+    let range = SummaryRange::parse(&start_date, &end_date).map_err(|error| error.to_string())?;
+
+    let chats = db
+        .list_global_summary_chats(&range.start_date, &range.end_date)
+        .map_err(|error| error.to_string())?;
+
+    let messages = db
+        .query_global_summary_messages(&range.start_date, &range.end_date)
+        .map_err(|error| error.to_string())?;
+
+    if messages.is_empty() {
+        return Ok(GlobalSummaryResult {
+            scope: SummaryScope::Global.as_str().to_string(),
+            start_date: range.start_date,
+            end_date: range.end_date,
+            message_count: 0,
+            chat_count: chats.len(),
+            overall_summary: String::new(),
+            daily_items: Vec::new(),
+        });
+    }
+
+    let config = load_app_config(&config_dir.0).map_err(|error| error.to_string())?;
+    let service = HistorySummaryService::from_translate_config(&config.translate)
+        .map_err(|error| error.to_string())?;
+
+    service
+        .summarize_global(
+            chats.len(),
+            &range.start_date,
+            &range.end_date,
+            &messages,
+        )
+        .await
+        .map_err(|error| error.to_string())
 }

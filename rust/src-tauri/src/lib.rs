@@ -731,6 +731,7 @@ pub fn run() {
             interface::queries::history::db_get_stats,
             interface::queries::history::history_summary_participants_get,
             interface::queries::history::history_summary_generate,
+            interface::queries::history::history_summary_global_generate,
             interface::commands::tray::get_close_to_tray,
             interface::commands::tray::set_close_to_tray,
             interface::commands::preflight::preflight_check,

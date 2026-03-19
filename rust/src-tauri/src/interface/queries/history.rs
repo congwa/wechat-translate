@@ -1,7 +1,7 @@
 //! 历史查询入口：负责把消息历史、会话列表、统计和总结能力通过 Tauri 暴露给前端，
 //! 让 query 边界落在 interface/queries，而不是继续堆在旧 commands 目录里。
 use crate::application::history::query_service as history_query_service;
-use crate::application::history::summary_service::generate_history_summary;
+use crate::application::history::summary_service::{generate_global_summary, generate_history_summary};
 use crate::config::ConfigDir;
 use crate::db::MessageDb;
 use crate::history_summary::SummaryRange;
@@ -94,6 +94,22 @@ pub async fn history_summary_generate(
         end_date,
     )
     .await?;
+
+    Ok(serde_json::json!({
+        "ok": true,
+        "data": result,
+    }))
+}
+
+/// 生成跨所有群聊的全局整体总结。
+#[tauri::command]
+pub async fn history_summary_global_generate(
+    config_dir: tauri::State<'_, ConfigDir>,
+    db: tauri::State<'_, Arc<MessageDb>>,
+    start_date: String,
+    end_date: String,
+) -> Result<serde_json::Value, String> {
+    let result = generate_global_summary(&config_dir, db.inner(), start_date, end_date).await?;
 
     Ok(serde_json::json!({
         "ok": true,

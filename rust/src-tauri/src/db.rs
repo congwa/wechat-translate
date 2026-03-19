@@ -685,6 +685,70 @@ impl MessageDb {
         Ok(messages)
     }
 
+    /// 查询指定时间范围内跨所有群聊的消息，用于全局整体总结。
+    pub fn query_global_summary_messages(
+        &self,
+        start_date: &str,
+        end_date: &str,
+    ) -> Result<Vec<HistorySummarySourceMessage>> {
+        let conn = self.conn.lock().unwrap();
+        let sql = "SELECT chat_name, sender, content, is_self, detected_at, image_path
+             FROM messages
+             WHERE date(detected_at) >= date(?)
+               AND date(detected_at) <= date(?)
+             ORDER BY detected_at ASC, id ASC";
+
+        let mut stmt = conn.prepare(sql).context("prepare global summary query")?;
+        let rows = stmt
+            .query_map(params![start_date, end_date], |row| {
+                Ok(HistorySummarySourceMessage {
+                    chat_name: row.get(0)?,
+                    sender: row.get(1)?,
+                    content: row.get(2)?,
+                    is_self: row.get::<_, i32>(3)? != 0,
+                    detected_at: row.get(4)?,
+                    image_path: row.get::<_, Option<String>>(5).unwrap_or(None),
+                })
+            })
+            .context("execute global summary query")?;
+
+        let mut messages = Vec::new();
+        for row in rows {
+            messages.push(row.context("read global summary message row")?);
+        }
+        Ok(messages)
+    }
+
+    /// 获取指定时间范围内有消息的群聊列表及消息数量，用于全局总结统计。
+    pub fn list_global_summary_chats(
+        &self,
+        start_date: &str,
+        end_date: &str,
+    ) -> Result<Vec<ChatSummary>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT chat_name, COUNT(*) as cnt, MAX(detected_at) as last_at
+             FROM messages
+             WHERE date(detected_at) >= date(?)
+               AND date(detected_at) <= date(?)
+             GROUP BY chat_name
+             ORDER BY cnt DESC",
+        )?;
+        let rows = stmt.query_map(params![start_date, end_date], |row| {
+            Ok(ChatSummary {
+                chat_name: row.get(0)?,
+                message_count: row.get(1)?,
+                last_message_at: row.get(2)?,
+            })
+        })?;
+
+        let mut chats = Vec::new();
+        for row in rows {
+            chats.push(row.context("read global summary chat row")?);
+        }
+        Ok(chats)
+    }
+
     pub fn clear_all(&self) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute_batch("DELETE FROM messages; VACUUM;")

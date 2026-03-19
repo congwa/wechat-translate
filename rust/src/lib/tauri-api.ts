@@ -153,6 +153,23 @@ export async function historySummaryGenerate(params: {
   return invoke("history_summary_generate", params);
 }
 
+export interface GlobalSummaryResult {
+  scope: string;
+  start_date: string;
+  end_date: string;
+  message_count: number;
+  chat_count: number;
+  overall_summary: string;
+  daily_items: { date: string; message_count: number; summary: string }[];
+}
+
+export async function historySummaryGlobalGenerate(params: {
+  startDate: string;
+  endDate: string;
+}): Promise<ApiResponse<GlobalSummaryResult>> {
+  return invoke("history_summary_global_generate", params);
+}
+
 export async function getCloseToTray(): Promise<boolean> {
   return invoke("get_close_to_tray");
 }
