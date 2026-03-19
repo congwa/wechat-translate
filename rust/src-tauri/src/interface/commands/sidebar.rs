@@ -1,5 +1,6 @@
 //! Sidebar 写命令入口：负责把浮窗启停、联动启动、窗口控制和手动翻译通过 Tauri 暴露给前端，
 //! 让 sidebar 相关写操作真正落在 `interface/commands/sidebar.rs`，不再依赖旧命令层注册。
+use crate::adapter::MacOSAdapter;
 use crate::application::runtime::service::RuntimeService;
 use crate::config::{load_app_config, ConfigDir};
 use crate::sidebar_window::{SidebarWindowState, WindowMode};
@@ -86,6 +87,7 @@ pub async fn live_start(
     app: tauri::AppHandle,
     config_dir: tauri::State<'_, ConfigDir>,
     manager: tauri::State<'_, TaskManager>,
+    adapter: tauri::State<'_, Arc<MacOSAdapter>>,
     sidebar_state: tauri::State<'_, Arc<SidebarWindowState>>,
     translate_enabled: Option<bool>,
     provider: Option<String>,
@@ -147,12 +149,14 @@ pub async fn live_start(
         .await
         .map_err(|e| e.to_string())?;
 
-    // 等待监听循环首次 poll 完成后再打开窗口，避免 sidebar 用旧聊天指向先渲染错误内容。
-    let first_chat = runtime.wait_first_poll(Duration::from_secs(5)).await;
-    if let Some(chat_name) = first_chat {
-        let sidebar_runtime = runtime.sidebar_runtime();
-        if sidebar_runtime.get_current_chat().is_empty() {
-            sidebar_runtime.set_current_chat(&chat_name);
+    // 等待监听循环首次 poll 完成，确保监听已就绪
+    let _ = runtime.wait_first_poll(Duration::from_secs(5)).await;
+
+    // 直接从 adapter 读取当前活跃聊天名，避免使用可能过时的 first_poll 缓存值
+    if let Ok(current_chat) = adapter.read_active_chat_name() {
+        if !current_chat.is_empty() {
+            let sidebar_runtime = runtime.sidebar_runtime();
+            sidebar_runtime.set_current_chat(&current_chat);
         }
     }
 

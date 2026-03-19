@@ -2,7 +2,6 @@ pub mod adapter;
 mod app_state;
 mod application;
 mod audio_cache;
-mod commands;
 mod config;
 pub mod db;
 pub mod dictionary;

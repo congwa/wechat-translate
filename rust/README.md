@@ -62,9 +62,6 @@ pnpm tauri build
   - sidebar 投影与 snapshot 读模型
 - `application/settings`
   - 配置校验、落盘、运行态应用
-- `commands/*`
-  - 旧命令兼容实现层，逐步退场
-
 完整说明见：
 
 - [ARCHITECTURE.md](./ARCHITECTURE.md)
@@ -159,7 +156,7 @@ sequenceDiagram
 rust/
 ├── src/                          # 前端 (React + TypeScript)
 │   ├── features/                 # feature 页面与 controller / hooks
-│   ├── components/               # 通用页面组件与兼容导出
+│   ├── components/               # 通用页面组件
 │   ├── stores/                   # snapshot stores + UI stores
 │   └── lib/                      # Tauri API + 类型
 │
@@ -169,7 +166,6 @@ rust/
         ├── interface/            # Tauri commands / queries 暴露面
         ├── application/          # 业务编排与读写用例
         ├── infrastructure/       # Tauri / tray 等平台适配
-        ├── commands/             # 旧命令兼容实现层
         ├── adapter/              # macOS AX / AppleScript 适配层
         ├── db.rs                 # SQLite 持久化
         ├── history_summary.rs    # AI 总结引擎

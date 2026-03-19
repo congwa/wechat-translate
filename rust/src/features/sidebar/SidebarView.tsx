@@ -383,7 +383,7 @@ export function SidebarView() {
   const [showWordBook, setShowWordBook] = useState(false);
   const [translatingIds, setTranslatingIds] = useState<Set<number>>(new Set());
   const { snapshot, snapshotLoading } = useSidebarSnapshot();
-  const items = snapshot.messages.map((message) => ({
+  const items = [...snapshot.messages].reverse().map((message) => ({
     id: message.id,
     chatName: message.chat_name,
     chatType: message.chat_type || undefined,

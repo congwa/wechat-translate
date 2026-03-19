@@ -53,7 +53,6 @@ src-tauri/src/
   infrastructure/
     tauri/
 
-  commands/               # 兼容实现层，逐步退场
   adapter/
   db.rs
   history_summary.rs
@@ -93,9 +92,9 @@ src-tauri/src/
 - `sidebar_runtime.rs`
   - sidebar 启停、翻译依赖装配、投影清理
 - `monitor_loop.rs`
-  - 兼容入口，复用当前监听主循环实现
+  - 监听主循环实现
 - `monitor_ingest.rs`
-  - 兼容入口，复用消息增量判定逻辑
+  - 消息增量判定与 sender 推断逻辑
 - `state.rs`
   - `TaskState`、`SidebarConfig`、`FirstPollSignal`、`MonitorConfig`
 - `translation_config.rs`
@@ -126,16 +125,6 @@ src-tauri/src/
 
 - `infrastructure/tauri/tray_adapter.rs`
   - 托盘菜单状态投影
-
-#### `commands`
-
-`commands/*` 现在的定位已经不是主入口，而是兼容实现层。
-
-- 已迁移到 `interface/*` 的函数：
-  - 不再使用 `#[tauri::command]`
-  - 保留为内部实现函数供 interface 复用
-- 还没迁移完成的旧模块：
-  - 会继续逐步收缩
 
 ## 单一真相源
 
@@ -252,24 +241,10 @@ sequenceDiagram
   SummarySvc-->>UI: one-shot summary response
 ```
 
-## 当前还没完全完成的点
-
-虽然主干已经比较清晰，但还没完全到最终态：
-
-- `task_manager.rs`
-  - 仍然保留 context builder 和少量兼容职责
-- `commands/*`
-  - 已经明显退化成兼容实现层，但还未完全消失
-- `runtime_monitor_ingest.rs` / `runtime_monitor_loop.rs` / `runtime_translator_runtime.rs`
-  - 逻辑已经被上层 service 包裹
-  - 但底层实现文件还没全部物理迁到 `application/runtime/*`
-
 ## 维护规则
 
 后续继续重构时，建议坚持下面几条：
 
-- 新的 Tauri 暴露面优先放在 `interface/*`
-- 新的业务编排优先放在 `application/*`
-- `commands/*` 不再新增新的主入口职责
-- 前端业务真相一律继续走 snapshot / invalidation 模式
-- 若某个模块只是“为兼容旧路径存在”，要在文件头写明这是兼容实现层
+- 新的 Tauri 暴露面放在 `interface/*`
+- 新的业务编排放在 `application/*`
+- 前端业务真相一律走 snapshot / invalidation 模式

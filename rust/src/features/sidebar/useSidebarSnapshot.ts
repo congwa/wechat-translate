@@ -18,7 +18,7 @@ export function useSidebarSnapshot() {
     setSidebarLoading(true);
     try {
       const resp = await api.sidebarSnapshotGet({
-        chatName: snapshot.current_chat || undefined,
+        chatName: undefined,
         limit: 50,
       });
       if (resp.data) {
@@ -30,7 +30,7 @@ export function useSidebarSnapshot() {
       setSnapshotLoading(false);
       setSidebarLoading(false);
     }
-  }, [applySnapshot, setSidebarLoading, snapshot.current_chat]);
+  }, [applySnapshot, setSidebarLoading]);
 
   useEffect(() => {
     fetchSnapshot();
