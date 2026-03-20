@@ -2,6 +2,30 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.4] - 2026-03-20
+
+### Highlights
+
+Expand the macOS Rust/Tauri app into a more complete AI-assisted WeChat learning workspace with cross-chat AI summaries, Text2SQL Agent chat, system TTS playback, tray blink alerts for monitor failures, and a refreshed README that now leads with the macOS experience.
+
+### Added
+- Add cross-chat global summary generation with multilingual output support so recent activity across all chats can be summarized in one place.
+- Add a dedicated AI Agent workflow with Text2SQL chat, cancel controls, configurable multi-turn reasoning, and fallback configuration for provider/model setup.
+- Add macOS system TTS playback with utterance lifecycle events, sidebar speaking-state animation, and tray menu controls.
+- Add tray icon blink alerts for consecutive monitoring failures to surface listener health issues more clearly.
+- Add README showcase assets for the macOS AI summary card and Text2SQL Agent experience.
+
+### Changed
+- Refresh the Rust README and root README so the repository now leads with macOS screenshots and AI feature highlights instead of the older Python/Windows-first presentation.
+- Improve summary generation UX with multilingual formatting support and dedicated UI entry points for AI-driven message recap.
+- Refine Agent chat behavior with better duplicate-response suppression, clearer model capability errors, and improved tool-calling flow.
+- Continue restructuring the Rust/Tauri application layers, runtime snapshots, sidebar orchestration, and interface boundaries to support the newer AI, TTS, and monitoring features.
+
+### Fixed
+- Fix monitor failure visibility by turning repeated polling issues into tray blink warnings instead of silent background degradation.
+- Fix Agent interaction edge cases around duplicate initialization and response handling so chat sessions behave more predictably.
+- Fix several sidebar/runtime consistency issues during feature expansion by tightening snapshot loading and lifecycle coordination.
+
 ## [0.1.1] - 2026-03-09
 
 ### Highlights

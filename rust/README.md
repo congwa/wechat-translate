@@ -3,19 +3,6 @@
 > 基于 **Tauri 2 + React 19 + Rust** 构建的 macOS 微信桌面端自动化工具，  
 > 通过 macOS Accessibility API 与 AppleScript 直接驱动微信，无 Python 依赖。
 
-## 技术栈
-
-| 层级 | 技术 |
-|------|------|
-| **桌面框架** | Tauri 2 (原生窗口 + 系统托盘 + IPC) |
-| **前端** | React 19 + TypeScript + Vite 7 |
-| **样式** | Tailwind CSS v4 + shadcn/ui |
-| **状态管理** | Zustand |
-| **后端** | Rust (tokio async) |
-| **数据库** | SQLite (rusqlite) |
-| **翻译** | DeepLX HTTP |
-| **macOS 自动化** | accessibility-sys + AppleScript |
-
 ## 界面预览
 
 ### 浮窗功能
@@ -32,6 +19,36 @@
 | 主设置页 | 工具栏设置 | 完整设置 |
 |---|---|---|
 | ![主设置](./screenshot/setting_main.webp) | ![工具栏设置](./screenshot/setting-tobbar.webp) | ![完整设置](./screenshot/setting_all.webp) |
+
+### AI 能力预览
+| AI 总结卡片 | Text2SQL AI Agent |
+|---|---|
+| ![AI 总结卡片](./screenshot/ai-card-readme.jpg) | ![Text2SQL AI Agent](./screenshot/text2sql-ai-agent-readme.jpg) |
+
+- **AI 总结卡片**：支持按群聊、按成员、按时间范围生成结构化总结，把关注议题、主要观点、承诺待办和未决问题直接提炼出来，适合快速回看讨论重点。
+- **Text2SQL AI Agent**：直接对消息数据库发起自然语言问答，Agent 自动生成 SQL、执行检索并返回可解释答案，适合做聊天记录追问和线索回溯。
+
+## 核心亮点
+
+- **双模式实时浮窗翻译**：支持跟随微信窗口或独立置顶，原文 / 译文 / 双语视图可切换，适合边聊边学英文
+- **AI Agent 消息问答**：内置 Agent 会话能力，可直接对消息库发起自然语言问答，并通过 Text2SQL 获取结构化答案
+- **AI 总结**：支持按群聊、按成员、按时间范围生成历史总结，也支持跨所有群聊做全局整体总结
+- **系统 TTS 朗读**：基于 macOS 系统 TTS 朗读消息或译文，支持打断式播报，并把“正在朗读”状态实时回传到消息卡片
+- **监听异常托盘闪动提醒**：当监听链路异常时，托盘图标会进入闪动状态，同时把菜单状态切到“监听异常”，降低静默掉线风险
+- **查词 + 单词本闭环**：聊天里看到生词可以直接点词、看音标释义、听发音、收藏进单词本继续复习
+
+## 技术栈
+
+| 层级 | 技术 |
+|------|------|
+| **桌面框架** | Tauri 2 (原生窗口 + 系统托盘 + IPC) |
+| **前端** | React 19 + TypeScript + Vite 7 |
+| **样式** | Tailwind CSS v4 + shadcn/ui |
+| **状态管理** | Zustand |
+| **后端** | Rust (tokio async) |
+| **数据库** | SQLite (rusqlite) |
+| **翻译** | DeepLX HTTP |
+| **macOS 自动化** | accessibility-sys + AppleScript |
 
 ## 功能概览
 

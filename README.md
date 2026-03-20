@@ -1,5 +1,44 @@
 # wechat-pc-auto
 
+一进项目建议先看 `rust/` 目录里的 **macOS Rust 原生版**。当前仓库里最完整、最接近产品形态的体验在这里。
+
+## macOS 版本界面预览
+
+### 浮窗功能
+| 跟随微信窗口模式 | 独立置顶模式 |
+|---|---|
+| ![浮窗跟随模式](./rust/screenshot/floating_window_left.webp) | ![浮窗独立模式](./rust/screenshot/floting_window_left2.webp) |
+
+### 查词功能
+| 点词查询 | 词典窗口 | 音标释义 | 例句展示 |
+|---|---|---|---|
+| ![点词查询](./rust/screenshot/dcit5.webp) | ![词典窗口](./rust/screenshot/dictionary_window.webp) | ![音标释义](./rust/screenshot/dict2.webp) | ![例句展示](./rust/screenshot/dict3.webp) |
+
+### 设置中心
+| 主设置页 | 工具栏设置 | 完整设置 |
+|---|---|---|
+| ![主设置](./rust/screenshot/setting_main.webp) | ![工具栏设置](./rust/screenshot/setting-tobbar.webp) | ![完整设置](./rust/screenshot/setting_all.webp) |
+
+### AI 能力预览
+| AI 总结卡片 | Text2SQL AI Agent |
+|---|---|
+| ![AI 总结卡片](./rust/screenshot/ai-card-readme.jpg) | ![Text2SQL AI Agent](./rust/screenshot/text2sql-ai-agent-readme.jpg) |
+
+- **AI 总结卡片**：支持按群聊、按成员、按时间范围生成结构化总结，把关注议题、主要观点、承诺待办和未决问题直接整理出来，适合快速回看当天讨论。
+- **Text2SQL AI Agent**：可以直接用自然语言提问消息库，例如“谁最近在聊这个话题”“某人昨天说过什么”，Agent 会自动生成 SQL、执行查询并返回解释结果。
+
+### 现在主推的功能
+
+- 原生 macOS 浮窗，支持跟随微信窗口或独立置顶
+- AI Agent 对话式检索消息库，支持 Text2SQL 问答
+- AI 总结，可按群聊、成员或跨群生成阶段总结
+- 系统 TTS 朗读，消息卡片带“正在朗读”动画反馈
+- 监听异常时托盘图标闪动提醒，方便第一时间发现掉线
+
+[查看 macOS Rust 完整说明](./rust/README.md)
+
+## Windows / Python 监听版
+
 这个分支已经收窄成纯监听链路，不再假装支持一堆主动操作。
 
 - 只维护 `session-only` 监听
@@ -129,28 +168,6 @@ wechat_auto/
 ├── logger.py
 └── window.py
 ```
-
-
-## 以上为pc版本，下面为macos版本
-
-[macos版本介绍文档](./rust/README.md)
-
-### macOS 版本界面预览
-
-#### 浮窗功能
-| 跟随微信窗口模式 | 独立置顶模式 |
-|---|---|
-| ![浮窗跟随模式](./rust/screenshot/floating_window_left.webp) | ![浮窗独立模式](./rust/screenshot/floting_window_left2.webp) |
-
-#### 查词功能
-| 点词查询 | 词典窗口 | 音标释义 | 例句展示 |
-|---|---|---|---|
-| ![点词查询](./rust/screenshot/dcit5.webp) | ![词典窗口](./rust/screenshot/dictionary_window.webp) | ![音标释义](./rust/screenshot/dict2.webp) | ![例句展示](./rust/screenshot/dict3.webp) |
-
-#### 设置中心
-| 主设置页 | 工具栏设置 | 完整设置 |
-|---|---|---|
-| ![主设置](./rust/screenshot/setting_main.webp) | ![工具栏设置](./rust/screenshot/setting-tobbar.webp) | ![完整设置](./rust/screenshot/setting_all.webp) |
 
 ## 开源协议
 
