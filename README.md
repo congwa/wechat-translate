@@ -169,6 +169,30 @@ wechat_auto/
 └── window.py
 ```
 
+## 致谢
+
+### 💝 特别感谢
+
+本项目的 macOS 版本灵感来源于 **Loveyless** 的天才想法和卓越的动手能力。
+
+**Loveyless** 创建的 [wechat-pc-auto](https://github.com/Loveyless/wechat-pc-auto) 项目开创了先河，其创新的思路和扎实的技术实现为本项目奠定了坚实的基础。
+
+正是因为有了这样优秀的原版项目作为起点，才得以让 macOS 版本顺利诞生，为广大 Mac 用户带来同样便捷的英语学习体验。
+
+### 🌟 致敬原作
+
+- **原版项目**: [wechat-pc-auto](https://github.com/Loveyless/wechat-pc-auto)
+- **原作者**: [Loveyless](https://github.com/Loveyless)
+- **贡献**: 开创性的解决方案，为整个项目生态提供了宝贵的思路和技术积累
+
+感谢 **Loveyless** 的开源精神和技术分享，让更多人能够受益于英语学习的便利。愿这份技术的火种继续传递，照亮更多开发者的创新之路。
+
+---
+
+*"一个人的灵感，点燃了另一个人的梦想；一个人的分享，成就了更多人的可能。"*
+
+**—— 向所有开源先驱者致敬**
+
 ## 开源协议
 
 MIT License
