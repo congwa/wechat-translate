@@ -556,3 +556,33 @@ export async function agentChat(sessionId: string, message: string): Promise<{ o
 export async function agentSessionClear(sessionId: string): Promise<{ ok: boolean }> {
   return invoke("agent_session_clear", { sessionId });
 }
+
+// ---------------------------------------------------------------------------
+// TTS
+// ---------------------------------------------------------------------------
+
+export interface TtsStatus {
+  enabled: boolean;
+  initialized: boolean;
+  speaking: boolean;
+}
+
+/** 朗读文本；messageId 用于前端追踪动画，传 0 表示无需追踪 */
+export async function ttsSpeak(messageId: number, text: string): Promise<void> {
+  return invoke("tts_speak", { messageId, text });
+}
+
+/** 立即停止当前朗读 */
+export async function ttsStop(): Promise<void> {
+  return invoke("tts_stop");
+}
+
+/** 查询 TTS 当前状态 */
+export async function ttsGetStatus(): Promise<TtsStatus> {
+  return invoke("tts_get_status");
+}
+
+/** 设置 TTS 启用/禁用（同时持久化配置并同步托盘） */
+export async function ttsSetEnabled(enabled: boolean): Promise<void> {
+  return invoke("tts_set_enabled", { enabled });
+}

@@ -66,6 +66,7 @@ md5 = "0.7"
 base64 = "0.22"
 rig-core = "0.31"
 futures = "0.3"
+tts = "0.26"
 uuid = { version = "1", features = ["v4"] }
 schemars = "0.8"
 

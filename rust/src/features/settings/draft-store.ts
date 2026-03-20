@@ -8,13 +8,14 @@ import {
 import type { AppSettings } from "@/lib/types";
 import { BUILTIN_PROVIDERS } from "@/lib/models-registry";
 
-export type SettingsDraftSection = "listen" | "translate" | "display" | "agent";
+export type SettingsDraftSection = "listen" | "translate" | "display" | "agent" | "tts";
 
 export interface SectionDirtyState {
   listen: boolean;
   translate: boolean;
   display: boolean;
   agent: boolean;
+  tts: boolean;
 }
 
 export const SECTION_FIELDS: Record<
@@ -53,6 +54,7 @@ export const SECTION_FIELDS: Record<
     "agentAiApiKey",
     "agentAiBaseUrl",
   ],
+  tts: ["ttsEnabled"],
 };
 
 interface AdvancedConfigEditorState {
@@ -91,6 +93,7 @@ const defaultSectionDirty: SectionDirtyState = {
   translate: false,
   display: false,
   agent: false,
+  tts: false,
 };
 
 export const useSettingsDraftStore = create<SettingsDraftStoreState>((set) => ({

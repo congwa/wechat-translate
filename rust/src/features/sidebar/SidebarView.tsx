@@ -2,7 +2,7 @@ import { useRef, useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { listen } from "@tauri-apps/api/event";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { X, MessageCircle, Languages, AlertCircle, BookOpen, Users, User, Loader2 } from "lucide-react";
+import { X, MessageCircle, Languages, AlertCircle, BookOpen, Users, User, Loader2, Volume2 } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Skeleton } from "@/components/ui/skeleton";
 import type {
@@ -117,6 +117,27 @@ function getSenderColor(name: string): string {
   return SENDER_COLORS[Math.abs(hash) % SENDER_COLORS.length];
 }
 
+function hasCjkInText(text: string): boolean {
+  return /[\u4E00-\u9FFF\u3400-\u4DBF\uF900-\uFAFF]/.test(text);
+}
+
+/**
+ * 根据显示模式选择朗读文本。
+ * 返回 string → 立即朗读；返回 "pending" → 等翻译完成；返回 null → 跳过。
+ */
+function selectTtsText(
+  textCn: string,
+  textEn: string,
+  displayMode: DisplayMode
+): string | "pending" | null {
+  if (!textCn.trim()) return null;
+  if (!hasCjkInText(textCn)) return textCn; // 纯英文，直接朗读
+  if (displayMode === "original") return textCn; // 原文模式，读中文
+  // 译文/双语模式：有译文则读译文，否则等待
+  if (textEn && textEn.trim() && textEn !== textCn) return textEn;
+  return "pending";
+}
+
 function getInitialSystemDarkMode(): boolean {
   if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
     return false;
@@ -166,7 +187,8 @@ function renderMessageCard(
   msg: SidebarMessage,
   displayMode: DisplayMode,
   translatingIds: Set<number>,
-  setTranslatingIds: React.Dispatch<React.SetStateAction<Set<number>>>
+  setTranslatingIds: React.Dispatch<React.SetStateAction<Set<number>>>,
+  speakingMessageId: number | null
 ) {
   const hasSender = msg.sender !== "";
   const sender = msg.sender || msg.chatName;
@@ -207,9 +229,14 @@ function renderMessageCard(
                 {msg.isSelf ? "我" : hasSender ? sender : ""}
               </span>
             </div>
-            <span className="text-[9px] text-gray-300 dark:text-gray-600 tabular-nums shrink-0 ml-2">
-              {msg.timestamp.slice(11, 19)}
-            </span>
+            <div className="flex items-center gap-1 shrink-0 ml-2">
+              {speakingMessageId === msg.id && (
+                <Volume2 className="w-2.5 h-2.5 text-violet-500 dark:text-violet-400 animate-pulse" />
+              )}
+              <span className="text-[9px] text-gray-300 dark:text-gray-600 tabular-nums">
+                {msg.timestamp.slice(11, 19)}
+              </span>
+            </div>
           </div>
           {msg.imagePath ? (
             <div className="mt-1">
@@ -382,6 +409,7 @@ export function SidebarView() {
   const [visible, setVisible] = useState(true);
   const [showWordBook, setShowWordBook] = useState(false);
   const [translatingIds, setTranslatingIds] = useState<Set<number>>(new Set());
+  const [speakingMessageId, setSpeakingMessageId] = useState<number | null>(null);
   const { snapshot, snapshotLoading } = useSidebarSnapshot();
   const items = [...snapshot.messages].reverse().map((message) => ({
     id: message.id,
@@ -395,6 +423,7 @@ export function SidebarView() {
     isSelf: message.is_self,
     imagePath: message.image_path || undefined,
   }));
+  const ttsEnabled = settings?.tts?.enabled ?? false;
   const currentChat = snapshot.current_chat ?? "";
   const translateEnabled = settings?.translate.enabled ?? false;
   const deeplxUrl = settings?.translate.deeplx_url ?? "";
@@ -410,6 +439,58 @@ export function SidebarView() {
       unlisten.then((fn) => fn());
     };
   }, [isIndependent]);
+
+  useEffect(() => {
+    const unlistenBegin = listen<{ message_id: number }>("tts-utterance-begin", (e) => {
+      setSpeakingMessageId(e.payload.message_id || null);
+    });
+    const unlistenEnd = listen<{ message_id: number }>("tts-utterance-end", () => {
+      setSpeakingMessageId(null);
+    });
+    return () => {
+      unlistenBegin.then((fn) => fn());
+      unlistenEnd.then((fn) => fn());
+    };
+  }, []);
+
+  const prevItemIdsRef = useRef<Set<number>>(new Set());
+  const pendingTtsRef = useRef<Map<number, true>>(new Map());
+  useEffect(() => {
+    const currentIds = new Set(items.map((i) => i.id));
+    if (!ttsEnabled) {
+      prevItemIdsRef.current = currentIds;
+      pendingTtsRef.current.clear();
+      return;
+    }
+    const prev = prevItemIdsRef.current;
+    prevItemIdsRef.current = currentIds;
+
+    if (prev.size > 0) {
+      const newItems = items.filter((i) => !prev.has(i.id) && !i.isSelf && !i.imagePath);
+      for (const msg of newItems) {
+        const result = selectTtsText(msg.textCn, msg.textEn, effectiveDisplayMode);
+        if (result === "pending") {
+          pendingTtsRef.current.set(msg.id, true);
+        } else if (result !== null) {
+          api.ttsSpeak(msg.id, result).catch(() => {});
+        }
+      }
+    }
+
+    // 检查 pending 队列中已完成翻译的消息
+    for (const [pendingId] of pendingTtsRef.current.entries()) {
+      const msg = items.find((i) => i.id === pendingId);
+      if (!msg) {
+        pendingTtsRef.current.delete(pendingId);
+        continue;
+      }
+      if (msg.textEn && msg.textEn.trim() && msg.textEn !== msg.textCn) {
+        pendingTtsRef.current.delete(pendingId);
+        api.ttsSpeak(msg.id, msg.textEn).catch(() => {});
+        break; // 每次只朗读一条，避免连续多条积压时全部触发
+      }
+    }
+  }, [items, ttsEnabled, effectiveDisplayMode]);
 
   // 滚动到底部：当消息数量变化或最后一条消息内容更新时触发（仅跟随模式）
   // 这样翻译完成后内容增多也会自动滚动到底部
@@ -530,7 +611,7 @@ export function SidebarView() {
           <div className="flex flex-col gap-1.5">
             {items
               .slice(-displayCount)
-              .map((msg) => renderMessageCard(msg, effectiveDisplayMode, translatingIds, setTranslatingIds))}
+              .map((msg) => renderMessageCard(msg, effectiveDisplayMode, translatingIds, setTranslatingIds, speakingMessageId))}
           </div>
         </div>
       )}
@@ -581,7 +662,7 @@ export function SidebarView() {
 
           <div className="flex flex-col gap-1.5">
             <AnimatePresence initial={false}>
-              {items.map((msg) => renderMessageCard(msg, effectiveDisplayMode, translatingIds, setTranslatingIds))}
+              {items.map((msg) => renderMessageCard(msg, effectiveDisplayMode, translatingIds, setTranslatingIds, speakingMessageId))}
             </AnimatePresence>
           </div>
           <div ref={bottomRef} />

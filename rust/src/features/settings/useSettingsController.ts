@@ -267,6 +267,7 @@ export function useSettingsController() {
         translate: "翻译设置",
         display: "显示设置",
         agent: "数据问答设置",
+        tts: "朗读设置",
       };
       setBusy(`section_${section}`);
       try {
@@ -296,6 +297,7 @@ export function useSettingsController() {
         translate: "翻译设置",
         display: "显示设置",
         agent: "数据问答设置",
+        tts: "朗读设置",
       };
       showToast(`${sectionLabels[section]}已撤销`, true);
     },
@@ -430,6 +432,7 @@ export function useSettingsController() {
     { id: "translate", label: "翻译", isDirty: sectionDirty.translate },
     { id: "dict", label: "词典", isDirty: false },
     { id: "agent", label: "数据问答", isDirty: sectionDirty.agent },
+    { id: "tts", label: "朗读", isDirty: sectionDirty.tts },
   ];
 
   return {

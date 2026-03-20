@@ -6,3 +6,4 @@ export { TranslateSection } from "./TranslateSection";
 export { ImageCaptureSection } from "./ImageCaptureSection";
 export { AgentSection } from "./AgentSection";
 export { AdvancedConfigSection } from "./AdvancedConfigSection";
+export { TtsSection } from "./TtsSection";

@@ -159,6 +159,18 @@ impl Default for DictConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TtsConfig {
+    #[serde(default)]
+    pub enabled: bool,
+}
+
+impl Default for TtsConfig {
+    fn default() -> Self {
+        Self { enabled: false }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentConfig {
     #[serde(default)]
     pub ai_provider_id: String,
@@ -202,6 +214,8 @@ pub struct AppConfig {
     pub dict: DictConfig,
     #[serde(default)]
     pub agent: AgentConfig,
+    #[serde(default)]
+    pub tts: TtsConfig,
 }
 
 // ---------------------------------------------------------------------------
@@ -350,6 +364,7 @@ impl Default for AppConfig {
             logging: LoggingConfig::default(),
             dict: DictConfig::default(),
             agent: AgentConfig::default(),
+            tts: TtsConfig::default(),
         }
     }
 }

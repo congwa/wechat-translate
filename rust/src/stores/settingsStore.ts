@@ -32,6 +32,7 @@ export interface SettingsDraft {
   agentAiModelId: string;
   agentAiApiKey: string;
   agentAiBaseUrl: string;
+  ttsEnabled: boolean;
 }
 
 export function draftFromSettings(settings: AppSettings): SettingsDraft {
@@ -72,6 +73,7 @@ export function draftFromSettings(settings: AppSettings): SettingsDraft {
     agentAiModelId: settings.agent?.ai_model_id || "",
     agentAiApiKey: settings.agent?.ai_api_key || "",
     agentAiBaseUrl: settings.agent?.ai_base_url || "",
+    ttsEnabled: settings.tts?.enabled ?? false,
   };
 }
 
@@ -135,6 +137,10 @@ export function settingsFromDraft(
       ai_api_key: draft.agentAiApiKey,
       ai_base_url: draft.agentAiBaseUrl,
     },
+    tts: {
+      ...settings.tts,
+      enabled: draft.ttsEnabled,
+    },
   };
 }
 
@@ -169,6 +175,7 @@ export function createEmptyDraft(): SettingsDraft {
     agentAiModelId: "",
     agentAiApiKey: "",
     agentAiBaseUrl: "",
+    ttsEnabled: false,
   };
 }
 

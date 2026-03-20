@@ -84,6 +84,10 @@ export interface AgentSettings {
   ai_base_url: string;
 }
 
+export interface TtsSettings {
+  enabled: boolean;
+}
+
 export interface AppSettings {
   listen: ListenSettings;
   translate: TranslateSettings;
@@ -91,6 +95,7 @@ export interface AppSettings {
   logging: LoggingSettings;
   dict: DictSettings;
   agent: AgentSettings;
+  tts: TtsSettings;
 }
 
 export interface SettingsSnapshot {

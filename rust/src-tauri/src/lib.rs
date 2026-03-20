@@ -13,6 +13,7 @@ mod interface;
 pub mod sidebar_window;
 mod task_manager;
 pub mod translator;
+mod tts_service;
 
 use crate::application::chat_agent::service::ChatAgentService;
 use crate::application::runtime::service::RuntimeService;
@@ -24,6 +25,7 @@ use image_cache::WeChatImageCache;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use task_manager::TaskManager;
+use tts_service::TtsState;
 use tauri::image::Image;
 use tauri::menu::{CheckMenuItemBuilder, Menu, MenuBuilder, MenuItemBuilder, SubmenuBuilder};
 use tauri::tray::{TrayIcon, TrayIconBuilder};
@@ -67,6 +69,7 @@ pub struct TrayMenuState {
     pub sidebar_toggle: tauri::menu::MenuItem<tauri::Wry>,
     pub listen_toggle: tauri::menu::MenuItem<tauri::Wry>,
     pub translate_toggle: tauri::menu::CheckMenuItem<tauri::Wry>,
+    pub tts_toggle: tauri::menu::CheckMenuItem<tauri::Wry>,
     pub ghost_mode_toggle: tauri::menu::CheckMenuItem<tauri::Wry>,
     pub close_to_tray_check: tauri::menu::CheckMenuItem<tauri::Wry>,
 }
@@ -497,6 +500,16 @@ pub fn run() {
                     )
                     .build(app)?;
 
+            let tts_toggle =
+                CheckMenuItemBuilder::with_id("toggle_tts", "自动朗读 (TTS)")
+                    .checked(
+                        startup_config
+                            .as_ref()
+                            .map(|c| c.tts.enabled)
+                            .unwrap_or(false),
+                    )
+                    .build(app)?;
+
             let show_item = MenuItemBuilder::with_id("show", "设置").build(app)?;
             let ghost_mode_toggle =
                 CheckMenuItemBuilder::with_id("toggle_ghost_mode", "浮窗隐身模式")
@@ -523,6 +536,7 @@ pub fn run() {
                 .item(&sidebar_toggle)
                 .item(&listen_toggle)
                 .item(&translate_toggle)
+                .item(&tts_toggle)
                 .separator()
                 .item(&show_item)
                 .item(&ghost_mode_toggle)
@@ -539,8 +553,20 @@ pub fn run() {
                 sidebar_toggle,
                 listen_toggle,
                 translate_toggle,
+                tts_toggle,
                 ghost_mode_toggle,
                 close_to_tray_check,
+            });
+
+            // 初始化 TTS 状态并注册事件回调
+            let tts_state = Arc::new(TtsState::new());
+            if let Some(ref config) = startup_config {
+                tts_state.set_enabled(config.tts.enabled);
+            }
+            app.manage(tts_state.clone());
+            let tts_app_handle = app.handle().clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                tts_state.init(tts_app_handle);
             });
 
             // 准备图标
@@ -660,6 +686,9 @@ pub fn run() {
                     "tray_toggle_translate" => {
                         handle_tray_toggle_translate(app);
                     }
+                    "toggle_tts" => {
+                        interface::commands::tts::handle_tray_toggle_tts(app);
+                    }
                     "toggle_ghost_mode" => {
                         let tray = app.state::<TrayMenuState>();
                         let ghost_enabled = tray.ghost_mode_toggle.is_checked().unwrap_or(false);
@@ -767,6 +796,10 @@ pub fn run() {
             interface::commands::agent::agent_chat,
             interface::commands::agent::agent_session_new,
             interface::commands::agent::agent_session_clear,
+            interface::commands::tts::tts_speak,
+            interface::commands::tts::tts_stop,
+            interface::commands::tts::tts_get_status,
+            interface::commands::tts::tts_set_enabled,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

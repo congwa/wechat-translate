@@ -10,6 +10,7 @@ import {
   ImageCaptureSection,
   ListenSection,
   TranslateSection,
+  TtsSection,
 } from "@/components/settings/sections";
 
 export function SettingsPage() {
@@ -159,6 +160,18 @@ export function SettingsPage() {
           onCheckedChange={(checked) =>
             controller.updateDraft({ imageCapture: checked }, "display")
           }
+        />
+
+        <TtsSection
+          ref={(el) => {
+            controller.sectionRefs.current.tts = el;
+          }}
+          draft={controller.draft}
+          sectionDirty={controller.sectionDirty.tts}
+          isSaving={controller.busy === "section_tts"}
+          updateDraft={controller.updateDraft}
+          onApply={() => controller.handleApplySection("tts")}
+          onReset={() => controller.handleResetSection("tts")}
         />
 
         <AdvancedConfigSection
