@@ -122,6 +122,8 @@ pub struct DisplayConfig {
     pub width: u32,
     #[serde(default = "default_side")]
     pub side: String,
+    #[serde(default = "default_theme_mode")]
+    pub theme_mode: String,
     #[serde(default = "default_collapsed_display_count")]
     pub collapsed_display_count: u32,
     #[serde(default)]
@@ -270,6 +272,9 @@ fn default_width() -> u32 {
 fn default_side() -> String {
     "right".into()
 }
+fn default_theme_mode() -> String {
+    "system".into()
+}
 fn default_log_file() -> String {
     "logs/sidebar_listener.log".into()
 }
@@ -339,11 +344,23 @@ impl Default for DisplayConfig {
             on_translate_fail: default_on_translate_fail(),
             width: default_width(),
             side: default_side(),
+            theme_mode: default_theme_mode(),
             collapsed_display_count: default_collapsed_display_count(),
             ghost_mode: false,
             image_capture: false,
             sidebar_appearance: SidebarAppearance::default(),
         }
+    }
+}
+
+impl DisplayConfig {
+    fn normalize(&mut self) {
+        self.theme_mode = match self.theme_mode.trim().to_lowercase().as_str() {
+            "" | "system" => "system".into(),
+            "light" => "light".into(),
+            "dark" => "dark".into(),
+            other => other.to_string(),
+        };
     }
 }
 
@@ -376,6 +393,7 @@ impl Default for AppConfig {
 impl AppConfig {
     fn normalize(&mut self) {
         self.translate.normalize_legacy();
+        self.display.normalize();
     }
 
     pub fn validate(&self) -> Vec<String> {
@@ -435,6 +453,15 @@ impl AppConfig {
             errors.push(format!(
                 "display.side 只允许 \"left\" 或 \"right\"，当前值: \"{}\"",
                 self.display.side
+            ));
+        }
+        if self.display.theme_mode != "light"
+            && self.display.theme_mode != "dark"
+            && self.display.theme_mode != "system"
+        {
+            errors.push(format!(
+                "display.theme_mode 只允许 \"light\"、\"dark\" 或 \"system\"，当前值: \"{}\"",
+                self.display.theme_mode
             ));
         }
         if self.display.on_translate_fail != "show_cn_with_reason"
@@ -523,6 +550,7 @@ mod tests {
         let value = default_config_value();
         let translate = value.get("translate").expect("translate section");
         let listen = value.get("listen").expect("listen section");
+        let display = value.get("display").expect("display section");
         assert_eq!(
             translate.get("deeplx_url").and_then(|v| v.as_str()),
             Some("")
@@ -544,6 +572,10 @@ mod tests {
                 .and_then(|v| v.as_bool()),
             Some(false)
         );
+        assert_eq!(
+            display.get("theme_mode").and_then(|v| v.as_str()),
+            Some("system")
+        );
     }
 
     #[test]
@@ -561,7 +593,13 @@ mod tests {
                 "max_concurrency": 4,
                 "max_requests_per_second": 5
             },
-            "display": { "english_only": true, "on_translate_fail": "show_cn_with_reason", "width": 420, "side": "right" },
+            "display": {
+                "english_only": true,
+                "on_translate_fail": "show_cn_with_reason",
+                "width": 420,
+                "side": "right",
+                "theme_mode": "dark"
+            },
             "logging": { "file": "logs/sidebar_listener.log" }
         });
 
@@ -589,6 +627,7 @@ mod tests {
             saved["listen"]["use_right_panel_details"].as_bool(),
             Some(false)
         );
+        assert_eq!(saved["display"]["theme_mode"].as_str(), Some("dark"));
     }
 
     #[test]
@@ -608,7 +647,13 @@ mod tests {
                 "target_lang": "EN",
                 "timeout_seconds": 8.0
             },
-            "display": { "english_only": true, "on_translate_fail": "show_cn_with_reason", "width": 420, "side": "right" },
+            "display": {
+                "english_only": true,
+                "on_translate_fail": "show_cn_with_reason",
+                "width": 420,
+                "side": "right",
+                "theme_mode": "LIGHT"
+            },
             "logging": { "file": "logs/sidebar_listener.log" }
         });
 
@@ -620,5 +665,6 @@ mod tests {
             saved["listen"]["use_right_panel_details"].as_bool(),
             Some(true)
         );
+        assert_eq!(saved["display"]["theme_mode"].as_str(), Some("light"));
     }
 }

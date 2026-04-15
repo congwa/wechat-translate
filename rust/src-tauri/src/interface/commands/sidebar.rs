@@ -167,6 +167,7 @@ pub async fn live_start(
             mode,
             Some(config.display.collapsed_display_count),
             Some(config.display.ghost_mode),
+            Some(config.display.theme_mode.clone()),
             Some(config.display.sidebar_appearance.clone()),
         )
         .await;
@@ -192,6 +193,7 @@ pub async fn sidebar_window_open(
             mode,
             Some(config.display.collapsed_display_count),
             Some(config.display.ghost_mode),
+            Some(config.display.theme_mode.clone()),
             Some(config.display.sidebar_appearance.clone()),
         )
         .await

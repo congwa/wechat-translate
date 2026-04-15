@@ -5,10 +5,16 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import { X, MessageCircle, Languages, AlertCircle, BookOpen, Users, User, Loader2, Volume2 } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  DEFAULT_THEME_MODE,
+  isThemeMode,
+  useApplyThemeMode,
+} from "@/lib/theme";
 import type {
   SidebarMessage,
   SidebarAppearance,
   SettingsSnapshot,
+  ThemeMode,
 } from "@/lib/types";
 import { useUiPreferencesStore, type DisplayMode } from "@/stores/uiPreferencesStore";
 import { useRuntimeStore } from "@/stores/runtimeStore";
@@ -57,6 +63,12 @@ function getGhostModeFromUrl(): boolean {
   return params.get("ghost") === "true";
 }
 
+function getThemeModeFromUrl(): ThemeMode {
+  const params = new URLSearchParams(window.location.search);
+  const themeMode = params.get("theme");
+  return isThemeMode(themeMode) ? themeMode : DEFAULT_THEME_MODE;
+}
+
 const BLUR_MAP: Record<string, string> = {
   none: "none",
   weak: "blur(8px) saturate(120%)",
@@ -74,7 +86,7 @@ const CARD_STYLE_MAP: Record<string, { bg: string; darkBg: string }> = {
 function getTextEnhanceStyle(enhance: string): React.CSSProperties {
   switch (enhance) {
     case "shadow":
-      return { textShadow: "0 1px 2px rgba(0,0,0,0.3)" };
+      return { textShadow: "0 0.5px 1px rgba(0,0,0,0.22)" };
     case "bold":
       return { fontWeight: 600 };
     default:
@@ -121,6 +133,40 @@ function hasCjkInText(text: string): boolean {
   return /[\u4E00-\u9FFF\u3400-\u4DBF\uF900-\uFAFF]/.test(text);
 }
 
+const BRACKET_WRAPPED_MESSAGE_RE = /^\[[^\[\]]*\]$/;
+const PURE_NUMBER_MESSAGE_RE = /^\d+$/;
+const LINK_TOKEN_RE = /^(?:(?:https?:\/\/|ftp:\/\/|file:\/\/|mailto:|www\.)\S+)$/i;
+
+function normalizeMessageText(text: string): string {
+  return text.trim();
+}
+
+function isBracketWrappedMessage(text: string): boolean {
+  return BRACKET_WRAPPED_MESSAGE_RE.test(normalizeMessageText(text));
+}
+
+function isPureNumberMessage(text: string): boolean {
+  return PURE_NUMBER_MESSAGE_RE.test(normalizeMessageText(text));
+}
+
+function isPureLinkMessage(text: string): boolean {
+  const normalized = normalizeMessageText(text);
+  if (!normalized) return false;
+  return normalized.split(/\s+/).every((token) => LINK_TOKEN_RE.test(token));
+}
+
+function shouldSkipWordParsing(text: string): boolean {
+  return isBracketWrappedMessage(text);
+}
+
+function shouldSkipAutoTts(text: string): boolean {
+  return (
+    isBracketWrappedMessage(text) ||
+    isPureNumberMessage(text) ||
+    isPureLinkMessage(text)
+  );
+}
+
 /**
  * 根据显示模式选择朗读文本。
  * 返回 string → 立即朗读；返回 "pending" → 等翻译完成；返回 null → 跳过。
@@ -138,27 +184,30 @@ function selectTtsText(
   return "pending";
 }
 
-function getInitialSystemDarkMode(): boolean {
-  if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
-    return false;
-  }
-  return window.matchMedia("(prefers-color-scheme: dark)").matches;
+function selectManualTtsText(
+  msg: SidebarMessage,
+  displayMode: DisplayMode
+): string | null {
+  if (msg.imagePath) return null;
+
+  const textCn = normalizeMessageText(msg.textCn);
+  const textEn = normalizeMessageText(msg.textEn);
+  if ((!textCn && !textEn) || isBracketWrappedMessage(textCn)) return null;
+
+  if (!hasCjkInText(textCn)) return textCn || textEn || null;
+  if (displayMode === "original") return textCn || null;
+  if (textEn && textEn !== textCn) return textEn;
+  return textCn || null;
 }
 
-function useSidebarWindowAppearance() {
-  const [isDarkMode, setIsDarkMode] = useState<boolean>(getInitialSystemDarkMode);
+function useSidebarWindowAppearance(themeMode: ThemeMode) {
+  const isDarkMode = useApplyThemeMode(themeMode);
   const [isWindowFocused, setIsWindowFocused] = useState<boolean>(() => {
     if (typeof document === "undefined") return true;
     return document.hasFocus();
   });
 
   useEffect(() => {
-    const mq = window.matchMedia("(prefers-color-scheme: dark)");
-
-    function onThemeChange(e: MediaQueryListEvent) {
-      setIsDarkMode(e.matches);
-    }
-
     function onFocus() {
       setIsWindowFocused(true);
     }
@@ -167,14 +216,11 @@ function useSidebarWindowAppearance() {
       setIsWindowFocused(false);
     }
 
-    setIsDarkMode(mq.matches);
     setIsWindowFocused(document.hasFocus());
-    mq.addEventListener("change", onThemeChange);
     window.addEventListener("focus", onFocus);
     window.addEventListener("blur", onBlur);
 
     return () => {
-      mq.removeEventListener("change", onThemeChange);
       window.removeEventListener("focus", onFocus);
       window.removeEventListener("blur", onBlur);
     };
@@ -193,6 +239,10 @@ function renderMessageCard(
   const hasSender = msg.sender !== "";
   const sender = msg.sender || msg.chatName;
   const color = getSenderColor(sender);
+  const manualTtsText = selectManualTtsText(msg, displayMode);
+  const isSpeaking = speakingMessageId === msg.id;
+  const messageTextClass =
+    "text-[12px] text-gray-800 dark:text-gray-200 leading-relaxed whitespace-pre-wrap break-words";
 
   const cardClass = msg.isSelf
     ? "sidebar-msg-card-self rounded-lg overflow-hidden transition-colors duration-100 max-w-[88%]"
@@ -228,11 +278,36 @@ function renderMessageCard(
               <span className="text-[10px] font-medium text-gray-500 dark:text-gray-400 truncate">
                 {msg.isSelf ? "我" : hasSender ? sender : ""}
               </span>
+              {manualTtsText && (
+                <TooltipProvider delayDuration={200}>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          api.ttsSpeak(msg.id, manualTtsText).catch(() => {});
+                        }}
+                        className="shrink-0 p-0.5 rounded hover:bg-gray-200/50 dark:hover:bg-white/10 transition-colors"
+                        aria-label="朗读消息"
+                      >
+                        <Volume2
+                          className={`w-3 h-3 ${
+                            isSpeaking
+                              ? "text-violet-500 dark:text-violet-400 animate-pulse"
+                              : "text-gray-400 dark:text-gray-500"
+                          }`}
+                        />
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side="top" className="text-xs">
+                      {isSpeaking ? "朗读中..." : "朗读消息"}
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+              )}
             </div>
             <div className="flex items-center gap-1 shrink-0 ml-2">
-              {speakingMessageId === msg.id && (
-                <Volume2 className="w-2.5 h-2.5 text-violet-500 dark:text-violet-400 animate-pulse" />
-              )}
               <span className="text-[9px] text-gray-300 dark:text-gray-600 tabular-nums">
                 {msg.timestamp.slice(11, 19)}
               </span>
@@ -253,13 +328,29 @@ function renderMessageCard(
             // 2. 正在翻译中（5秒内的消息）：显示骨架屏，hover 可看中文
             // 3. 历史未翻译（超过5秒）：显示中文 + 翻译按钮
             (() => {
+              if (isBracketWrappedMessage(msg.textCn)) {
+                return (
+                  <p className={messageTextClass}>
+                    {msg.textCn}
+                  </p>
+                );
+              }
+
               // 已翻译：直接显示英文
               if (msg.textEn && msg.textEn !== msg.textCn) {
+                const skipWordParsing =
+                  shouldSkipWordParsing(msg.textEn) || isBracketWrappedMessage(msg.textCn);
                 return (
-                  <SegmentedText
-                    text={msg.textEn}
-                    className="text-[12px] text-gray-800 dark:text-gray-200 leading-relaxed whitespace-pre-wrap break-words"
-                  />
+                  skipWordParsing ? (
+                    <p className={messageTextClass}>
+                      {msg.textEn}
+                    </p>
+                  ) : (
+                    <SegmentedText
+                      text={msg.textEn}
+                      className={messageTextClass}
+                    />
+                  )
                 );
               }
               
@@ -294,7 +385,7 @@ function renderMessageCard(
               const isTranslating = translatingIds.has(msg.id);
               return (
                 <div className="flex items-start gap-1.5">
-                  <p className="text-[12px] text-gray-800 dark:text-gray-200 leading-relaxed whitespace-pre-wrap break-words flex-1">
+                  <p className={`${messageTextClass} flex-1`}>
                     {msg.textCn}
                   </p>
                   <TooltipProvider delayDuration={200}>
@@ -348,12 +439,12 @@ function renderMessageCard(
               );
             })()
           ) : displayMode === "original" ? (
-            <p className="text-[12px] text-gray-800 dark:text-gray-200 leading-relaxed whitespace-pre-wrap break-words">
+            <p className={messageTextClass}>
               {msg.textCn}
             </p>
           ) : (
             <>
-              <p className="text-[12px] text-gray-800 dark:text-gray-200 leading-relaxed whitespace-pre-wrap break-words">
+              <p className={messageTextClass}>
                 {msg.textCn}
               </p>
               {msg.textEn && msg.textEn !== msg.textCn && (
@@ -373,11 +464,11 @@ function renderMessageCard(
 }
 
 export function SidebarView() {
-  const { isDarkMode, isWindowFocused } = useSidebarWindowAppearance();
-
   const [windowMode] = useState<WindowMode>(getWindowMode);
   const isIndependent = windowMode === "independent";
   const displayCount = isIndependent ? getDisplayCount() : 0;
+  const [themeMode, setThemeMode] = useState<ThemeMode>(getThemeModeFromUrl);
+  const { isDarkMode, isWindowFocused } = useSidebarWindowAppearance(themeMode);
   const [appearance, setAppearance] = useState<SidebarAppearance>(getAppearanceFromUrl);
   const [ghostMode, setGhostMode] = useState<boolean>(getGhostModeFromUrl);
 
@@ -392,6 +483,7 @@ export function SidebarView() {
       if (e.payload.data.display?.sidebar_appearance) {
         setAppearance(e.payload.data.display.sidebar_appearance);
       }
+      setThemeMode(e.payload.data.display?.theme_mode ?? DEFAULT_THEME_MODE);
       if (e.payload.data.display?.ghost_mode !== undefined) {
         setGhostMode(e.payload.data.display.ghost_mode);
       }
@@ -468,6 +560,9 @@ export function SidebarView() {
     if (prev.size > 0) {
       const newItems = items.filter((i) => !prev.has(i.id) && !i.isSelf && !i.imagePath);
       for (const msg of newItems) {
+        if (shouldSkipAutoTts(msg.textCn)) {
+          continue;
+        }
         const result = selectTtsText(msg.textCn, msg.textEn, effectiveDisplayMode);
         if (result === "pending") {
           pendingTtsRef.current.set(msg.id, true);
@@ -481,6 +576,10 @@ export function SidebarView() {
     for (const [pendingId] of pendingTtsRef.current.entries()) {
       const msg = items.find((i) => i.id === pendingId);
       if (!msg) {
+        pendingTtsRef.current.delete(pendingId);
+        continue;
+      }
+      if (shouldSkipAutoTts(msg.textCn)) {
         pendingTtsRef.current.delete(pendingId);
         continue;
       }
@@ -514,7 +613,7 @@ export function SidebarView() {
       animate={visible ? "visible" : "hidden"}
       transition={containerTransition}
       data-window-focus={isWindowFocused ? "true" : "false"}
-      className={`${isDarkMode ? "dark " : ""}relative flex flex-col h-screen overflow-hidden select-none`}
+      className="relative flex flex-col h-screen overflow-hidden select-none"
     >
       {/* 背景层 - 独立透明度控制 */}
       <div

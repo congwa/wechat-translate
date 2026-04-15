@@ -92,19 +92,18 @@ export function SettingsPage() {
           monitoringBusy={controller.busy === "monitoring"}
         />
 
-        {controller.sidebarWindowMode === "independent" ? (
-          <DisplaySection
-            ref={(el) => {
-              controller.sectionRefs.current.display = el;
-            }}
-            draft={controller.draft}
-            sectionDirty={controller.sectionDirty.display}
-            isSaving={controller.busy === "section_display"}
-            onApply={() => controller.handleApplySection("display")}
-            onReset={() => controller.handleResetSection("display")}
-            updateDraft={controller.updateDraft}
-          />
-        ) : null}
+        <DisplaySection
+          ref={(el) => {
+            controller.sectionRefs.current.display = el;
+          }}
+          draft={controller.draft}
+          sidebarWindowMode={controller.sidebarWindowMode}
+          sectionDirty={controller.sectionDirty.display}
+          isSaving={controller.busy === "section_display"}
+          onApply={() => controller.handleApplySection("display")}
+          onReset={() => controller.handleResetSection("display")}
+          updateDraft={controller.updateDraft}
+        />
 
         <TranslateSection
           ref={(el) => {

@@ -4,9 +4,11 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { SettingsSection } from "@/components/SettingsSection";
 import type { SettingsDraft } from "@/stores/settingsStore";
+import type { SidebarWindowMode } from "@/stores/uiPreferencesStore";
 
 interface DisplaySectionProps {
   draft: SettingsDraft;
+  sidebarWindowMode: SidebarWindowMode;
   sectionDirty: boolean;
   isSaving: boolean;
   onApply: () => void;
@@ -16,11 +18,20 @@ interface DisplaySectionProps {
 
 export const DisplaySection = forwardRef<HTMLElement, DisplaySectionProps>(
   function DisplaySection(
-    { draft, sectionDirty, isSaving, onApply, onReset, updateDraft },
+    {
+      draft,
+      sidebarWindowMode,
+      sectionDirty,
+      isSaving,
+      onApply,
+      onReset,
+      updateDraft,
+    },
     ref
   ) {
     const handleResetAll = () => {
       updateDraft({
+        themeMode: "system",
         collapsedDisplayCount: "3",
         ghostMode: false,
         bgOpacity: "0.8",
@@ -45,8 +56,8 @@ export const DisplaySection = forwardRef<HTMLElement, DisplaySectionProps>(
         ref={ref}
         icon={<MonitorPlay className="w-4 h-4 text-sky-600" />}
         iconBg="bg-sky-50"
-        title="独立浮窗设置"
-        description="独立置顶模式的浮窗参数"
+        title="显示设置"
+        description="应用主题与独立浮窗参数"
         isDirty={sectionDirty}
         isSaving={isSaving}
         onApply={onApply}
@@ -59,6 +70,41 @@ export const DisplaySection = forwardRef<HTMLElement, DisplaySectionProps>(
           >
             全部恢复默认
           </button>
+        </div>
+
+        <div className="space-y-2">
+          <Label className="text-sm font-medium">界面主题</Label>
+          <div className="flex items-center gap-1">
+            {([
+              { value: "system", label: "跟随系统" },
+              { value: "light", label: "浅色" },
+              { value: "dark", label: "深色" },
+            ] as const).map((opt) => (
+              <button
+                key={opt.value}
+                onClick={() => updateDraft({ themeMode: opt.value })}
+                className={`flex-1 px-2 py-1.5 rounded-lg text-xs font-medium transition-all duration-150 ${
+                  draft.themeMode === opt.value
+                    ? "bg-primary text-primary-foreground shadow-sm"
+                    : "bg-muted text-muted-foreground hover:bg-muted/80"
+                }`}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+          <p className="text-[11px] text-muted-foreground">
+            主窗口与侧边栏共用该主题策略。
+          </p>
+        </div>
+
+        <div className="rounded-xl border border-border/40 bg-muted/20 px-3 py-2">
+          <p className="text-[11px] font-medium text-foreground">独立浮窗参数</p>
+          <p className="text-[10px] text-muted-foreground mt-1">
+            {sidebarWindowMode === "independent"
+              ? "当前为独立模式，以下配置会直接影响浮窗表现。"
+              : "当前为跟随模式，以下配置会在切换到独立模式后生效。"}
+          </p>
         </div>
 
         <div className="space-y-2">

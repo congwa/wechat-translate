@@ -1,6 +1,7 @@
 import { listen } from "@tauri-apps/api/event";
 import { create } from "zustand";
-import type { AppSettings, SettingsSnapshot } from "@/lib/types";
+import { DEFAULT_THEME_MODE } from "@/lib/theme";
+import type { AppSettings, SettingsSnapshot, ThemeMode } from "@/lib/types";
 
 export interface SettingsDraft {
   translateEnabled: boolean;
@@ -19,6 +20,7 @@ export interface SettingsDraft {
   pollInterval: string;
   useRightPanelDetails: boolean;
   displayWidth: string;
+  themeMode: ThemeMode;
   collapsedDisplayCount: string;
   ghostMode: boolean;
   imageCapture: boolean;
@@ -57,6 +59,7 @@ export function draftFromSettings(settings: AppSettings): SettingsDraft {
     pollInterval: String(settings.listen.interval_seconds),
     useRightPanelDetails: settings.listen.use_right_panel_details,
     displayWidth: String(settings.display.width),
+    themeMode: settings.display.theme_mode ?? DEFAULT_THEME_MODE,
     collapsedDisplayCount: String(settings.display.collapsed_display_count || 3),
     ghostMode: settings.display.ghost_mode ?? false,
     imageCapture: settings.display.image_capture ?? false,
@@ -108,6 +111,7 @@ export function settingsFromDraft(
     display: {
       ...settings.display,
       width: parseInt(draft.displayWidth, 10) || 420,
+      theme_mode: draft.themeMode,
       collapsed_display_count:
         Math.max(1, parseInt(draft.collapsedDisplayCount, 10)) || 3,
       ghost_mode: draft.ghostMode,
@@ -162,6 +166,7 @@ export function createEmptyDraft(): SettingsDraft {
     pollInterval: "1",
     useRightPanelDetails: false,
     displayWidth: "420",
+    themeMode: DEFAULT_THEME_MODE,
     collapsedDisplayCount: "3",
     ghostMode: false,
     imageCapture: false,

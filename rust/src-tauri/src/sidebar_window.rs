@@ -78,11 +78,13 @@ impl SidebarWindowState {
         mode: WindowMode,
         collapsed_display_count: Option<u32>,
         ghost_mode: Option<bool>,
+        theme_mode: Option<String>,
         appearance: Option<SidebarAppearance>,
     ) -> Result<()> {
         let width = width.unwrap_or(DEFAULT_WIDTH);
         let count = collapsed_display_count.unwrap_or(3).max(1);
         let ghost = ghost_mode.unwrap_or(false);
+        let theme_mode = theme_mode.unwrap_or_else(|| "system".to_string());
         let appearance = appearance.unwrap_or_default();
 
         if let Some(existing) = app.webview_windows().get(SIDEBAR_LABEL) {
@@ -110,12 +112,12 @@ impl SidebarWindowState {
 
         let url_query = match mode {
             WindowMode::Follow => format!(
-                "index.html?view=sidebar&mode=follow&appearance={}",
-                appearance_b64
+                "index.html?view=sidebar&mode=follow&theme={}&appearance={}",
+                theme_mode, appearance_b64
             ),
             WindowMode::Independent => format!(
-                "index.html?view=sidebar&mode=independent&count={}&ghost={}&appearance={}",
-                count, ghost, appearance_b64
+                "index.html?view=sidebar&mode=independent&count={}&ghost={}&theme={}&appearance={}",
+                count, ghost, theme_mode, appearance_b64
             ),
         };
 

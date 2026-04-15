@@ -25,7 +25,6 @@ use image_cache::WeChatImageCache;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use task_manager::TaskManager;
-use tts_service::TtsState;
 use tauri::image::Image;
 use tauri::menu::{CheckMenuItemBuilder, Menu, MenuBuilder, MenuItemBuilder, SubmenuBuilder};
 use tauri::tray::{TrayIcon, TrayIconBuilder};
@@ -33,6 +32,7 @@ use tauri::Manager;
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use tokio_util::sync::CancellationToken;
 use translator::TranslationService;
+use tts_service::TtsState;
 
 pub struct CloseToTray(pub Arc<AtomicBool>);
 
@@ -46,11 +46,7 @@ pub struct TrayBlinkState {
 }
 
 impl TrayBlinkState {
-    pub fn new(
-        tray: TrayIcon,
-        normal: Image<'static>,
-        warning: Image<'static>,
-    ) -> Self {
+    pub fn new(tray: TrayIcon, normal: Image<'static>, warning: Image<'static>) -> Self {
         Self {
             blink_active: AtomicBool::new(false),
             cancel_token: std::sync::Mutex::new(None),
@@ -500,15 +496,14 @@ pub fn run() {
                     )
                     .build(app)?;
 
-            let tts_toggle =
-                CheckMenuItemBuilder::with_id("toggle_tts", "自动朗读 (TTS)")
-                    .checked(
-                        startup_config
-                            .as_ref()
-                            .map(|c| c.tts.enabled)
-                            .unwrap_or(false),
-                    )
-                    .build(app)?;
+            let tts_toggle = CheckMenuItemBuilder::with_id("toggle_tts", "自动朗读 (TTS)")
+                .checked(
+                    startup_config
+                        .as_ref()
+                        .map(|c| c.tts.enabled)
+                        .unwrap_or(false),
+                )
+                .build(app)?;
 
             let show_item = MenuItemBuilder::with_id("show", "设置").build(app)?;
             let ghost_mode_toggle =
@@ -657,6 +652,7 @@ pub fn run() {
                                         sidebar_window::WindowMode::default(),
                                         Some(config.display.collapsed_display_count),
                                         Some(config.display.ghost_mode),
+                                        Some(config.display.theme_mode.clone()),
                                         Some(config.display.sidebar_appearance.clone()),
                                     )
                                     .await;

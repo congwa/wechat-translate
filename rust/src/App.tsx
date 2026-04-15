@@ -17,6 +17,7 @@ import { MessageHistory } from "@/components/MessageHistory";
 import { SidebarView } from "@/features/sidebar/SidebarView";
 import { ChatAgentPage } from "@/features/chat-agent/ChatAgentPage";
 import { AboutDialog } from "@/components/AboutDialog";
+import { DEFAULT_THEME_MODE, useApplyThemeMode } from "@/lib/theme";
 import { useEventStore } from "@/stores/eventStore";
 import { useToastStore } from "@/stores/toastStore";
 import { useSettingsStore } from "@/stores/settingsStore";
@@ -24,7 +25,7 @@ import { useRuntimeStore } from "@/stores/runtimeStore";
 import { useUiPreferencesStore } from "@/stores/uiPreferencesStore";
 import { initDictionaryEventListeners, cleanupDictionaryEventListeners } from "@/stores/dictionaryStore";
 import * as api from "@/lib/tauri-api";
-import type { TaskState, TranslatorServiceStatus } from "@/lib/types";
+import type { AppSettings, TaskState, TranslatorServiceStatus } from "@/lib/types";
 
 const isSidebarView =
   new URLSearchParams(window.location.search).get("view") === "sidebar";
@@ -69,6 +70,20 @@ export default function App() {
   if (isSidebarView) {
     return <SidebarView />;
   }
+
+  return <MainWindowRoot loading={loading} settings={settings} />;
+}
+
+function MainWindowRoot({
+  loading,
+  settings,
+}: {
+  loading: boolean;
+  settings: AppSettings | null;
+}) {
+  const themeMode = settings?.display.theme_mode ?? DEFAULT_THEME_MODE;
+
+  useApplyThemeMode(themeMode);
 
   // 主窗口：等待后端配置加载完成
   if (loading || !settings) {

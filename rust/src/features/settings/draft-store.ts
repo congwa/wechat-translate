@@ -39,6 +39,7 @@ export const SECTION_FIELDS: Record<
   ],
   display: [
     "displayWidth",
+    "themeMode",
     "collapsedDisplayCount",
     "ghostMode",
     "imageCapture",

@@ -74,6 +74,16 @@ export function validateConfigSchema(obj: unknown): ValidationResult {
         errors.push(`display.width 须在 200–1200 之间，当前值: ${display.width}`);
       }
     }
+    if (
+      display.theme_mode !== undefined &&
+      display.theme_mode !== "light" &&
+      display.theme_mode !== "dark" &&
+      display.theme_mode !== "system"
+    ) {
+      errors.push(
+        `display.theme_mode 只允许 "light"、"dark" 或 "system"，当前值: "${display.theme_mode}"`,
+      );
+    }
     if (display.side !== undefined && display.side !== "left" && display.side !== "right") {
       errors.push(`display.side 只允许 "left" 或 "right"，当前值: "${display.side}"`);
     }

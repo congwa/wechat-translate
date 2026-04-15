@@ -35,6 +35,7 @@ export function WordPopover() {
 
   const popoverRef = useRef<HTMLDivElement>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const autoPlayedAudioKeyRef = useRef<string | null>(null);
   const [playingRegion, setPlayingRegion] = useState<string | null>(null);
   const [isFavorited, setIsFavorited] = useState(false);
   const [favoriteLoading, setFavoriteLoading] = useState(false);
@@ -110,6 +111,29 @@ export function WordPopover() {
       setPlayingRegion(null);
     }
   }, []);
+
+  useEffect(() => {
+    if (!currentWord || !currentEntry) {
+      autoPlayedAudioKeyRef.current = null;
+      return;
+    }
+
+    const usPhonetic = currentEntry.phonetics.find(
+      (phonetic) =>
+        phonetic.audio_url && phonetic.region?.toLowerCase() === "us"
+    );
+    if (!usPhonetic?.audio_url) {
+      return;
+    }
+
+    const audioKey = `${currentWord.toLowerCase()}::${usPhonetic.audio_url}`;
+    if (autoPlayedAudioKeyRef.current === audioKey) {
+      return;
+    }
+
+    autoPlayedAudioKeyRef.current = audioKey;
+    playAudio(usPhonetic.audio_url, usPhonetic.region || "us");
+  }, [currentWord, currentEntry, playAudio]);
 
   if (!currentWord || !popoverPosition) return null;
 

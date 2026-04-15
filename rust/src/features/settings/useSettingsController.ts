@@ -426,9 +426,7 @@ export function useSettingsController() {
   const navItems = [
     { id: "general", label: "通用", isDirty: false },
     { id: "listen", label: "监听", isDirty: sectionDirty.listen },
-    ...(sidebarWindowMode === "independent"
-      ? [{ id: "display", label: "浮窗", isDirty: sectionDirty.display }]
-      : []),
+    { id: "display", label: "显示", isDirty: sectionDirty.display },
     { id: "translate", label: "翻译", isDirty: sectionDirty.translate },
     { id: "dict", label: "词典", isDirty: false },
     { id: "agent", label: "数据问答", isDirty: sectionDirty.agent },

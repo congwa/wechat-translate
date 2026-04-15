@@ -58,11 +58,14 @@ export interface SidebarAppearance {
   text_enhance: "none" | "shadow" | "bold";
 }
 
+export type ThemeMode = "light" | "dark" | "system";
+
 export interface DisplaySettings {
   english_only: boolean;
   on_translate_fail: string;
   width: number;
   side: string;
+  theme_mode: ThemeMode;
   collapsed_display_count: number;
   ghost_mode: boolean;
   image_capture: boolean;
